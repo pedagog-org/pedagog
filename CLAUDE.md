@@ -30,6 +30,9 @@ or in conversation. Treat the prompt doc as the living source of truth for what 
 
 - This is a greenfield design effort. Favor **asking clarifying questions and proposing options**
   over jumping to implementation, until a design is explicitly agreed.
+- **Do NOT write code (Rust, configs, Containerfiles, scaffolding, etc.) unless the user explicitly
+  and unambiguously asks for code in that message.** Stay in design/docs mode by default. A design
+  decision being "agreed" is not permission to implement it. When in doubt, ask before writing code.
 - Security and student-isolation are first-class concerns (this administers exams). Call out
   threat-model implications of design choices.
 - Keep FERPA / student-data-privacy in mind for anything that stores or transmits student data.

@@ -38,7 +38,7 @@
 | Reverse proxy / edge | **Traefik** | TLS, path routing, WebSockets, ForwardAuth |
 | Control plane | **Rust** | Auth, API, lifecycle, reconcilers; **authority for time**; idiomatic, typed |
 | Web UI | **Rust** (`pedagog-web`) | Student login/portal/dashboard + instructor management & live view |
-| In-container broker | **Rust** `pedagog` daemon | Holds `session_id`; sole outbound egress; **pushes heartbeat** (no inbound); policy |
+| In-container broker | **Rust** `pedagog` daemon | Holds `session_id`; sole outbound egress; **liveness heartbeat** out; **CP-only control endpoint** in; policy |
 | Nomad access | **Rust** `pedagog-nomad` (thin) | `reqwest`/`serde` wrapper over the few HTTP endpoints we use — not a full client port |
 | Image registry | **Zot** (or Harbor) | Private OCI registry; cosign-signed images pulled by nodes |
 | Scheduling / multi-host | **Nomad** + `nomad-driver-podman` | Placement, health, reschedule |
@@ -107,17 +107,19 @@ flowchart TB
   NS --> node2
   node1 -. "pull signed image" .-> REG
   node2 -. "pull signed image" .-> REG
-  C1 -. "daemon heartbeat/egress :443 (outbound only)" .-> API
-  C2 -. "daemon heartbeat/egress :443" .-> API
+  C1 -. "daemon egress: heartbeat + submit :443" .-> API
+  C2 -. "daemon egress :443" .-> API
+  API -. "control push: end/deadline (CP-only)" .-> C1
   C1 -. "restic :9000" .-> MINIO
   API --- MINIO
 ```
 
 **Trust boundary:** Traefik is the *only* tier reachable from clients. The control plane, Nomad,
 Postgres, MinIO, the registry, and the containers' code-server ports live on a private network and
-are never directly exposed. **The control plane never reaches *into* containers** — containers only
-reach *out* (heartbeat + submit/archive); recovery is driven by stale heartbeats, not by polling.
-The instructor surface lives in `pedagog-web` behind a privileged (instructor-role) auth path.
+are never directly exposed. Containers reach *out* for a **liveness heartbeat** + submit/archive;
+the control plane reaches *in* only to a **CP-only control endpoint** (nftables-restricted) to push
+`EndSession` / `UpdateDeadline`. Liveness is detected from heartbeats; control is **pushed, not
+polled**. The instructor surface lives in `pedagog-web` behind a privileged (instructor-role) auth path.
 
 ---
 
@@ -142,7 +144,7 @@ flowchart LR
     REG[("Image registry :5000")]
     subgraph ctr["Student container"]
       CS["code-server :8080 (private only)"]
-      DA["pedagog daemon (unix socket; outbound heartbeat only)"]
+      DA["pedagog daemon (unix socket; heartbeat out; control endpoint in, CP-only)"]
     end
   end
 
@@ -156,6 +158,7 @@ flowchart LR
   ctr -. "pull signed image" .-> REG
   DA -->|"egress :443 (heartbeat/submit)"| CP
   DA -->|"egress :9000 (restic)"| S3
+  CP -. "control push (CP-only)" .-> DA
 ```
 
 - **Public:** `:443` (HTTPS) and `:80` (redirect) on Traefik only.
@@ -168,17 +171,18 @@ flowchart LR
 
 The **`student` user is untrusted**; a separate **`pedagog` daemon** is the trusted broker that
 holds the `session_id`, is the **sole process with outbound egress**, and enforces all policy. It
-**pushes heartbeats to the control plane** — the control plane **never connects *into* the
-container**, so liveness is inferred from heartbeats, not polling. The student talks to the daemon
-over a Unix socket.
+**pushes a minimal liveness heartbeat** to the control plane and exposes a **control endpoint** that
+**only the control plane** may reach — nftables-restricted to the CP, *and* denied to the `student`
+uid in the same netns — for pushed `EndSession` / `UpdateDeadline` commands. The student talks to
+the daemon over a Unix socket.
 
 Everything lives under **`/pedagog/`**:
 
 | Path | Owner / access | Purpose |
 |---|---|---|
 | `/pedagog/instructor/` | pedagog (student: none) | Instructor config/scripts + seed files copied into the student dir |
-| `/pedagog/student/` | student (named volume) | Student home/working dir; holds a **read-only copy of `.archiveignore`** seeded from `/pedagog/instructor/` |
-| `/pedagog/staging/` | pedagog `0700` (student: none, hidden) | Package a submission here, run the test script, then clean; also the source for submitting/archiving to the server |
+| `/pedagog/student/` | student (named volume) | Student home/working dir. (Archive include/exclude lives in the manifest `[archive]`, not a file.) |
+| `/pedagog/staging/` | pedagog `0700` (student: none, hidden) | Package a submission here, then clean; the source for submitting/archiving to the server |
 
 ```mermaid
 flowchart TB
@@ -189,13 +193,13 @@ flowchart TB
       CLI["pedagog CLI (thin client)"]
     end
     subgraph pedz["uid: pedagog (trusted broker)"]
-      D["pedagog daemon<br/>session_id · sole egress · heartbeat (outbound) · policy"]
+      D["pedagog daemon<br/>session_id · sole egress · liveness heartbeat · control endpoint (CP-only) · policy"]
     end
     SOCK{{"/run/pedagog.sock (unix)"}}
     subgraph fs["/pedagog"]
       INST["/pedagog/instructor<br/>config · scripts · seed files (pedagog)"]
-      STU[("/pedagog/student<br/>named volume · home · .archiveignore 0444")]
-      STG["/pedagog/staging<br/>package · test · submit (0700 pedagog, hidden)"]
+      STU[("/pedagog/student<br/>named volume · student home")]
+      STG["/pedagog/staging<br/>package · submit (0700 pedagog, hidden)"]
     end
     NFT["nftables egress filter (uid-owner match)"]
   end
@@ -330,8 +334,8 @@ public student routes from the privileged instructor routes (distinct auth, tigh
   Grading uses the **last explicit submission**, or — only if none exists — the deadline
   auto-submission.
 - **Archives:** **restic** repo per session in MinIO. Incremental (only changed chunks uploaded),
-  **retention = keep-last-1** (prune older). Excludes paths in `/pedagog/student/.archiveignore`
-  (`target/`, `.venv`, …). Runs in the daemon's **reserved cgroup**, streamed, low compression →
+  **retention = keep-last-1** (prune older). Excludes/includes paths per the manifest `[archive]`
+  (e.g. `target/`, `.venv`). Runs in the daemon's **reserved cgroup**, streamed, low compression →
   ~tens of MB RAM, invisible to the student.
 - **Cadence:** restic snapshot every ~2 min **and** on each `submit`, on disconnect, and at the
   deadline (B + D).
@@ -394,7 +398,7 @@ sequenceDiagram
   C-->>S: editor resumes — no reset, work intact
 ```
 
-### 7.3 Submit (dry-run still tests unless `--no-test`)
+### 7.3 Submit (dry-run packages + previews, sends nothing)
 
 ```mermaid
 sequenceDiagram
@@ -403,15 +407,12 @@ sequenceDiagram
   participant D as pedagog daemon
   participant API as Submission API
   participant M as MinIO
-  ST->>CLI: pedagog submit [--dry-run] [--no-test]
+  ST->>CLI: pedagog submit [--dry-run]
   CLI->>D: submit (unix socket)
-  D->>D: package into /pedagog/staging (assignment spec)
-  opt unless --no-test
-    D->>D: run test command in staging
-  end
+  D->>D: package into /pedagog/staging (manifest [submission.packaging])
   alt --dry-run
     D->>D: clean staging
-    D-->>CLI: package preview + test results (nothing sent)
+    D-->>CLI: package preview (nothing sent)
     CLI-->>ST: preview shown
   else real submit
     D->>API: POST submission (session_id, tarball)
@@ -533,9 +534,8 @@ flowchart TB
 - `pedagog image restrict apt | network[=none|allowlist|open] | …`
 
 **Student (run time, brokered by daemon):**
-- `pedagog submit [--dry-run] [--no-test] [--to=dir/url] [--overwrite]`
+- `pedagog submit [--dry-run] [--to=dir/url] [--overwrite]`
 - `pedagog reset` — restore skeleton (also run at **build**, as `student`, as the last build step)
-- `pedagog test` — package a submission and run the assignment's test command (e.g. `cargo test`)
 - `pedagog time` — remaining time
 - `pedagog archive [--to=dir/url]` — archive whole student dir (also automatic at teardown)
 - `pedagog help`
