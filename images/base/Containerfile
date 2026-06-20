@@ -31,4 +31,5 @@ WORKDIR /home/student
 EXPOSE 8080
 
 # M1 spike only: no auth here. Authentication / SEB validation lands at the proxy later.
-ENTRYPOINT ["code-server", "--bind-addr", "0.0.0.0:8080", "--auth", "none"]
+# The trailing path makes code-server open the student's folder on entry.
+ENTRYPOINT ["code-server", "--bind-addr", "0.0.0.0:8080", "--auth", "none", "/home/student"]
