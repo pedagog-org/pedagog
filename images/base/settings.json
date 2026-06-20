@@ -1,5 +1,6 @@
 {
   "telemetry.telemetryLevel": "off",
+  "chat.commandCenter.enabled": false,
   "workbench.settings.enableNaturalLanguageSearch": false,
   "workbench.startupEditor": "none",
   "workbench.enableExperiments": false,
