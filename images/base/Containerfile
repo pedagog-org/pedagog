@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1
+
+# M1: the smallest useful base image — runs code-server in the browser as an
+# unprivileged `student` user. The /pedagog layout, the pedagog/instructor users,
+# runit supervision, and the nftables egress model are added in M2.
+FROM cgr.dev/chainguard/wolfi-base:latest
+
+ARG CODE_SERVER_VERSION=4.125.0
+# Set automatically by `podman build` from --platform (e.g. amd64, arm64).
+ARG TARGETARCH
+
+# Runtime prerequisites: a shell for code-server's launcher script, TLS roots, the
+# C++/gcc runtime the bundled Node needs, and `shadow` (useradd) + curl/tar to install.
+# (`tar` is provided by the busybox already in the base.)
+RUN apk add --no-cache bash ca-certificates libstdc++ libgcc shadow curl
+
+# Install code-server from the upstream standalone release (bundles its own glibc Node).
+RUN curl -fsSL \
+      "https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-${TARGETARCH}.tar.gz" \
+      -o /tmp/code-server.tar.gz \
+ && mkdir -p /usr/lib/code-server \
+ && tar -xzf /tmp/code-server.tar.gz -C /usr/lib/code-server --strip-components=1 \
+ && ln -sf /usr/lib/code-server/bin/code-server /usr/bin/code-server \
+ && rm /tmp/code-server.tar.gz
+
+# The unprivileged account students work in.
+RUN useradd --create-home --shell /bin/bash --uid 1001 student
+
+USER student
+WORKDIR /home/student
+EXPOSE 8080
+
+# M1 spike only: no auth here. Authentication / SEB validation lands at the proxy later.
+ENTRYPOINT ["code-server", "--bind-addr", "0.0.0.0:8080", "--auth", "none"]
