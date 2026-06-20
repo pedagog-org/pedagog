@@ -26,10 +26,47 @@ RUN curl -fsSL \
 # The unprivileged account students work in.
 RUN useradd --create-home --shell /bin/bash --uid 1001 student
 
+# Keep code-server's runtime state OUT of the student's work folder: relocate the
+# user-data, extensions, and cache dirs so the workspace stays clean and is never
+# captured by archives/submissions. (M2 makes the extensions/data read-only,
+# owned by `pedagog`.)
+RUN mkdir -p /var/lib/code-server/data/User \
+             /var/lib/code-server/extensions \
+             /var/lib/code-server/cache \
+             /var/lib/code-server/share \
+ && chown -R student:student /var/lib/code-server
+
+# Locked-down default settings (telemetry off, no online lookups, no auto-update, ...).
+COPY --chown=student:student settings.json /var/lib/code-server/data/User/settings.json
+
+# Disable the extension marketplace entirely (no search/install). With the read-only
+# extensions dir + no network (M2), this blocks adding extensions / AI tools.
+# XDG_CACHE_HOME / XDG_DATA_HOME relocate the last stray dirs (~/.cache and
+# code-server's own ~/.local/share data dir) out of the work folder.
+ENV EXTENSIONS_GALLERY={} \
+    XDG_CACHE_HOME=/var/lib/code-server/cache \
+    XDG_DATA_HOME=/var/lib/code-server/share
+
 USER student
 WORKDIR /home/student
 EXPOSE 8080
 
-# M1 spike only: no auth here. Authentication / SEB validation lands at the proxy later.
-# The trailing path makes code-server open the student's folder on entry.
-ENTRYPOINT ["code-server", "--bind-addr", "0.0.0.0:8080", "--auth", "none", "/home/student"]
+# M1 spike only: no auth here (auth / SEB validation lands at the proxy later).
+# Lockdown: no telemetry/update-check; no file downloads (exfil) or uploads (import);
+# no port proxy; no workspace-trust / getting-started prompts; relocated state dirs.
+# The trailing path opens the student's folder on entry.
+ENTRYPOINT ["code-server", \
+    "--bind-addr", "0.0.0.0:8080", \
+    "--auth", "none", \
+    "--app-name", "pedagog", \
+    "--disable-telemetry", \
+    "--disable-update-check", \
+    "--disable-file-downloads", \
+    "--disable-file-uploads", \
+    "--disable-workspace-trust", \
+    "--disable-getting-started-override", \
+    "--disable-proxy", \
+    "--user-data-dir", "/var/lib/code-server/data", \
+    "--extensions-dir", "/var/lib/code-server/extensions", \
+    "--config", "/var/lib/code-server/config.yaml", \
+    "/home/student"]

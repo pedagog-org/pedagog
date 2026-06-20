@@ -1,0 +1,14 @@
+{
+  "telemetry.telemetryLevel": "off",
+  "workbench.settings.enableNaturalLanguageSearch": false,
+  "workbench.startupEditor": "none",
+  "workbench.enableExperiments": false,
+  "update.mode": "none",
+  "extensions.autoUpdate": false,
+  "extensions.autoCheckUpdates": false,
+  "extensions.ignoreRecommendations": true,
+  "npm.fetchOnlinePackageInfo": false,
+  "typescript.disableAutomaticTypeAcquisition": true,
+  "git.autofetch": false,
+  "security.workspace.trust.enabled": false
+}
