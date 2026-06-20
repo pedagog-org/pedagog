@@ -36,3 +36,13 @@ or in conversation. Treat the prompt doc as the living source of truth for what 
 - Security and student-isolation are first-class concerns (this administers exams). Call out
   threat-model implications of design choices.
 - Keep FERPA / student-data-privacy in mind for anything that stores or transmits student data.
+
+## Code conventions
+
+When code is eventually written, it MUST follow [`docs/05-design-code-conventions.md`]. In short:
+idiomatic Rust modeling the domain exactly; edition 2024 + pinned toolchain; `thiserror` in libs and
+`anyhow` only at binary boundaries; **no panics in production paths** (clippy denies
+`unwrap`/`expect`/`panic` outside tests); newtypes + state enums + typestate; `pedagog-core` stays
+pure (no I/O/DB); **SQLx** with explicit row↔domain mapping; `tokio` services + sync CLI; one concept
+per module (no god-files); I/O behind traits for testability; `tracing` for logs; `nextest`; no
+warnings left in the tree.
