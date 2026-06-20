@@ -46,3 +46,12 @@ idiomatic Rust modeling the domain exactly; edition 2024 + pinned toolchain; `th
 pure (no I/O/DB); **SQLx** with explicit row↔domain mapping; `tokio` services + sync CLI; one concept
 per module (no god-files); I/O behind traits for testability; `tracing` for logs; `nextest`; no
 warnings left in the tree.
+
+## Implementation workflow
+
+- **Work in small, reviewable increments.** Do NOT write a large batch of code and then ask for
+  review — that invites errors and wrong-direction drift. Produce one small, coherent change at a
+  time and let the user review it. The user reads **all** code changes.
+- **Commit often on a feature branch** (not directly on `main`), then **squash-merge** to `main`
+  later. Use descriptive branch names (e.g. `feat/m1-code-server`).
+- After each small increment, pause for review before continuing to the next.
