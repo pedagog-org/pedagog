@@ -1,4 +1,6 @@
 {
+  "chat.disableAIFeatures": true,
+  "extensions.allowed": { "*": false },
   "telemetry.telemetryLevel": "off",
   "chat.commandCenter.enabled": false,
   "workbench.settings.enableNaturalLanguageSearch": false,

@@ -12,7 +12,7 @@ ARG TARGETARCH
 # Runtime prerequisites: a shell for code-server's launcher script, TLS roots, the
 # C++/gcc runtime the bundled Node needs, and `shadow` (useradd) + curl/tar to install.
 # (`tar` is provided by the busybox already in the base.)
-RUN apk add --no-cache bash ca-certificates libstdc++ libgcc shadow curl jq
+RUN apk add --no-cache bash ca-certificates libstdc++ libgcc shadow curl
 
 # Install code-server from the upstream standalone release (bundles its own glibc Node).
 RUN curl -fsSL \
@@ -22,12 +22,6 @@ RUN curl -fsSL \
  && tar -xzf /tmp/code-server.tar.gz -C /usr/lib/code-server --strip-components=1 \
  && ln -sf /usr/lib/code-server/bin/code-server /usr/bin/code-server \
  && rm /tmp/code-server.tar.gz
-
-# Remove the built-in Copilot / AI chat entrypoints (the "Copilot" status item and the
-# chat "setup" prompts) from VS Code's product manifest, so AI is not even offered.
-RUN jq 'del(.defaultChatAgent, .aiConfig)' \
-      /usr/lib/code-server/lib/vscode/product.json > /tmp/product.json \
- && mv /tmp/product.json /usr/lib/code-server/lib/vscode/product.json
 
 # The unprivileged account students work in.
 RUN useradd --create-home --shell /bin/bash --uid 1001 student
