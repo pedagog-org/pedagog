@@ -1,0 +1,15 @@
+# M1.5 spike — Traefik static config. Validates code-server under a /s/<id>/ subpath.
+# Throwaway: not the production config (no TLS, no ForwardAuth yet).
+entryPoints:
+  web:
+    address: ":80"
+
+log:
+  level: INFO
+
+accessLog: {}
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true

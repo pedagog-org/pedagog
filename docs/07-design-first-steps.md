@@ -31,6 +31,13 @@
   **WebSocket** connects (terminal + live features work). Record findings in this doc.
 - **Decision gate:** if subpath routing is broken/ugly, revisit **subdomain routing** (doc 02 §3)
   before proceeding — cheaper to change now than after M3.
+- **Result (2026-06-21): PASS — path routing confirmed.** Traefik (file provider) router
+  `PathPrefix(/s/test)` + `stripPrefix` → code-server. code-server emits **relative** asset paths
+  (`./_static/...`, `stable-<hash>/static/...`) and a **relative** redirect (`./?folder=...`), so the
+  workbench (HTTP 200) and assets (200) load correctly under the subpath, and Traefik proxies the
+  **WebSocket** upgrade (connection held open). So we keep **path-based routing**; no subdomain
+  fallback needed. Spike config: `deploy/spike-path-routing/`. (Minor: `/s/test` without a trailing
+  slash should redirect to `/s/test/`; the production proxy will add that.)
 
 ### M2 — flesh out the base image
 - **Filesystem:** the `/pedagog/{instructor,student,staging}` layout with the ownership/modes from
