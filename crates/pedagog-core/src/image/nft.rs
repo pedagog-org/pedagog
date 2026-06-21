@@ -1,15 +1,15 @@
 //! Render a student egress policy to an nftables ruleset script.
 
 use super::ids::{PEDAGOG_UID, STUDENT_UID};
-use super::network::{Action, NetworkMode, Verdict};
+use super::manifest::{Action, NetworkConfig, Rule};
 use ipnet::IpNet;
 
-/// Render the nftables script that enforces `mode` for the student uid.
+/// Render the nftables script that enforces `config` for the student uid.
 ///
 /// Loopback and the pedagog broker always keep egress; only the student uid is
 /// constrained. The script is loaded at boot with `nft -f`.
-pub fn render(mode: &NetworkMode) -> String {
-    let (rules, terminal) = mode.lower();
+pub fn render(config: &NetworkConfig) -> String {
+    let (rules, terminal) = lower(config);
 
     let mut lines = vec![
         "table inet pedagog {".to_owned(),
@@ -35,6 +35,41 @@ pub fn render(mode: &NetworkMode) -> String {
     lines.push("}".to_owned());
 
     lines.join("\n") + "\n"
+}
+
+/// The verdict for student traffic that matches no rule.
+#[derive(Clone, Copy)]
+enum Verdict {
+    Accept,
+    Drop,
+}
+
+/// Lower a mode to the unified form: ordered student rules + a terminal verdict.
+fn lower(config: &NetworkConfig) -> (Vec<Rule>, Verdict) {
+    match config {
+        NetworkConfig::Default => (Vec::new(), Verdict::Drop),
+        NetworkConfig::Block { allow } => (
+            allow
+                .iter()
+                .map(|&target| Rule {
+                    action: Action::Allow,
+                    target,
+                })
+                .collect(),
+            Verdict::Drop,
+        ),
+        NetworkConfig::Open { block } => (
+            block
+                .iter()
+                .map(|&target| Rule {
+                    action: Action::Block,
+                    target,
+                })
+                .collect(),
+            Verdict::Accept,
+        ),
+        NetworkConfig::Custom { rules } => (rules.clone(), Verdict::Drop),
+    }
 }
 
 /// nft address-family keyword for a destination match.
@@ -64,7 +99,6 @@ fn action_verdict(a: Action) -> Verdict {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::network::Rule;
 
     fn net(s: &str) -> IpNet {
         s.parse().unwrap()
@@ -72,7 +106,7 @@ mod tests {
 
     #[test]
     fn default_drops_all_student_egress() {
-        let out = render(&NetworkMode::Default);
+        let out = render(&NetworkConfig::Default);
         assert!(out.contains(&format!("meta skuid {PEDAGOG_UID} accept")));
         assert!(out.contains(&format!("meta skuid {STUDENT_UID} drop")));
         assert!(!out.contains("daddr"));
@@ -80,7 +114,7 @@ mod tests {
 
     #[test]
     fn block_allows_then_drops() {
-        let out = render(&NetworkMode::Block {
+        let out = render(&NetworkConfig::Block {
             allow: vec![net("10.0.0.5/32")],
         });
         let allow_at = out
@@ -94,7 +128,7 @@ mod tests {
 
     #[test]
     fn open_blocks_then_accepts() {
-        let out = render(&NetworkMode::Open {
+        let out = render(&NetworkConfig::Open {
             block: vec![net("192.168.0.0/16")],
         });
         assert!(out.contains(&format!(
@@ -105,7 +139,7 @@ mod tests {
 
     #[test]
     fn custom_preserves_order_then_drops() {
-        let out = render(&NetworkMode::Custom {
+        let out = render(&NetworkConfig::Custom {
             rules: vec![
                 Rule {
                     action: Action::Allow,
@@ -127,7 +161,7 @@ mod tests {
 
     #[test]
     fn ipv6_uses_ip6_family() {
-        let out = render(&NetworkMode::Block {
+        let out = render(&NetworkConfig::Block {
             allow: vec![net("2001:db8::/32")],
         });
         assert!(out.contains("ip6 daddr 2001:db8::/32 accept"));

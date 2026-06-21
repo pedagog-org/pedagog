@@ -7,6 +7,11 @@ publish.workspace = true
 
 [dependencies]
 ipnet = { workspace = true }
+magic_migrate = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
 
 [lints]
 workspace = true
