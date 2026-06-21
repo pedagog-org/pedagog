@@ -1,0 +1,9 @@
+#!/bin/sh
+# PID 1. Run one-time setup, then hand off to runsvdir, which supervises the
+# services in /etc/service, reaps orphaned processes, and exits cleanly on
+# SIGTERM (so `podman stop` is prompt). We don't use runit's staged PID 1
+# binary: its stage-3 shutdown calls reboot(), which needs CAP_SYS_BOOT and
+# so hangs under rootless podman.
+set -e
+/etc/runit/1
+exec runsvdir -P /etc/service

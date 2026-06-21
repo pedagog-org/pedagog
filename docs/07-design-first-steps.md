@@ -43,8 +43,11 @@
 - **Filesystem:** the `/pedagog/{instructor,student,staging}` layout with the ownership/modes from
   doc 02 §4.2.
 - **Users/groups:** `student`, `pedagog`, `instructor`; the `pedagogc` group (socket clients).
-- **Init/supervision:** **runit** as PID 1 — stage 1 (`/etc/runit/1`) one-time setup; stage 2
-  (`runsvdir`) supervises `code-server` (uid `student`) with auto-restart; stage 3 shutdown.
+- **Init/supervision (done):** a tiny PID 1 (`/etc/runit/boot`) runs one-time setup (`/etc/runit/1`)
+  then `exec runsvdir /etc/service`, which supervises `code-server` (dropped to uid `student` via
+  `chpst`) with auto-restart. We use **runsvdir directly as PID 1**, not runit's staged PID 1 binary:
+  the latter's stage-3 shutdown calls `reboot()` (needs `CAP_NET_ADMIN`'s sibling `CAP_SYS_BOOT`) and
+  hangs under rootless podman, whereas `runsvdir` reaps orphans and exits on SIGTERM in ~0.2s.
   (The `pedagog` daemon service is added in M3.)
 - **Network:** the **nftables** egress model (uid-owner): `student` egress per `network.mode`
   (`none` default / `allowlist` / `open`); `pedagog` uid egress allowed; rules applied under

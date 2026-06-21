@@ -8,8 +8,9 @@ ARG CODE_SERVER_VERSION=4.125.0
 ARG TARGETARCH
 
 # A shell for code-server's launcher, TLS roots, the C++ runtime its bundled Node needs,
-# and shadow (useradd) + curl to install. (tar comes from the base busybox.)
-RUN apk add --no-cache bash ca-certificates libstdc++ libgcc shadow curl
+# shadow (useradd), curl to install, and runit (PID 1 supervisor). (tar comes from
+# the base busybox.)
+RUN apk add --no-cache bash ca-certificates libstdc++ libgcc shadow curl runit
 
 # code-server from the upstream standalone release (bundles its own glibc Node).
 RUN curl -fsSL \
@@ -63,25 +64,11 @@ ENV EXTENSIONS_GALLERY={} \
     XDG_CACHE_HOME=/var/lib/code-server/cache \
     XDG_DATA_HOME=/var/lib/code-server/share
 
-USER student
-WORKDIR /pedagog/student
 EXPOSE 8080
 
-# Auth/SEB validation land at the proxy, not here. Lockdown flags disable telemetry,
-# update checks, file up/downloads, the port proxy, and trust/getting-started prompts.
-# The trailing path opens the student's folder on entry.
-ENTRYPOINT ["code-server", \
-    "--bind-addr", "0.0.0.0:8080", \
-    "--auth", "none", \
-    "--app-name", "pedagog", \
-    "--disable-telemetry", \
-    "--disable-update-check", \
-    "--disable-file-downloads", \
-    "--disable-file-uploads", \
-    "--disable-workspace-trust", \
-    "--disable-getting-started-override", \
-    "--disable-proxy", \
-    "--user-data-dir", "/var/lib/code-server/data", \
-    "--extensions-dir", "/var/lib/code-server/extensions", \
-    "--config", "/var/lib/code-server/config.yaml", \
-    "/pedagog/student"]
+# Boot model: a tiny PID 1 (/etc/runit/boot) runs one-time setup, then execs
+# runsvdir to supervise the services in /etc/service. code-server drops to the
+# student uid via chpst. Scripts live in rootfs/.
+COPY rootfs/ /
+
+ENTRYPOINT ["/etc/runit/boot"]

@@ -1,0 +1,4 @@
+#!/bin/sh
+# One-time setup, run by PID 1 before supervision starts. nftables egress rules
+# will be applied here (under CAP_NET_ADMIN, then dropped) in a later step.
+exit 0

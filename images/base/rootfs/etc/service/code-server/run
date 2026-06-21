@@ -1,0 +1,21 @@
+#!/bin/sh
+# Supervised editor, dropped to the unprivileged student uid (with its
+# supplementary groups). Auth/SEB validation happen at the proxy, not here;
+# the lockdown flags disable telemetry, updates, up/downloads, the port proxy,
+# and trust/getting-started prompts. The trailing path opens the work folder.
+export HOME=/pedagog/student
+exec chpst -u student code-server \
+  --bind-addr 0.0.0.0:8080 \
+  --auth none \
+  --app-name pedagog \
+  --disable-telemetry \
+  --disable-update-check \
+  --disable-file-downloads \
+  --disable-file-uploads \
+  --disable-workspace-trust \
+  --disable-getting-started-override \
+  --disable-proxy \
+  --user-data-dir /var/lib/code-server/data \
+  --extensions-dir /var/lib/code-server/extensions \
+  --config /var/lib/code-server/config.yaml \
+  /pedagog/student
