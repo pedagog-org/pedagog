@@ -1,20 +1,17 @@
 # syntax=docker/dockerfile:1
 
-# M1: the smallest useful base image — runs code-server in the browser as an
-# unprivileged `student` user. The /pedagog layout, the pedagog/instructor users,
-# runit supervision, and the nftables egress model are added in M2.
+# Base image: runs code-server in the browser as an unprivileged `student` user.
 FROM cgr.dev/chainguard/wolfi-base:latest
 
 ARG CODE_SERVER_VERSION=4.125.0
-# Set automatically by `podman build` from --platform (e.g. amd64, arm64).
+# Set by `podman build` from --platform (e.g. amd64, arm64).
 ARG TARGETARCH
 
-# Runtime prerequisites: a shell for code-server's launcher script, TLS roots, the
-# C++/gcc runtime the bundled Node needs, and `shadow` (useradd) + curl/tar to install.
-# (`tar` is provided by the busybox already in the base.)
+# A shell for code-server's launcher, TLS roots, the C++ runtime its bundled Node needs,
+# and shadow (useradd) + curl to install. (tar comes from the base busybox.)
 RUN apk add --no-cache bash ca-certificates libstdc++ libgcc shadow curl
 
-# Install code-server from the upstream standalone release (bundles its own glibc Node).
+# code-server from the upstream standalone release (bundles its own glibc Node).
 RUN curl -fsSL \
       "https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-${TARGETARCH}.tar.gz" \
       -o /tmp/code-server.tar.gz \
@@ -26,29 +23,25 @@ RUN curl -fsSL \
 # The unprivileged account students work in.
 RUN useradd --create-home --shell /bin/bash --uid 1001 student
 
-# Keep code-server's runtime state OUT of the student's work folder: relocate the
-# user-data, extensions, and cache dirs so the workspace stays clean and is never
-# captured by archives/submissions. (M2 makes the extensions/data read-only,
-# owned by `pedagog`.)
+# Keep code-server's runtime state out of the student's work folder so the workspace
+# stays clean and is never captured by archives/submissions.
 RUN mkdir -p /var/lib/code-server/data/User \
              /var/lib/code-server/extensions \
              /var/lib/code-server/cache \
              /var/lib/code-server/share \
  && chown -R student:student /var/lib/code-server
 
-# Lock the extensions dir read-only (root-owned) so students cannot add/remove
-# extensions; pre-seed the empty manifest code-server expects.
+# Lock the extensions dir read-only so students cannot add/remove extensions; pre-seed
+# the empty manifest code-server expects.
 RUN printf '[]' > /var/lib/code-server/extensions/extensions.json \
  && chown -R root:root /var/lib/code-server/extensions \
  && chmod -R a=rX /var/lib/code-server/extensions
 
-# Locked-down default settings (telemetry off, no online lookups, no auto-update, ...).
+# Locked-down default settings (telemetry off, no online lookups, no auto-update).
 COPY --chown=student:student settings.json /var/lib/code-server/data/User/settings.json
 
-# Disable the extension marketplace entirely (no search/install). With the read-only
-# extensions dir + no network (M2), this blocks adding extensions / AI tools.
-# XDG_CACHE_HOME / XDG_DATA_HOME relocate the last stray dirs (~/.cache and
-# code-server's own ~/.local/share data dir) out of the work folder.
+# Disable the extension marketplace; relocate the last stray cache/data dirs out of the
+# work folder.
 ENV EXTENSIONS_GALLERY={} \
     XDG_CACHE_HOME=/var/lib/code-server/cache \
     XDG_DATA_HOME=/var/lib/code-server/share
@@ -57,9 +50,8 @@ USER student
 WORKDIR /home/student
 EXPOSE 8080
 
-# M1 spike only: no auth here (auth / SEB validation lands at the proxy later).
-# Lockdown: no telemetry/update-check; no file downloads (exfil) or uploads (import);
-# no port proxy; no workspace-trust / getting-started prompts; relocated state dirs.
+# Auth/SEB validation land at the proxy, not here. Lockdown flags disable telemetry,
+# update checks, file up/downloads, the port proxy, and trust/getting-started prompts.
 # The trailing path opens the student's folder on entry.
 ENTRYPOINT ["code-server", \
     "--bind-addr", "0.0.0.0:8080", \
