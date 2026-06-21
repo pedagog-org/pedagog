@@ -1,0 +1,4 @@
+[toolchain]
+channel = "1.88.0"
+components = ["rustfmt", "clippy"]
+# musl targets are added in the image builder stage, not required for local builds.

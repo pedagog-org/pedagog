@@ -1,0 +1,15 @@
+[package]
+name = "pedagog-cli"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "pedagog"
+path = "src/main.rs"
+
+[dependencies]
+
+[lints]
+workspace = true
