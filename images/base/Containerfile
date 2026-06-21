@@ -22,24 +22,26 @@ RUN curl -fsSL \
  && rm /tmp/code-server.tar.gz
 
 # Identities: student (untrusted) works in the editor; pedagog (trusted broker)
-# will hold the token and own egress; instructor owns seed/config. The pedagogc
+# will hold the token and own egress; instructor owns the source tree. The pedagogc
 # group gates the daemon socket (clients allowed to connect).
 RUN groupadd --gid 1001 student \
  && groupadd --gid 1002 pedagog \
  && groupadd --gid 1003 instructor \
  && groupadd --gid 1100 pedagogc \
- && useradd --uid 1001 --gid student    --groups pedagogc --shell /bin/bash      --home-dir /pedagog/student    --no-create-home student \
- && useradd --uid 1002 --gid pedagog                      --shell /sbin/nologin  --home-dir /pedagog            --no-create-home pedagog \
- && useradd --uid 1003 --gid instructor --groups pedagogc --shell /sbin/nologin  --home-dir /pedagog/instructor --no-create-home instructor
+ && useradd --uid 1001 --gid student    --groups pedagogc --shell /bin/bash      --home-dir /pedagog/student --no-create-home student \
+ && useradd --uid 1002 --gid pedagog                      --shell /sbin/nologin  --home-dir /pedagog         --no-create-home pedagog \
+ && useradd --uid 1003 --gid instructor --groups pedagogc --shell /sbin/nologin  --home-dir /pedagog/source  --no-create-home instructor
 
 # Work tree under /pedagog. student/ is the student home (a named volume at
-# runtime; build just sets the mountpoint owner). instructor/ (seed + config)
-# and staging/ (submission packaging) are pedagog-owned and hidden from student.
-RUN mkdir -p /pedagog/student /pedagog/instructor /pedagog/staging \
+# runtime; build just sets the mountpoint owner). source/ (instructor inputs:
+# manifest + seed files) is instructor-owned, group pedagog so the daemon can
+# read seeds; staging/ (submission packaging) is pedagog-only. Both hidden from
+# student.
+RUN mkdir -p /pedagog/student /pedagog/source /pedagog/staging \
  && chmod 0755 /pedagog \
- && chown student:student    /pedagog/student    && chmod 0700 /pedagog/student \
- && chown pedagog:pedagog    /pedagog/instructor && chmod 0750 /pedagog/instructor \
- && chown pedagog:pedagog    /pedagog/staging    && chmod 0700 /pedagog/staging
+ && chown student:student     /pedagog/student && chmod 0700 /pedagog/student \
+ && chown instructor:pedagog  /pedagog/source  && chmod 0750 /pedagog/source \
+ && chown pedagog:pedagog     /pedagog/staging && chmod 0700 /pedagog/staging
 
 # Keep code-server's runtime state out of the student's work folder so the workspace
 # stays clean and is never captured by archives/submissions.
