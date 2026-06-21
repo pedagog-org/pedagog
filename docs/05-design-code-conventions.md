@@ -79,7 +79,9 @@ before brevity.
 ## 8. Observability
 
 - **Structured logging via [`tracing`]** (+ `tracing-subscriber`) across the services — spans and
-  structured fields. Important for an exam/audit system; never log secrets (`session_id`, tokens).
+  structured fields. Important for an exam/audit system; never log secrets (the **container token**,
+  session cookies, credentials). Note: `session_id` is a **public, non-secret** identifier and is
+  fine to log; the `ContainerToken` newtype must never be `Display`/logged.
 
 ## 9. Testing
 

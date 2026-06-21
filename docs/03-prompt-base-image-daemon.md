@@ -11,7 +11,8 @@ Design the **in-container contract** — the foundational build target — cover
 1. **Base image** (Wolfi): users, the `/pedagog/` directory layout, installed binaries, the
    process/init model, how nftables egress rules are applied at start, and how `reset` seeds the
    student volume at build.
-2. **`pedagog` daemon ↔ control-plane protocol**: how `session_id` is delivered, how the daemon
+2. **`pedagog` daemon ↔ control-plane protocol**: how the **container token** (secret) and
+   `session_id` (public) are delivered, how the daemon
    fetches session info, the **heartbeat** (including how the control plane — which never connects
    *into* the container — propagates authoritative deadline/commands), and the submit/archive calls.
 3. **CLI ↔ daemon protocol**: the Unix-socket contract for the student commands (`submit`, `test`,
@@ -29,7 +30,8 @@ Design the **in-container contract** — the foundational build target — cover
 - `student` is untrusted; `pedagog` daemon is the trusted broker and sole egress.
 - Control plane **never** connects into the container (containers only reach out).
 - Control plane is the **authority for time**.
-- Only a `session_id` is injected; everything else is fetched.
+- Only a `session_id` (public, routable) + a **container token** (secret) are injected; everything
+  else is fetched.
 - Wolfi base, rootless Podman, `cap-drop=ALL`, multi-arch (arm64).
 
 ## Decisions & clarifications (follow-up, 2026-06-20)
@@ -39,14 +41,17 @@ Design the **in-container contract** — the foundational build target — cover
   private network (nftables allows it **only from the control plane**). The **heartbeat is minimal
   liveness only** (~15s, no commands in the response). *(doc 02 to be reconciled.)*
 - **`pedagog init`** = container **ENTRYPOINT / PID 1** (root within the user namespace): apply
-  nftables, drop `CAP_NET_ADMIN`, secure the `session_id` file, then **spawn + supervise** the
+  nftables, drop `CAP_NET_ADMIN`, secure the **container-token** file, then **spawn + supervise** the
   daemon (uid `pedagog`) and `code-server` (uid `student`); reap zombies, forward signals. No
   user-facing start/stop.
 - **`pedagog daemon`** = long-running broker spawned by `init` (not user start/stop). Reads
-  `session_id`, fetches session info, heartbeats, serves the CLI socket, serves the CP control
+  the container token (and `session_id`), fetches session info, heartbeats, serves the CLI socket, serves the CP control
   endpoint, runs periodic archive, performs teardown.
-- **`session_id` delivery:** Nomad `meta.session_id` + a `template` stanza renders it into the
-  task's tmpfs `secrets/` dir; `init` relocates/secures it to `0400 pedagog`.
+- **Secret/identifier delivery:** the public **`session_id`** is passed as plain Nomad
+  `meta.session_id` (used for routing — see doc 08); the secret **container token** is passed as
+  `meta.container_token` and rendered by a `template` stanza into the task's tmpfs `secrets/` dir;
+  `init` relocates/secures the token to `0400 pedagog`. The `session_id`, being public, needs no
+  such protection.
 - **Socket access:** group **`pedagogc`** (= "pedagog clients": `student` + `instructor`) may
   *connect* to the socket; the daemon **authorizes by `SO_PEERCRED` uid** (student vs instructor).
   Instructor recovery (SSH in, fix, **resubmit on behalf of student**) uses the `instructor` uid.
@@ -56,7 +61,7 @@ Design the **in-container contract** — the foundational build target — cover
   Nomad's podman driver **auto-removes the container**; the **named volume is CP-owned** and the CP
   **destroys it only after the confirmed terminal archive**. Nomad `stop` is the backstop.
 - **Supervision:** PID 1 is **runit**. Stage 1 (`/etc/runit/1`) runs one-time setup (apply
-  nftables, secure `session_id`); stage 2 (`runsvdir`) supervises the longrun services — `pedagog
+  nftables, secure the container token); stage 2 (`runsvdir`) supervises the longrun services — `pedagog
   daemon` (uid `pedagog`) and `code-server` (uid `student`) — with automatic restart and proper
   zombie reaping; stage 3 handles shutdown. (Non-root services inherently lack `CAP_NET_ADMIN`, so
   they cannot alter the firewall.)
@@ -75,9 +80,14 @@ Design the **in-container contract** — the foundational build target — cover
   and only exposes permitted subcommands; the daemon still re-authorizes by `SO_PEERCRED`.
 - **Build input:** instructor uploads a **TGZ** unpacked into `/pedagog/instructor/`; the build then
   installs toolchains and runs `reset` (as `student`, last step).
-- **Control-endpoint auth:** **no signing for v1** — restrict ingress to the control port to the
-  control plane via nftables, *and* drop `student`-uid access to that port (same-netns caveat).
-  Signing remains a later hardening if the cluster-network trust assumptions weaken.
+- **Control-endpoint auth:** the endpoint is **nftables-restricted** (ingress to the control port
+  allowed only from the control plane, *and* `student`-uid access dropped — same-netns caveat)
+  **and authenticated by the per-session container token** (a shared secret known only to the CP
+  and this daemon), so a command is acted on only if it both reaches the port *and* proves knowledge
+  of the token. **[Updated 2026-06-21 (doc 08):** this supersedes the earlier "no signing for v1 —
+  nftables only" plan; the container token now provides per-session request auth in both
+  directions. Pair with private-net TLS so the bearer token isn't sniffable; mTLS remains a later
+  hardening.**]**
 
 ### Resolved (this round)
 - **Supervisor:** **runit** as PID 1 (stage-1 setup, stage-2 `runsvdir`, stage-3 shutdown).

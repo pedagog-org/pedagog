@@ -59,7 +59,7 @@
 ### M3 — CLI + daemon (against a control-plane stub)
 - **Workspace:** (re)create the Cargo workspace per the conventions — `pedagog-core`,
   `pedagog-proto`, `pedagog-cli`, `pedagog-daemon` (more crates as needed).
-- **Daemon:** reads `session_id`; CLI **Unix socket** server with `SO_PEERCRED` authorization;
+- **Daemon:** reads the **container token** (and the public `session_id`); CLI **Unix socket** server with `SO_PEERCRED` authorization;
   minimal **liveness heartbeat**; **control endpoint** (CP→daemon `EndSession`/`UpdateDeadline`,
   nftables-restricted); packaging/archive plumbing.
 - **CLI:** the student/instructor verbs (`submit`, `time`, `archive`, `reset`, `status`) with

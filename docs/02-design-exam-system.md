@@ -4,6 +4,9 @@
 > **Status:** Agreed (v1 architecture). Implements the requirements in
 > [`01-prompt-exam-system-overview.md`](./01-prompt-exam-system-overview.md).
 > Diagrams are [Mermaid](https://mermaid.js.org/) and render on GitHub / most Markdown viewers.
+> **Terminology reconciled (2026-06-21, per [`08-design-dynamic-routing.md`](./08-design-dynamic-routing.md)):**
+> `session_id` is the **public, routable** identifier; the **secret** is the per-session
+> **container token**. See the terminology-reconciliation note at the end of this doc (§14).
 
 ---
 
@@ -38,7 +41,7 @@
 | Reverse proxy / edge | **Traefik** | TLS, path routing, WebSockets, ForwardAuth |
 | Control plane | **Rust** | Auth, API, lifecycle, reconcilers; **authority for time**; idiomatic, typed |
 | Web UI | **Rust** (`pedagog-web`) | Student login/portal/dashboard + instructor management & live view |
-| In-container broker | **Rust** `pedagog` daemon | Holds `session_id`; sole outbound egress; **liveness heartbeat** out; **CP-only control endpoint** in; policy |
+| In-container broker | **Rust** `pedagog` daemon | Holds the **container token**; sole outbound egress; **liveness heartbeat** out; **CP-only control endpoint** in (token-authenticated); policy |
 | Nomad access | **Rust** `pedagog-nomad` (thin) | `reqwest`/`serde` wrapper over the few HTTP endpoints we use — not a full client port |
 | Image registry | **Zot** (or Harbor) | Private OCI registry; cosign-signed images pulled by nodes |
 | Scheduling / multi-host | **Nomad** + `nomad-driver-podman` | Placement, health, reschedule |
@@ -117,9 +120,9 @@ flowchart TB
 **Trust boundary:** Traefik is the *only* tier reachable from clients. The control plane, Nomad,
 Postgres, MinIO, the registry, and the containers' code-server ports live on a private network and
 are never directly exposed. Containers reach *out* for a **liveness heartbeat** + submit/archive;
-the control plane reaches *in* only to a **CP-only control endpoint** (nftables-restricted) to push
-`EndSession` / `UpdateDeadline`. Liveness is detected from heartbeats; control is **pushed, not
-polled**. The instructor surface lives in `pedagog-web` behind a privileged (instructor-role) auth path.
+the control plane reaches *in* only to a **CP-only control endpoint** (nftables-restricted **and**
+authenticated by the per-session **container token**) to push `EndSession` / `UpdateDeadline`.
+Liveness is detected from heartbeats; control is **pushed, not polled**. The instructor surface lives in `pedagog-web` behind a privileged (instructor-role) auth path.
 
 ---
 
@@ -170,11 +173,12 @@ flowchart LR
 ### 4.2 In-container layout & privilege split
 
 The **`student` user is untrusted**; a separate **`pedagog` daemon** is the trusted broker that
-holds the `session_id`, is the **sole process with outbound egress**, and enforces all policy. It
-**pushes a minimal liveness heartbeat** to the control plane and exposes a **control endpoint** that
-**only the control plane** may reach — nftables-restricted to the CP, *and* denied to the `student`
-uid in the same netns — for pushed `EndSession` / `UpdateDeadline` commands. The student talks to
-the daemon over a Unix socket.
+holds the secret **container token**, is the **sole process with outbound egress**, and enforces all
+policy. It **pushes a minimal liveness heartbeat** to the control plane and exposes a **control
+endpoint** that **only the control plane** may reach — nftables-restricted to the CP, *and* denied
+to the `student` uid in the same netns, *and* authenticated by the per-session **container token**
+(a shared secret known only to the CP and this daemon) — for pushed `EndSession` / `UpdateDeadline`
+commands. The student talks to the daemon over a Unix socket.
 
 Everything lives under **`/pedagog/`**:
 
@@ -193,7 +197,7 @@ flowchart TB
       CLI["pedagog CLI (thin client)"]
     end
     subgraph pedz["uid: pedagog (trusted broker)"]
-      D["pedagog daemon<br/>session_id · sole egress · liveness heartbeat · control endpoint (CP-only) · policy"]
+      D["pedagog daemon<br/>container token · sole egress · liveness heartbeat · control endpoint (CP-only) · policy"]
     end
     SOCK{{"/run/pedagog.sock (unix)"}}
     subgraph fs["/pedagog"]
@@ -226,7 +230,8 @@ flowchart TB
     (prevents DNS-tunnel exfiltration).
   - `network: open` — full opt-out (instructor's choice).
 - **Capabilities:** `--cap-drop=ALL`; no sudo, no setuid escalation; no apt (removed at build).
-- **No student-readable secret** exists anywhere; `session_id` lives only in the daemon.
+- **No student-readable secret** exists anywhere; the **container token** lives only in the daemon
+  (and the CP). `session_id` is a non-secret, routable identifier and carries no authority.
 
 ### 4.3 SEB validation
 
@@ -310,8 +315,10 @@ public student routes from the privileged instructor routes (distinct auth, tigh
 - **assignment**: image ref, `network_mode`, quotas, package/prepare spec, test command,
   default time limit, **exam window** (`open_at`/`close_at`), SEB `ConfigKey`/`BrowserExamKey`.
 - **accommodation**: `(student, assignment) → multiplier | fixed_duration`.
-- **session**: `session_id` (capability token), student, assignment, node/alloc, named volume,
-  `start_at`, `deadline` (after accommodations), `connected_at`, `last_seen` (heartbeat), state.
+- **session**: `session_id` (public, routable identifier), **container token** (secret capability,
+  daemon-only — stored only as needed to authenticate the control channel), student, assignment,
+  node/alloc, named volume, `start_at`, `deadline` (after accommodations), `connected_at`,
+  `last_seen` (heartbeat), state.
 - **submission**: `(session, version, time, object_key)` — versioned, immutable.
 - **archive**: `(session, latest object/restic snapshot, time)` — keep-latest only.
 - **audit_log**: connections, command usage, submissions, instructor actions (integrity disputes).
@@ -369,10 +376,10 @@ sequenceDiagram
   A-->>T: 200
   S->>A: POST credentials (SID + secret phrase)
   A->>A: verify · apply accommodation → deadline · create session
-  A->>N: submit job (image, quotas, session_id, named volume)
+  A->>N: dispatch job (image, quotas, session_id, container token, named volume)
   N->>C: start container (volume seeded from image, reset at build)
   C->>C: apply nftables egress, then drop CAP_NET_ADMIN
-  C->>D: start daemon (session_id)
+  C->>D: start daemon (reads container token)
   D->>A: GET session info
   A-->>D: deadline · identity · policy
   A-->>S: set session cookie · redirect /s/<id>/
@@ -415,7 +422,7 @@ sequenceDiagram
     D-->>CLI: package preview (nothing sent)
     CLI-->>ST: preview shown
   else real submit
-    D->>API: POST submission (session_id, tarball)
+    D->>API: POST submission (container-token auth, tarball)
     API->>M: store new immutable version
     API-->>D: ack (version, time)
     D->>D: clean staging
@@ -559,8 +566,8 @@ Names & Roles, and later grade passback via AGS) with **no changes to the auth f
 |---|---|
 | Student exfiltrates data / reaches LLM | Default `network: none` via nftables uid-owner; no port 53 to recursive resolver |
 | Student tears down firewall | Rules applied under `CAP_NET_ADMIN` at start, then dropped; `cap-drop=ALL` |
-| Student reads/forges submission token | `session_id` held only by `pedagog` daemon; `/pedagog/staging` & `/pedagog/instructor` `0700 pedagog` |
-| Submit after deadline / as another student | Server-validated `session_id` + per-session deadline; daemon-only egress |
+| Student reads/forges submission token | **container token** held only by `pedagog` daemon (and CP); `/pedagog/staging` & `/pedagog/instructor` `0700 pedagog` |
+| Submit after deadline / as another student | Server-validated **container token** + per-session deadline; daemon-only egress |
 | Broke working code after submitting | Versioned submissions; grade = last explicit submission |
 | Non-genuine / tampered browser | SEB header validation on entry + code-server route |
 | Replay session cookie outside SEB | Short-lived `HttpOnly/Secure/SameSite` cookie minted only after SEB-validated loads |
@@ -589,3 +596,26 @@ Names & Roles, and later grade passback via AGS) with **no changes to the auth f
 - v2: Canvas LTI 1.3 (SSO, roster, grade passback), points/hidden-test grading, Respondus path.
 - Decide Postgres HA topology and MinIO erasure-coding layout for the target cluster size.
 - Internal mTLS between tiers (hardening).
+
+---
+
+## 14. Terminology reconciliation — `session_id` vs container token (2026-06-21)
+
+Earlier revisions of this doc used `session_id` to mean **two different things**. Per
+[`08-design-dynamic-routing.md`](./08-design-dynamic-routing.md) they are now split:
+
+- **`session_id`** — **public, opaque, routable** identifier. Appears in the URL/route
+  (`/s/<session_id>/`), Nomad service tags, the dashboard, logs, and audit. **Carries no
+  authority.** Should still be high-entropy enough to be non-enumerable (defense in depth).
+- **container token** — the **secret** per-session capability credential (the value this doc
+  previously called `session_id`). Generated by the CP; injected only into that session's daemon
+  (Nomad `meta` → `template` → tmpfs `0400 pedagog`); held by **only the CP and that one daemon**;
+  **never** in a URL/tag/log.
+
+The container token **authenticates the control channel both ways**: the daemon's outbound
+heartbeat/submit/archive *and* the CP's inbound `EndSession`/`UpdateDeadline` push (which is also
+nftables-restricted to the CP). This upgrades the control endpoint from nftables-only to
+**nftables + token** and resolves the doc-01-follow-up-#3 "no inbound" vs. doc-03 "inbound push"
+tension in favor of **token-authenticated inbound push**. Routing now keys on `session_id` directly
+(the interim `route_id` idea is dropped). Code-convention impact: two newtypes — `SessionId`
+(loggable) and `ContainerToken` (never `Display`/logged).

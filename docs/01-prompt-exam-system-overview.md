@@ -161,6 +161,10 @@ Answers to the first round of design questions, plus additional requirements:
 - **Session token:** the control plane passes **only a `session_id`** into the container; the daemon
   fetches everything else (deadline, identity, etc.) from the server afterward. (`session_id` must be
   a high-entropy capability token held only by the daemon, never readable by the `student` user.)
+  **[Reconciled 2026-06-21 (doc 08 / doc 02 §14):** the *secret* meant here is now named the
+  **container token**; a separate **`session_id`** was split off as the **public, routable**
+  identifier (not a secret). The CP injects **both** at dispatch — `session_id` for routing (plain
+  meta), the container token via a `template` to tmpfs `0400 pedagog`.**]**
 - **Submissions vs. archives:**
   - **Submissions** = versioned, immutable, for grading. **`unsubmit` is removed.** Auto-submit at
     deadline fires only if the student never submitted.
