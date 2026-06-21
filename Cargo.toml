@@ -12,6 +12,7 @@ publish = false
 # code actually needs them).
 [workspace.dependencies]
 pedagog-core = { path = "crates/pedagog-core" }
+ipnet = "2"
 thiserror = "2"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

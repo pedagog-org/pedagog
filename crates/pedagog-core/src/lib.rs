@@ -1,1 +1,3 @@
-//! pedagog-core — pure domain types and logic (no I/O). Scaffold.
+//! pedagog-core — pure domain types and logic (no I/O).
+
+pub mod image;
