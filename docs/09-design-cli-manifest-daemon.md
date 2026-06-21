@@ -127,8 +127,14 @@ deferred to M3.
   <accept|drop>` per rule (in order), then the terminal `meta skuid 1001 <default>`. No nft-syntax
   parsing, no `nftables` crate (JSON-only, for live use). (Named sets are a later optimization for
   large lists.)
-- Loaded at boot by `nft -f /pedagog/config/nftables.conf` while PID 1 holds `CAP_NET_ADMIN`; the cap
-  is then dropped (locked for the session).
+- Loaded at boot by `nft -f /pedagog/config/nftables.conf` while PID 1 holds `CAP_NET_ADMIN`; PID 1
+  then execs `runsvdir` via `setpriv --bounding-set=-cap_net_admin`, removing the cap from the
+  bounding set so no setuid-root path can regain it. (`runsvdir` stays root so `chpst` can setuid into
+  services; the untrusted student/pedagog services are non-root and capless, so they cannot alter nft
+  regardless — the bounding drop is defense-in-depth.)
+- The base image bakes a **fail-closed default** `nftables.conf` (all student egress dropped), so the
+  bare base always boots safely; `pedagog image network compile` overwrites it per assignment. A
+  missing manifest compiles to `default`; a malformed one is a build error (so authors see it).
 - The container must run with `--cap-drop=ALL --cap-add=NET_ADMIN` — a flag on the `codebox` job,
   wired when we touch doc 08.
 - **Ingress is not filtered in v1** (topology governs reachability; the daemon control-port concern

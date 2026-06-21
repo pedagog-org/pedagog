@@ -6,4 +6,7 @@
 # so hangs under rootless podman.
 set -e
 /etc/runit/1
-exec runsvdir -P /etc/service
+# Lock the firewall: drop CAP_NET_ADMIN from the bounding set so no setuid-root
+# path can regain it. (The untrusted student/pedagog services are non-root and
+# capless already; runsvdir stays root so chpst can setuid into the services.)
+exec setpriv --bounding-set=-cap_net_admin runsvdir -P /etc/service

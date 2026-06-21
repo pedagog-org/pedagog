@@ -8,9 +8,10 @@ ARG CODE_SERVER_VERSION=4.125.0
 ARG TARGETARCH
 
 # A shell for code-server's launcher, TLS roots, the C++ runtime its bundled Node needs,
-# shadow (useradd), curl to install, and runit (PID 1 supervisor). (tar comes from
-# the base busybox.)
-RUN apk add --no-cache bash ca-certificates libstdc++ libgcc shadow curl runit
+# shadow (useradd), curl to install, runit (PID 1 supervisor), nftables (egress
+# firewall), and util-linux for setpriv (drops CAP_NET_ADMIN at boot). (tar comes
+# from the base busybox.)
+RUN apk add --no-cache bash ca-certificates libstdc++ libgcc shadow curl runit nftables util-linux
 
 # code-server from the upstream standalone release (bundles its own glibc Node).
 RUN curl -fsSL \
@@ -35,13 +36,15 @@ RUN groupadd --gid 1001 student \
 # Work tree under /pedagog. student/ is the student home (a named volume at
 # runtime; build just sets the mountpoint owner). source/ (instructor inputs:
 # manifest + seed files) is instructor-owned, group pedagog so the daemon can
-# read seeds; staging/ (submission packaging) is pedagog-only. Both hidden from
-# student.
-RUN mkdir -p /pedagog/student /pedagog/source /pedagog/staging \
+# read seeds; staging/ (submission packaging) is pedagog-only; config/ holds
+# resolved state (e.g. nftables.conf), root-owned, group pedagog. All hidden
+# from student.
+RUN mkdir -p /pedagog/student /pedagog/source /pedagog/staging /pedagog/config \
  && chmod 0755 /pedagog \
  && chown student:student     /pedagog/student && chmod 0700 /pedagog/student \
  && chown instructor:pedagog  /pedagog/source  && chmod 0750 /pedagog/source \
- && chown pedagog:pedagog     /pedagog/staging && chmod 0700 /pedagog/staging
+ && chown pedagog:pedagog     /pedagog/staging && chmod 0700 /pedagog/staging \
+ && chown root:pedagog        /pedagog/config  && chmod 0750 /pedagog/config
 
 # Keep code-server's runtime state out of the student's work folder so the workspace
 # stays clean and is never captured by archives/submissions.

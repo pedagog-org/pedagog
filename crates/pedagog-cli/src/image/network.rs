@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Subcommand;
-use miette::Result;
+use miette::{IntoDiagnostic, Result, WrapErr};
 use pedagog_core::image::manifest::{Action, NetworkConfig};
 use pedagog_core::image::nft;
 use tabled::settings::object::Rows;
@@ -16,6 +16,9 @@ use crate::manifest;
 /// Default manifest location inside the image.
 const DEFAULT_MANIFEST: &str = "/pedagog/source/pedagog.toml";
 
+/// Default location of the compiled ruleset, loaded at boot by `nft -f`.
+const DEFAULT_RULESET: &str = "/pedagog/config/nftables.conf";
+
 #[derive(Debug, Subcommand)]
 pub enum NetworkCommand {
     /// Summarize the student egress policy from the manifest.
@@ -26,6 +29,15 @@ pub enum NetworkCommand {
         /// Print the raw nftables ruleset instead of the summary.
         #[arg(long)]
         nft: bool,
+    },
+    /// Compile the manifest's egress policy to the boot-loaded ruleset file.
+    Compile {
+        /// Path to the manifest.
+        #[arg(long, default_value = DEFAULT_MANIFEST)]
+        config: PathBuf,
+        /// Where to write the nftables ruleset.
+        #[arg(long, default_value = DEFAULT_RULESET)]
+        out: PathBuf,
     },
 }
 
@@ -48,6 +60,13 @@ impl NetworkCommand {
                 } else {
                     print_summary(&network);
                 }
+                Ok(())
+            }
+            NetworkCommand::Compile { config, out } => {
+                let network = manifest::load(&config)?.network;
+                std::fs::write(&out, nft::render(&network))
+                    .into_diagnostic()
+                    .wrap_err_with(|| format!("writing ruleset {}", out.display()))?;
                 Ok(())
             }
         }

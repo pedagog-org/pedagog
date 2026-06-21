@@ -1,4 +1,7 @@
 #!/bin/sh
-# One-time setup, run by PID 1 before supervision starts. nftables egress rules
-# will be applied here (under CAP_NET_ADMIN, then dropped) in a later step.
-exit 0
+# One-time setup under CAP_NET_ADMIN, before supervision starts: load the student
+# egress firewall. boot drops the cap from the bounding set immediately after, so
+# no setuid-root path can regain it for the session. A missing or invalid ruleset
+# aborts boot (fail closed) — better no session than unfiltered egress.
+set -e
+nft -f /pedagog/config/nftables.conf
