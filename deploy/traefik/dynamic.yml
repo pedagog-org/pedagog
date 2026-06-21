@@ -1,0 +1,11 @@
+# Shared middlewares referenced by every session router (via @file).
+http:
+  middlewares:
+    # code-server emits relative redirects, so a bare /s/<id> must gain a
+    # trailing slash before stripprefix; otherwise ./ resolves to /s/ and the
+    # session id is lost. Matches only the exact /s/<id> (no sub-path, no slash),
+    # so sub-paths and already-slashed URLs don't loop.
+    add-slash:
+      redirectRegex:
+        regex: "^(https?://[^/]+/s/[^/]+)$"
+        replacement: "${1}/"

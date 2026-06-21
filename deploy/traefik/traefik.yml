@@ -1,0 +1,24 @@
+# The edge proxy. One standalone instance for the whole cluster (NOT part of any
+# codebox job). It discovers per-session routes from Nomad's native service registry.
+entryPoints:
+  web:
+    address: ":8080"
+
+log:
+  level: INFO
+
+accessLog: {}
+
+providers:
+  # Shared middlewares (e.g. add-slash) referenced by session routers as @file.
+  file:
+    filename: "/etc/traefik/dynamic.yml"
+  nomad:
+    # Only route services that opt in with traefik.enable=true.
+    exposedByDefault: false
+    # How fast routes appear/disappear after a dispatch or stop.
+    refreshInterval: "5s"
+    endpoint:
+      # Nomad API via podman's host-gateway DNS name, so Traefik needs no host
+      # networking. Backends come from the registry as the node's advertised IP.
+      address: "http://host.containers.internal:4646"
