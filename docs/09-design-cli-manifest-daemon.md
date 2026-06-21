@@ -32,10 +32,9 @@ per-assignment image:
   pedagog binaries baked in
         │  container start
         ▼
-/etc/runit/boot  (PID 1, root, holding CAP_NET_ADMIN)
-  ├─ /etc/runit/1 → nft -f /pedagog/config/nftables.conf   # load egress rules into the netns
-  ├─ drop CAP_NET_ADMIN                                     # LOCK AT BOOT — firewall immutable for the session
-  └─ exec runsvdir /etc/service
+/etc/runit/boot  (PID 1, root, caps: NET_ADMIN SETPCAP SETUID SETGID)
+  ├─ /etc/runit/1 → nft -f /pedagog/config/nftables.conf            # load egress rules into the netns
+  └─ exec setpriv --bounding-set=-net_admin,-setpcap runsvdir …     # LOCK AT BOOT — nft immutable for the session
         ├─ code-server   (chpst -u student)
         └─ pedagog       (chpst -u pedagog)        # the daemon
 ```
@@ -127,16 +126,19 @@ deferred to M3.
   <accept|drop>` per rule (in order), then the terminal `meta skuid 1001 <default>`. No nft-syntax
   parsing, no `nftables` crate (JSON-only, for live use). (Named sets are a later optimization for
   large lists.)
-- Loaded at boot by `nft -f /pedagog/config/nftables.conf` while PID 1 holds `CAP_NET_ADMIN`; PID 1
-  then execs `runsvdir` via `setpriv --bounding-set=-cap_net_admin`, removing the cap from the
-  bounding set so no setuid-root path can regain it. (`runsvdir` stays root so `chpst` can setuid into
-  services; the untrusted student/pedagog services are non-root and capless, so they cannot alter nft
-  regardless — the bounding drop is defense-in-depth.)
+- Loaded at boot by `nft -f /pedagog/config/nftables.conf` in `/etc/runit/1` while PID 1 holds
+  `CAP_NET_ADMIN`; PID 1 then execs `runsvdir` via `setpriv --bounding-set=-net_admin,-setpcap`. Once
+  `net_admin` leaves the bounding set, every later `execve` re-derives its capabilities from that set,
+  so **no process — not even a root one — can alter nft for the session** (a complete lock, not just
+  blocking re-grant). `setpcap` is dropped too so the bounding set can't be widened again; `setuid`
+  and `setgid` stay so `chpst` can drop services to their uids.
 - The base image bakes a **fail-closed default** `nftables.conf` (all student egress dropped), so the
   bare base always boots safely; `pedagog image network compile` overwrites it per assignment. A
   missing manifest compiles to `default`; a malformed one is a build error (so authors see it).
-- The container must run with `--cap-drop=ALL --cap-add=NET_ADMIN` — a flag on the `codebox` job,
-  wired when we touch doc 08.
+- The container must run with `--cap-drop=ALL --cap-add=NET_ADMIN --cap-add=SETPCAP --cap-add=SETUID
+  --cap-add=SETGID` (NET_ADMIN to load nft, SETPCAP to drop it from the bounding set, SETUID/SETGID
+  for `chpst`) — a flag set on the `codebox` job, wired when we touch doc 08. `setpriv` is the
+  dedicated Wolfi package: busybox's applet lacks `--bounding-set`.
 - **Ingress is not filtered in v1** (topology governs reachability; the daemon control-port concern
   is handled at M3 via binding + the egress drop).
 

@@ -1,0 +1,3 @@
+# Build context excludes (repo root is the context for images/base/Containerfile).
+/target
+.git

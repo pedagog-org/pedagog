@@ -1,5 +1,19 @@
 # syntax=docker/dockerfile:1
 
+# Build the static `pedagog` CLI (musl, statically linked) in a throwaway stage.
+# Build context is the repo root: `podman build -f images/base/Containerfile .`
+FROM docker.io/library/rust:1.88-alpine AS build
+RUN apk add --no-cache musl-dev gcc
+WORKDIR /src
+COPY rust-toolchain.toml Cargo.toml Cargo.lock ./
+COPY crates ./crates
+# Cache the cargo registry and target dir across builds. target/ lives in the
+# cache mount (not the layer), so copy the binary out to a persisted path.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --bin pedagog \
+ && cp target/release/pedagog /usr/local/bin/pedagog
+
 # Base image: runs code-server in the browser as an unprivileged `student` user.
 FROM cgr.dev/chainguard/wolfi-base:latest
 
@@ -9,9 +23,9 @@ ARG TARGETARCH
 
 # A shell for code-server's launcher, TLS roots, the C++ runtime its bundled Node needs,
 # shadow (useradd), curl to install, runit (PID 1 supervisor), nftables (egress
-# firewall), and util-linux for setpriv (drops CAP_NET_ADMIN at boot). (tar comes
-# from the base busybox.)
-RUN apk add --no-cache bash ca-certificates libstdc++ libgcc shadow curl runit nftables util-linux
+# firewall), and setpriv (drops caps at boot; the dedicated package, since busybox's
+# applet lacks --bounding-set). (tar comes from the base busybox.)
+RUN apk add --no-cache bash ca-certificates libstdc++ libgcc shadow curl runit nftables setpriv
 
 # code-server from the upstream standalone release (bundles its own glibc Node).
 RUN curl -fsSL \
@@ -61,7 +75,7 @@ RUN printf '[]' > /var/lib/code-server/extensions/extensions.json \
  && chmod -R a=rX /var/lib/code-server/extensions
 
 # Locked-down default settings (telemetry off, no online lookups, no auto-update).
-COPY --chown=student:student settings.json /var/lib/code-server/data/User/settings.json
+COPY --chown=student:student images/base/settings.json /var/lib/code-server/data/User/settings.json
 
 # Disable the extension marketplace; relocate the last stray cache/data dirs out of the
 # work folder.
@@ -71,9 +85,17 @@ ENV EXTENSIONS_GALLERY={} \
 
 EXPOSE 8080
 
+# The pedagog admin/authoring CLI, baked from the build stage. Instructor/root
+# only (0750 root:instructor) — never executable by student.
+COPY --from=build --chown=root:instructor --chmod=0750 /usr/local/bin/pedagog /usr/bin/pedagog
+
+# Bake a fail-closed default egress ruleset (no manifest yet -> default-deny). The
+# per-assignment build overwrites it via `pedagog image network compile`.
+RUN pedagog image network compile
+
 # Boot model: a tiny PID 1 (/etc/runit/boot) runs one-time setup, then execs
 # runsvdir to supervise the services in /etc/service. code-server drops to the
 # student uid via chpst. Scripts live in rootfs/.
-COPY rootfs/ /
+COPY images/base/rootfs/ /
 
 ENTRYPOINT ["/etc/runit/boot"]

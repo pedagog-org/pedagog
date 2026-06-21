@@ -63,7 +63,18 @@ impl NetworkCommand {
                 Ok(())
             }
             NetworkCommand::Compile { config, out } => {
-                let network = manifest::load(&config)?.network;
+                // A missing manifest compiles to the fail-closed default (this is
+                // how the base image bakes its default-deny ruleset); a malformed
+                // one is an error, so authors see it.
+                let network = if config.exists() {
+                    manifest::load(&config)?.network
+                } else {
+                    eprintln!(
+                        "no manifest at {}; compiling fail-closed default",
+                        config.display()
+                    );
+                    NetworkConfig::Default
+                };
                 std::fs::write(&out, nft::render(&network))
                     .into_diagnostic()
                     .wrap_err_with(|| format!("writing ruleset {}", out.display()))?;
