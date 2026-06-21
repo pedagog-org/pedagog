@@ -49,9 +49,11 @@
   the latter's stage-3 shutdown calls `reboot()` (needs `CAP_NET_ADMIN`'s sibling `CAP_SYS_BOOT`) and
   hangs under rootless podman, whereas `runsvdir` reaps orphans and exits on SIGTERM in ~0.2s.
   (The `pedagog` daemon service is added in M3.)
-- **Network:** the **nftables** egress model (uid-owner): `student` egress per `network.mode`
-  (`none` default / `allowlist` / `open`); `pedagog` uid egress allowed; rules applied under
-  `CAP_NET_ADMIN` in stage 1, which is then dropped. Remove the package manager (`restrict apt`).
+- **Network:** the **nftables** egress model (uid-owner): `student` egress per `[network].mode`
+  (`default` / `block` / `open` / `custom`); `pedagog` uid egress allowed; ruleset baked at build,
+  loaded into the live netns at boot by a privileged step holding `CAP_NET_ADMIN`, which is then
+  dropped (egress-only for v1; see doc 09). **Keep** the package manager (instructor/debug use) but
+  deny it to `student` — raw `apk` not student-executable; `pedagog image pkg` is instructor/root-only.
 - **Multi-arch:** build for **arm64** (Pi targets) as well as the dev arch.
 - **Acceptance:** container boots via runit; code-server still reachable; with `mode = none`, a
   shell as `student` has **no egress** while a process as `pedagog` does; `student` **cannot** alter

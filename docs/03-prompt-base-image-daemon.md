@@ -78,7 +78,7 @@ Design the **in-container contract** — the foundational build target — cover
 - **`reset`:** **hard** reset with a loud warning + `--confirm`; versioned archives later for restore.
 - **CLI command visibility by role:** the CLI detects the caller's role (student vs `instructor`)
   and only exposes permitted subcommands; the daemon still re-authorizes by `SO_PEERCRED`.
-- **Build input:** instructor uploads a **TGZ** unpacked into `/pedagog/instructor/`; the build then
+- **Build input:** instructor uploads a **TGZ** unpacked into `/pedagog/source/`; the build then
   installs toolchains and runs `reset` (as `student`, last step).
 - **Control-endpoint auth:** the endpoint is **nftables-restricted** (ingress to the control port
   allowed only from the control plane, *and* `student`-uid access dropped — same-netns caveat)

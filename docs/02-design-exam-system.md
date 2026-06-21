@@ -184,7 +184,7 @@ Everything lives under **`/pedagog/`**:
 
 | Path | Owner / access | Purpose |
 |---|---|---|
-| `/pedagog/instructor/` | pedagog (student: none) | Instructor config/scripts + seed files copied into the student dir |
+| `/pedagog/source/` | instructor:pedagog (student: none) | Instructor inputs: manifest + seed files copied into the student dir |
 | `/pedagog/student/` | student (named volume) | Student home/working dir. (Archive include/exclude lives in the manifest `[archive]`, not a file.) |
 | `/pedagog/staging/` | pedagog `0700` (student: none, hidden) | Package a submission here, then clean; the source for submitting/archiving to the server |
 
@@ -201,7 +201,7 @@ flowchart TB
     end
     SOCK{{"/run/pedagog.sock (unix)"}}
     subgraph fs["/pedagog"]
-      INST["/pedagog/instructor<br/>config · scripts · seed files (pedagog)"]
+      INST["/pedagog/source<br/>manifest · seed files (instructor)"]
       STU[("/pedagog/student<br/>named volume · student home")]
       STG["/pedagog/staging<br/>package · submit (0700 pedagog, hidden)"]
     end
@@ -222,14 +222,14 @@ flowchart TB
 - **Network:** the container *has* a network; egress for the `student` uid is filtered by
   **nftables `owner`/uid match**. The (build-defined) ruleset is **applied at container start** —
   it must be, because the network namespace only exists at runtime — while holding
-  **`CAP_NET_ADMIN`**, which is then dropped so the student cannot rewrite the firewall. Three
-  instructor-facing modes (easy opt-out):
-  - `network: none` *(default)* — student egress dropped; daemon egress allowed.
-  - `network: allowlist` — student egress allowed only to instructor-listed hosts/CIDRs
-    (e.g. a cybersec target). Names via `/etc/hosts`; port 53 stays closed to recursive resolvers
-    (prevents DNS-tunnel exfiltration).
-  - `network: open` — full opt-out (instructor's choice).
-- **Capabilities:** `--cap-drop=ALL`; no sudo, no setuid escalation; no apt (removed at build).
+  **`CAP_NET_ADMIN`**, which is then dropped so the student cannot rewrite the firewall (egress only;
+  see doc 09). Four instructor-facing modes (targets are IP/CIDR in v1):
+  - `default` *(fail-closed)* — student egress dropped; daemon egress allowed.
+  - `block` — student egress dropped except instructor-listed IPs/CIDRs (`allow`; e.g. a cybersec target).
+  - `open` — student egress allowed except instructor-listed IPs/CIDRs (`block`).
+  - `custom` — ordered allow/block rules (IP/CIDR), first-match, terminal drop.
+- **Capabilities:** `--cap-drop=ALL`; no sudo, no setuid escalation. The package manager stays for
+  instructor/debug use but is denied to `student` (see doc 09).
 - **No student-readable secret** exists anywhere; the **container token** lives only in the daemon
   (and the CP). `session_id` is a non-secret, routable identifier and carries no authority.
 
@@ -566,7 +566,7 @@ Names & Roles, and later grade passback via AGS) with **no changes to the auth f
 |---|---|
 | Student exfiltrates data / reaches LLM | Default `network: none` via nftables uid-owner; no port 53 to recursive resolver |
 | Student tears down firewall | Rules applied under `CAP_NET_ADMIN` at start, then dropped; `cap-drop=ALL` |
-| Student reads/forges submission token | **container token** held only by `pedagog` daemon (and CP); `/pedagog/staging` & `/pedagog/instructor` `0700 pedagog` |
+| Student reads/forges submission token | **container token** held only by `pedagog` daemon (and CP); `/pedagog/staging` `0700 pedagog`, `/pedagog/source` `0750 instructor:pedagog` (student: none) |
 | Submit after deadline / as another student | Server-validated **container token** + per-session deadline; daemon-only egress |
 | Broke working code after submitting | Versioned submissions; grade = last explicit submission |
 | Non-genuine / tampered browser | SEB header validation on entry + code-server route |

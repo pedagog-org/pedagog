@@ -1,0 +1,177 @@
+# 09 — Design (Draft): `pedagog` CLI, `pedagog.toml` Manifest, and Minimal Daemon
+
+> **Date:** 2026-06-21
+> **Status:** **Draft** — agreed direction; redline welcome. Implements
+> [`09-prompt-cli-manifest-daemon.md`](./09-prompt-cli-manifest-daemon.md). Follows
+> [`05-design-code-conventions.md`](./05-design-code-conventions.md); builds on the security model in
+> [`02-design-exam-system.md`](./02-design-exam-system.md) §4.2 and the runit boot model in
+> [`07-design-first-steps.md`](./07-design-first-steps.md).
+
+## 1. Shape
+
+Three trust domains in the container: **student** (untrusted editor), **pedagog** (trusted broker
+daemon), **instructor** (owns the source tree). The `pedagog` binary exposes **admin/authoring verbs
+under `pedagog image …`**, runnable **at build time or by an instructor over SSH** — timing-agnostic
+and **idempotent**; they just have to complete before students log in. `pedagog.toml` is the
+**declarative** source; `pedagog image build` orchestrates the **imperative** primitives from it.
+
+All `pedagog image …` verbs are **instructor/root-only** — never executable by `student`. That is
+what lets us keep the package manager in the image (for debugging) without handing it to students.
+
+## 2. Pipeline & boot
+
+```
+instructor: pedagog.toml + seeds
+        │  pedagog image build  (host or in-container; idempotent)
+        ▼
+per-assignment image:
+  /pedagog/source/*            instructor inputs (manifest + seeds)
+  /pedagog/config/*            resolved state: toolchain defs, build.toml, nftables.conf
+  toolchains + pkgs installed
+  pedagog runit service registered
+  pedagog binaries baked in
+        │  container start
+        ▼
+/etc/runit/boot  (PID 1, root, holding CAP_NET_ADMIN)
+  ├─ /etc/runit/1 → nft -f /pedagog/config/nftables.conf   # load egress rules into the netns
+  ├─ drop CAP_NET_ADMIN                                     # LOCK AT BOOT — firewall immutable for the session
+  └─ exec runsvdir /etc/service
+        ├─ code-server   (chpst -u student)
+        └─ pedagog       (chpst -u pedagog)        # the daemon
+```
+
+The firewall load is a **privileged boot one-shot** (not the daemon, which is unprivileged). Rules
+are **persisted as a file** and loaded each boot — exactly like `/etc/nftables.conf` +
+`nftables.service` on a normal host.
+
+## 3. Filesystem / config trees
+
+| Path | Owner / mode | Contents |
+|---|---|---|
+| `/pedagog/source/` | `instructor:pedagog` `0750` | Instructor inputs: `pedagog.toml` + seed files (student: none) |
+| `/pedagog/config/` | `root:pedagog` `0750` | Pedagog-managed resolved state (student: none) |
+| `/pedagog/config/toolchain/` | `root:pedagog` | Registered toolchain definition TOMLs |
+| `/pedagog/config/build.toml` | `root:pedagog` | The registered build config (`build --info` prints this) |
+| `/pedagog/config/nftables.conf` | `root:pedagog` | Compiled **egress** ruleset, loaded at boot |
+| `/pedagog/student/` | `student:student` `0700` | Student home (named volume at runtime) |
+| `/pedagog/staging/` | `pedagog:pedagog` `0700` | Submission packaging |
+
+## 4. `pedagog.toml` manifest
+
+Declarative source of truth. `[network]` defined now; the rest sketched (refined at their milestones).
+
+```toml
+[network]
+# EGRESS only. Targets are IP addresses or CIDRs (no hostnames in v1).
+mode = "default"            # "default" | "block" | "open" | "custom"
+
+allow = ["10.0.0.0/24", "10.0.0.5"]   # mode = "block": block all student egress EXCEPT these
+block = ["192.168.0.0/16"]            # mode = "open":  allow all student egress EXCEPT these
+rules = [                              # mode = "custom": ordered, first-match; terminal = drop
+  { action = "allow", to = "10.0.0.5" },
+  { action = "block", to = "10.0.0.0/8" },
+]
+
+[toolchains]    # sketch — list of registered toolchains to install
+[packages]      # sketch — pkgs to install (pedagog image pkg)
+[archive]       # sketch — submit/archive include/exclude (M3)
+[quotas]        # sketch — maps to codebox job vars (doc 08)
+```
+
+**Modes** (only the field matching the mode is used):
+- **`default`** — student egress fully blocked (fail-closed; no list). The default.
+- **`block`** — blocked except `allow` (IP/CIDR).
+- **`open`** — allowed except `block` (IP/CIDR).
+- **`custom`** — ordered `rules` (first-match), terminal **drop** (fail-closed).
+
+Missing file / `[network]` / parse error ⇒ **fail closed to `default`**.
+
+## 5. CLI surface — `pedagog image …`
+
+| Verb | Notes |
+|---|---|
+| `build [CONFIG=/pedagog/source/pedagog.toml]` | Declarative; orchestrates the primitives from the manifest. `--info` prints the registered `build.toml`. |
+| `toolchain list [-a/--all \| -i/--installed (default) \| -u/--uninstalled]` | |
+| `toolchain install [TOOLCHAINS…]` / `remove [TOOLCHAINS…]` | `uninstall` = alias of `remove` |
+| `toolchain register [DEFN.toml…]` | Copies def into `/pedagog/config/toolchain/` |
+| `toolchain unregister [PATH\|ID…]` | Removes the registered def file (by path or toolchain id) |
+| `pkg installed` / `install [PKGS…]` / `remove [PKGS…]` | Wraps `apk`; tracks what it installed. (renamed from `apt`) |
+| `daemon init` | Registers the runit service (`/etc/service/pedagog/`). No `start`/`stop` — runit owns lifecycle. |
+| `network status` | Human summary of the **egress** ruleset |
+| `network rules list` | Rules by index |
+| `network rules add (-a/--allow \| -b/--block) [DEST…] [--at=INDEX\|END]` | `END` = just above the terminal default-drop |
+| `network rules remove [INDICES…]` | |
+
+There is **no `apply` verb**: editing verbs rewrite our own structured rules and regenerate
+`/pedagog/config/nftables.conf`; the live load is just `nft -f …` in `/etc/runit/1` at boot.
+
+All verbs **idempotent** (re-running `build` reproduces the same image). **Role-gated to
+instructor/root.** Student-facing verbs (`submit`/`time`/…, doc 02 §10) are a separate surface,
+deferred to M3.
+
+## 6. Firewall — egress only
+
+- nftables `inet` table; `output` hook; **uid-owner** match. Always: accept `oif lo`; accept
+  `meta skuid 1002` (pedagog broker egress). The student (`skuid 1001`) is filtered per mode.
+- **One internal model for all modes:** an ordered list of `{action, cidr}` + a default verdict —
+  `default`→`([], drop)`, `block`→`(allow as accept, drop)`, `open`→`(block as drop, accept)`,
+  `custom`→`(rules, drop)`. **First-match wins.**
+- **The translator is one small one-directional function:** emit `meta skuid 1001 ip daddr <cidr>
+  <accept|drop>` per rule (in order), then the terminal `meta skuid 1001 <default>`. No nft-syntax
+  parsing, no `nftables` crate (JSON-only, for live use). (Named sets are a later optimization for
+  large lists.)
+- Loaded at boot by `nft -f /pedagog/config/nftables.conf` while PID 1 holds `CAP_NET_ADMIN`; the cap
+  is then dropped (locked for the session).
+- The container must run with `--cap-drop=ALL --cap-add=NET_ADMIN` — a flag on the `codebox` job,
+  wired when we touch doc 08.
+- **Ingress is not filtered in v1** (topology governs reachability; the daemon control-port concern
+  is handled at M3 via binding + the egress drop).
+
+## 7. Minimal daemon
+
+- `pedagog-daemon`, runs as **`pedagog` (uid 1002)**, `--cap-drop=ALL`, **no `NET_ADMIN`** (least
+  privilege; it's the network-facing broker, so we shrink the blast radius). It is **not** on the
+  firewall path.
+- Registered as a runit service by `pedagog image daemon init` → `/etc/service/pedagog/run` execs
+  `chpst -u pedagog pedagog-daemon …`.
+- Unix socket `/run/pedagog.sock`, `0660 root:pedagogc` (clients are `pedagogc` members:
+  student/instructor); authorizes peers via **`SO_PEERCRED`** (map peer uid → role).
+- **Container token** injected at runtime (tmpfs, e.g. `/run/pedagog/token` `0640 root:pedagog`);
+  stubbed for now, real source = orchestrator at session create.
+- **v1 minimal scope:** start, open the socket, answer a basic status/ping.
+- **Deferred (M3):** liveness heartbeat to the CP, the CP-only token-authenticated control endpoint
+  (`EndSession`/`UpdateDeadline`), submit/archive brokering.
+
+## 8. Rust workspace
+
+- `pedagog-core` — pure domain: `Manifest`; `NetworkMode` enum (`Default` | `Block{allow}` |
+  `Open{block}` | `Custom{rules}`) over `IpNet`; `Rule{action, to}`, `Role`; validation; **no I/O**
+  (`thiserror`).
+- `pedagog-cli` — the `pedagog` binary (`clap`); `image` verbs; `anyhow` at the boundary.
+- `pedagog-daemon` — the daemon (`tokio`); socket server.
+- `pedagog-proto` — socket/control message types (added with the daemon's real functions).
+- Built as **static musl** binaries so they run on the Wolfi base; baked in root-owned, image verbs
+  not student-executable.
+
+## 9. Sequencing (increments)
+
+- **A (finishes M2):** workspace skeleton + `pedagog-core` `[network]` types + `pedagog image
+  network` (rules → compile → `apply`), wired into `/etc/runit/1` + cap drop; lock raw `apk` away
+  from `student`. Gated behind a **rootless-`nft` spike** (confirm uid-owner egress loads in our
+  codebox).
+- **B:** `pedagog image build` orchestration + `toolchain` + `pkg`.
+- **C:** minimal daemon + `daemon init` + socket (`SO_PEERCRED`).
+- **M3:** daemon heartbeat/control/submit vs a CP stub; student CLI verbs.
+
+## 10. Risks
+
+- **Rootless in-container nftables** (netns/module quirks under pasta) — spike before building `apply`.
+- **Static musl Rust on Wolfi** — verify the binary runs under `--cap-drop=ALL` + `NET_ADMIN`.
+- **`SO_PEERCRED`** uid→role mapping correctness.
+
+## 11. Open / to refine
+
+- **toolchain definition schema** — may install pkgs and/or run commands (user to define).
+- **Where `build` runs** — host-side wrapper vs inside a build container — pairs with CP/registry
+  (doc 02 §5.4).
+- **Container-token injection** mechanism (orchestrator → tmpfs) — M3.
