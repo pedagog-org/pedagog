@@ -1,0 +1,18 @@
+# Example pedagog assignment manifest. Run against it with:
+#   cargo run -p pedagog-cli -- image network status --config examples/pedagog.toml
+#   cargo run -p pedagog-cli -- image network status --config examples/pedagog.toml --nft
+
+version = "0.1.0"
+
+# Student egress policy. Try swapping `mode` to exercise each branch:
+#   default  -> all student egress dropped (no list)
+#   block    -> dropped except `allow`
+#   open     -> allowed except `block`
+#   custom   -> ordered, first-match `rules`; unmatched is dropped
+[network]
+mode = "custom"
+rules = [
+  { action = "allow", to = "10.0.0.5/32" },     # the grading host
+  { action = "block", to = "10.0.0.0/8" },       # ...but nothing else on its subnet
+  { action = "allow", to = "2001:db8::/32" },    # an IPv6 allowance
+]

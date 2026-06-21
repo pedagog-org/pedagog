@@ -10,6 +10,10 @@ name = "pedagog"
 path = "src/main.rs"
 
 [dependencies]
+pedagog-core = { workspace = true }
+clap = { workspace = true }
+miette = { workspace = true }
+tabled = { workspace = true }
 
 [lints]
 workspace = true

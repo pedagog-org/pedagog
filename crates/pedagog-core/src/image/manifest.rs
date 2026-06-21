@@ -96,6 +96,23 @@ mod v0 {
         Allow,
         Block,
     }
+
+    impl NetworkConfig {
+        /// Lower any mode to an ordered, first-match rule list plus the action
+        /// for traffic that matches none of them. This is the one canonical
+        /// reading of a policy, shared by the nft renderer and the CLI summary.
+        pub fn lower(&self) -> (Vec<Rule>, Action) {
+            let from = |action, nets: &[IpNet]| {
+                nets.iter().map(|&target| Rule { action, target }).collect()
+            };
+            match self {
+                NetworkConfig::Default => (Vec::new(), Action::Block),
+                NetworkConfig::Block { allow } => (from(Action::Allow, allow), Action::Block),
+                NetworkConfig::Open { block } => (from(Action::Block, block), Action::Allow),
+                NetworkConfig::Custom { rules } => (rules.clone(), Action::Block),
+            }
+        }
+    }
 }
 
 #[cfg(test)]

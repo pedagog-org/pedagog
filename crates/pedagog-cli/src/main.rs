@@ -1,3 +1,11 @@
-//! pedagog — the in-image admin/authoring CLI (`pedagog image …`). Scaffold.
+//! pedagog — the in-image admin/authoring CLI (`pedagog image …`).
 
-fn main() {}
+mod cli;
+mod image;
+mod manifest;
+
+use clap::Parser;
+
+fn main() -> miette::Result<()> {
+    cli::Cli::parse().run()
+}

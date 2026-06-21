@@ -58,9 +58,16 @@ are **persisted as a file** and loaded each boot — exactly like `/etc/nftables
 
 ## 4. `pedagog.toml` manifest
 
-Declarative source of truth. `[network]` defined now; the rest sketched (refined at their milestones).
+Declarative source of truth. **Versioned**: a top-level `version` is a full semver string, validated
+against the caret requirement `^0.1` (`>= 0.1.0, < 0.2.0`) — minor/patch are backward-compatible
+within the line; a breaking change bumps the minor and adds a new schema module. Forward-migration of
+older schemas is handled by `magic_migrate` in `pedagog-core` (each version's types grouped in its own
+`vN` module; the latest re-exported). `version` and `network` are defined now; the rest is sketched
+(refined at their milestones).
 
 ```toml
+version = "0.1.0"
+
 [network]
 # EGRESS only. Targets are IP addresses or CIDRs (no hostnames in v1).
 mode = "default"            # "default" | "block" | "open" | "custom"
@@ -144,10 +151,11 @@ deferred to M3.
 
 ## 8. Rust workspace
 
-- `pedagog-core` — pure domain: `Manifest`; `NetworkMode` enum (`Default` | `Block{allow}` |
-  `Open{block}` | `Custom{rules}`) over `IpNet`; `Rule{action, to}`, `Role`; validation; **no I/O**
-  (`thiserror`).
-- `pedagog-cli` — the `pedagog` binary (`clap`); `image` verbs; `anyhow` at the boundary.
+- `pedagog-core` — pure domain: versioned `Manifest` (`magic_migrate` + `semver`); `NetworkConfig`
+  enum (`Default` | `Block{allow}` | `Open{block}` | `Custom{rules}`) over `IpNet`; `Rule{action,
+  to}`, `Role`; the nft renderer; validation; **no I/O** (`thiserror`).
+- `pedagog-cli` — the `pedagog` binary (`clap`); `image` verbs; `miette` for diagnostics at the
+  boundary.
 - `pedagog-daemon` — the daemon (`tokio`); socket server.
 - `pedagog-proto` — socket/control message types (added with the daemon's real functions).
 - Built as **static musl** binaries so they run on the Wolfi base; baked in root-owned, image verbs
@@ -155,17 +163,18 @@ deferred to M3.
 
 ## 9. Sequencing (increments)
 
-- **A (finishes M2):** workspace skeleton + `pedagog-core` `[network]` types + `pedagog image
-  network` (rules → compile → `apply`), wired into `/etc/runit/1` + cap drop; lock raw `apk` away
-  from `student`. Gated behind a **rootless-`nft` spike** (confirm uid-owner egress loads in our
-  codebox).
+- **A (finishes M2):** workspace skeleton + `pedagog-core` versioned manifest + `[network]` types +
+  nft renderer (**done**) + `pedagog image network` (manifest → render → write
+  `/pedagog/config/nftables.conf`), wired into `/etc/runit/1` + cap drop; lock raw `apk` away from
+  `student`. Rootless-`nft` uid-owner egress spike **confirmed PASS**.
 - **B:** `pedagog image build` orchestration + `toolchain` + `pkg`.
 - **C:** minimal daemon + `daemon init` + socket (`SO_PEERCRED`).
 - **M3:** daemon heartbeat/control/submit vs a CP stub; student CLI verbs.
 
 ## 10. Risks
 
-- **Rootless in-container nftables** (netns/module quirks under pasta) — spike before building `apply`.
+- ~~**Rootless in-container nftables** (netns/module quirks under pasta)~~ — spike done, uid-owner
+  egress loads in the codebox.
 - **Static musl Rust on Wolfi** — verify the binary runs under `--cap-drop=ALL` + `NET_ADMIN`.
 - **`SO_PEERCRED`** uid→role mapping correctness.
 

@@ -1,7 +1,7 @@
 //! Render a student egress policy to an nftables ruleset script.
 
 use super::ids::{PEDAGOG_UID, STUDENT_UID};
-use super::manifest::{Action, NetworkConfig, Rule};
+use super::manifest::{Action, NetworkConfig};
 use ipnet::IpNet;
 
 /// Render the nftables script that enforces `config` for the student uid.
@@ -9,7 +9,7 @@ use ipnet::IpNet;
 /// Loopback and the pedagog broker always keep egress; only the student uid is
 /// constrained. The script is loaded at boot with `nft -f`.
 pub fn render(config: &NetworkConfig) -> String {
-    let (rules, terminal) = lower(config);
+    let (rules, terminal) = config.lower();
 
     let mut lines = vec![
         "table inet pedagog {".to_owned(),
@@ -24,7 +24,7 @@ pub fn render(config: &NetworkConfig) -> String {
             "\t\tmeta skuid {STUDENT_UID} {} daddr {} {}",
             family(rule.target),
             rule.target,
-            verdict(action_verdict(rule.action)),
+            verdict(rule.action),
         ));
     }
     lines.push(format!(
@@ -37,41 +37,6 @@ pub fn render(config: &NetworkConfig) -> String {
     lines.join("\n") + "\n"
 }
 
-/// The verdict for student traffic that matches no rule.
-#[derive(Clone, Copy)]
-enum Verdict {
-    Accept,
-    Drop,
-}
-
-/// Lower a mode to the unified form: ordered student rules + a terminal verdict.
-fn lower(config: &NetworkConfig) -> (Vec<Rule>, Verdict) {
-    match config {
-        NetworkConfig::Default => (Vec::new(), Verdict::Drop),
-        NetworkConfig::Block { allow } => (
-            allow
-                .iter()
-                .map(|&target| Rule {
-                    action: Action::Allow,
-                    target,
-                })
-                .collect(),
-            Verdict::Drop,
-        ),
-        NetworkConfig::Open { block } => (
-            block
-                .iter()
-                .map(|&target| Rule {
-                    action: Action::Block,
-                    target,
-                })
-                .collect(),
-            Verdict::Accept,
-        ),
-        NetworkConfig::Custom { rules } => (rules.clone(), Verdict::Drop),
-    }
-}
-
 /// nft address-family keyword for a destination match.
 fn family(net: IpNet) -> &'static str {
     match net {
@@ -80,24 +45,17 @@ fn family(net: IpNet) -> &'static str {
     }
 }
 
-/// nft verdict keyword.
-fn verdict(v: Verdict) -> &'static str {
-    match v {
-        Verdict::Accept => "accept",
-        Verdict::Drop => "drop",
-    }
-}
-
-/// A rule action as the verdict it applies.
-fn action_verdict(a: Action) -> Verdict {
-    match a {
-        Action::Allow => Verdict::Accept,
-        Action::Block => Verdict::Drop,
+/// nft verdict keyword for an action.
+fn verdict(action: Action) -> &'static str {
+    match action {
+        Action::Allow => "accept",
+        Action::Block => "drop",
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::manifest::Rule;
     use super::*;
 
     fn net(s: &str) -> IpNet {
