@@ -89,6 +89,20 @@ timing-agnostic, must just happen before students log in; operations idempotent)
   two uids via group `pedagogc` (setgid dirs, `0660`/`2770`); the extensions dir stays root-owned
   read-only.
 
+### Follow-ups (2026-06-22) — `network` editing surface
+
+- **No `rules add/remove`.** The instructor edits `pedagog.toml` directly in the editor; the CLI just
+  provides what hand-editing can't do.
+- **`network convert`** — rewrite the manifest's `[network]` into an equivalent `custom` rule list
+  (`toml_edit`, preserve the rest of the file, validate by re-parsing into the typed `Manifest`), so
+  the instructor can then hand-edit ordered rules. `open` mode converts by appending catch-all
+  allow-all rules (its terminal accept).
+- **`network load [--compile-only]`** — default renders the manifest and applies it **live**
+  (`nft -f -`, no file write; needs `net_admin`, so instructor sessions only; does not touch the baked
+  boot policy). `--compile-only` instead **writes** `nftables.conf` (build-time path; replaces the old
+  standalone `compile` verb — Containerfile `RUN` updates to `network load --compile-only`).
+- Keep **`network status`**. Drop the `rules` subcommand group entirely.
+
 ## Still open / to refine
 
 - **toolchain definition schema** — may install pkgs and/or run commands (user to define).

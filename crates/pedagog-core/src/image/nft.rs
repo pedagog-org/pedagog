@@ -12,6 +12,12 @@ pub fn render(config: &NetworkConfig) -> String {
     let (rules, terminal) = config.lower();
 
     let mut lines = vec![
+        // Replace, don't append: ensure the table exists, delete it, then recreate
+        // it. `nft -f` applies the whole script as one atomic transaction, so a
+        // live reload swaps the policy cleanly instead of stacking onto the old
+        // chain (at boot the table doesn't exist yet, where this is a harmless no-op).
+        "table inet pedagog".to_owned(),
+        "delete table inet pedagog".to_owned(),
         "table inet pedagog {".to_owned(),
         "\tchain output {".to_owned(),
         "\t\ttype filter hook output priority 0; policy accept;".to_owned(),
@@ -115,6 +121,16 @@ mod tests {
             .rfind(&format!("meta skuid {STUDENT_UID} drop"))
             .unwrap();
         assert!(a < b && b < term);
+    }
+
+    #[test]
+    fn replaces_table_so_reload_does_not_append() {
+        let out = render(&NetworkConfig::Default);
+        // The delete must precede the (re)definition so a live reload swaps the
+        // policy atomically instead of stacking onto the existing chain.
+        let del = out.find("delete table inet pedagog").unwrap();
+        let def = out.find("table inet pedagog {").unwrap();
+        assert!(del < def, "delete must precede the table definition");
     }
 
     #[test]

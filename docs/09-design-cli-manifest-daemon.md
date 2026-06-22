@@ -108,12 +108,37 @@ Missing file / `[network]` / parse error ⇒ **fail closed to `default`**.
 | `pkg installed` / `install [PKGS…]` / `remove [PKGS…]` | Wraps `apk`; tracks what it installed. (renamed from `apt`) |
 | `daemon init` | Registers the runit service (`/etc/service/pedagog/`). No `start`/`stop` — runit owns lifecycle. |
 | `network status` | Human summary of the **egress** ruleset |
-| `network rules list` | Rules by index |
-| `network rules add (-a/--allow \| -b/--block) [DEST…] [--at=INDEX\|END]` | `END` = just above the terminal default-drop |
-| `network rules remove [INDICES…]` | |
+| `network convert [--config C]` | Rewrite the manifest's `[network]` into an equivalent `custom` rule list |
+| `network load [--config C] [--out O] [--compile-only]` | Render the manifest and **apply it live** (`nft -f -`); `--compile-only` instead **writes** `nftables.conf` |
 
-There is **no `apply` verb**: editing verbs rewrite our own structured rules and regenerate
-`/pedagog/config/nftables.conf`; the live load is just `nft -f …` in `/etc/runit/1` at boot.
+There are **no `rules add/remove` verbs**: the instructor edits `pedagog.toml` directly in the editor
+(using `convert` first if they need an ordered list), then `load`s it. The live apply is `nft -f -`;
+the boot load is `nft -f /pedagog/config/nftables.conf` in `/etc/runit/1`.
+
+### 5.1 `convert` — manifest → custom
+
+- Rewrites only the `[network]` table of `pedagog.toml` via **`toml_edit`** (other tables, comments,
+  and ordering preserved), setting `mode = "custom"` with the `lower()`'d rules. The result is
+  **re-parsed into the typed `Manifest` to validate before the file is written** (atomic temp+rename),
+  so we never persist a manifest that won't load. The manifest (`/pedagog/source/pedagog.toml`) is
+  instructor-owned, so this works at build time *and* in an instructor session.
+- Semantics are preserved: `default`→empty rules; `block`→its `allow` list as `accept` rules;
+  `custom`→no-op. **`open`** is the one verbose case — its terminal *accept* is expressed in a
+  terminal-drop `custom` list by appending catch-all `{ allow, 0.0.0.0/0 }` + `{ allow, ::/0 }` rules
+  (noted in output).
+
+### 5.2 `load` — make the manifest effective
+
+- **Default (live apply):** render the manifest and pipe it to the kernel (`render | nft -f -`). **No
+  file is written.** Needs `CAP_NET_ADMIN` — available in an **instructor** session (the editor's
+  ambient cap, inherited by the terminal; the `pedagog` binary is `0750 root:instructor`), not in a
+  locked student session. Deliberately does **not** touch the baked boot policy, so live
+  experimentation stays ephemeral and never silently rewrites the exam's compiled ruleset.
+- **`--compile-only` (write the file):** render the manifest and write `--out`
+  (default `/pedagog/config/nftables.conf`); **no live apply**. This is the **build-time** path
+  (`/pedagog/config` is `root:pedagog`, written as root during build) and what boot later loads.
+  Replaces the earlier standalone `compile` verb. A missing manifest compiles to the fail-closed
+  `default`; a malformed one is an error.
 
 All verbs **idempotent** (re-running `build` reproduces the same image). **Role-gated to
 instructor/root.** Student-facing verbs (`submit`/`time`/…, doc 02 §10) are a separate surface,

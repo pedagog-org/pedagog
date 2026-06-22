@@ -96,8 +96,8 @@ EXPOSE 8080
 COPY --from=build --chown=root:instructor --chmod=0750 /usr/local/bin/pedagog /usr/bin/pedagog
 
 # Bake a fail-closed default egress ruleset (no manifest yet -> default-deny). The
-# per-assignment build overwrites it via `pedagog image network compile`.
-RUN pedagog image network compile
+# per-assignment build overwrites it via `pedagog image network load --compile-only`.
+RUN pedagog image network load --compile-only
 
 # Session identity (fail-safe default: student). "instructor" runs the editor as
 # the instructor uid and leaves nft editable in-container; set only for non-exam
