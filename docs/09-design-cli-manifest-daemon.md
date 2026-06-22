@@ -34,10 +34,14 @@ per-assignment image:
         ▼
 /etc/runit/boot  (PID 1, root, caps: NET_ADMIN SETPCAP SETUID SETGID)
   ├─ /etc/runit/1 → nft -f /pedagog/config/nftables.conf            # load egress rules into the netns
-  └─ exec setpriv --bounding-set=-net_admin,-setpcap runsvdir …     # LOCK AT BOOT — nft immutable for the session
-        ├─ code-server   (chpst -u student)
+  └─ exec setpriv --bounding-set=-net_admin,-setpcap runsvdir …     # student session: LOCK AT BOOT — nft immutable
+        │                                                            # instructor session: skip lock (exec runsvdir directly)
+        ├─ code-server   (student: chpst -u student;  instructor: setpriv → uid 1003 + ambient net_admin)
         └─ pedagog       (chpst -u pedagog)        # the daemon
 ```
+
+The per-session **`PEDAGOG_USER_TYPE`** (`student` default | `instructor`) selects the editor identity
+and whether the firewall is locked — see §6.
 
 The firewall load is a **privileged boot one-shot** (not the daemon, which is unprivileged). Rules
 are **persisted as a file** and loaded each boot — exactly like `/etc/nftables.conf` +
@@ -52,7 +56,7 @@ are **persisted as a file** and loaded each boot — exactly like `/etc/nftables
 | `/pedagog/config/toolchain/` | `root:pedagog` | Registered toolchain definition TOMLs |
 | `/pedagog/config/build.toml` | `root:pedagog` | The registered build config (`build --info` prints this) |
 | `/pedagog/config/nftables.conf` | `root:pedagog` | Compiled **egress** ruleset, loaded at boot |
-| `/pedagog/student/` | `student:student` `0700` | Student home (named volume at runtime) |
+| `/pedagog/student/` | `student:pedagogc` `2770` | Student home (named volume at runtime); group-shared so an instructor session (uid 1003) can open it |
 | `/pedagog/staging/` | `pedagog:pedagog` `0700` | Submission packaging |
 
 ## 4. `pedagog.toml` manifest
@@ -127,11 +131,19 @@ deferred to M3.
   parsing, no `nftables` crate (JSON-only, for live use). (Named sets are a later optimization for
   large lists.)
 - Loaded at boot by `nft -f /pedagog/config/nftables.conf` in `/etc/runit/1` while PID 1 holds
-  `CAP_NET_ADMIN`; PID 1 then execs `runsvdir` via `setpriv --bounding-set=-net_admin,-setpcap`. Once
-  `net_admin` leaves the bounding set, every later `execve` re-derives its capabilities from that set,
-  so **no process — not even a root one — can alter nft for the session** (a complete lock, not just
-  blocking re-grant). `setpcap` is dropped too so the bounding set can't be widened again; `setuid`
-  and `setgid` stay so `chpst` can drop services to their uids.
+  `CAP_NET_ADMIN`. What happens next depends on **`PEDAGOG_USER_TYPE`**:
+  - **`student` (default):** PID 1 execs `runsvdir` via `setpriv --bounding-set=-net_admin,-setpcap`.
+    Once `net_admin` leaves the bounding set, every later `execve` re-derives its capabilities from
+    that set, so **no process — not even a root one — can alter nft for the session** (a complete
+    lock, not just blocking re-grant). `setpcap` is dropped too so the bounding set can't be widened
+    again; `setuid`/`setgid` stay so `chpst` can drop services to their uids.
+  - **`instructor`:** PID 1 execs `runsvdir` **without** dropping from the bounding set, and the
+    editor service launches code-server as uid 1003 with `net_admin` as an **ambient** capability
+    (`setpriv --reuid 1003 --regid 1003 --init-groups --inh-caps=+net_admin --ambient-caps=+net_admin`).
+    The ambient cap survives the uid drop and is inherited by the editor's child processes, so the
+    instructor can edit the live firewall from a terminal (spiked, PASS). Use only for non-exam
+    authoring/test sessions. The instructor opens `/pedagog/student` (group-shared via `pedagogc`) to
+    see exactly the student environment.
 - The base image bakes a **fail-closed default** `nftables.conf` (all student egress dropped), so the
   bare base always boots safely; `pedagog image network compile` overwrites it per assignment. A
   missing manifest compiles to `default`; a malformed one is a build error (so authors see it).

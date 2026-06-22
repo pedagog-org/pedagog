@@ -25,11 +25,17 @@ variable "memory" {
   default = 1024
 }
 
-# Lock the egress firewall at boot (immutable for the session). Set false only
-# for non-exam test/instructor sessions, which leave nft editable in-container.
-variable "lock_firewall" {
-  type    = bool
-  default = true
+# Session identity: "student" (default; editor runs as student, egress firewall
+# locked at boot) or "instructor" (editor runs as instructor, firewall editable
+# in-container). Use "instructor" only for non-exam authoring/test sessions.
+variable "user_type" {
+  type    = string
+  default = "student"
+
+  validation {
+    condition     = contains(["student", "instructor"], var.user_type)
+    error_message = "user_type must be \"student\" or \"instructor\"."
+  }
 }
 
 job "codebox" {
@@ -82,17 +88,19 @@ job "codebox" {
         ports    = ["http"]
         hostname = "pedagog"
 
-        # Boot loads + locks the egress firewall: net_admin to load nft, setpcap
-        # to drop it (and itself) from the bounding set, setuid/setgid for chpst.
-        # Without these, `nft -f` fails and boot aborts. See rootfs/etc/runit/boot.
+        # Boot loads the egress firewall and (for a student session) locks it:
+        # net_admin to load nft, setpcap to drop it (and itself) from the bounding
+        # set, setuid/setgid for chpst. An instructor session keeps net_admin (as
+        # an ambient cap on the editor) instead of dropping it. Without these,
+        # `nft -f` fails and boot aborts. See rootfs/etc/runit/boot.
         cap_drop = ["all"]
         cap_add  = ["net_admin", "setpcap", "setuid", "setgid"]
       }
 
-      # Locked by default; `-var lock_firewall=false` leaves egress editable
-      # in-container for test/instructor sessions.
+      # "student" (default) locks the firewall and runs the editor as student;
+      # "instructor" leaves egress editable and runs the editor as instructor.
       env {
-        PEDAGOG_FIREWALL_LOCK = var.lock_firewall ? "1" : "0"
+        PEDAGOG_USER_TYPE = var.user_type
       }
 
       resources {

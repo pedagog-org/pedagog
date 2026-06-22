@@ -48,25 +48,31 @@ RUN groupadd --gid 1001 student \
  && useradd --uid 1003 --gid instructor --groups pedagogc --shell /sbin/nologin  --home-dir /pedagog/source  --no-create-home instructor
 
 # Work tree under /pedagog. student/ is the student home (a named volume at
-# runtime; build just sets the mountpoint owner). source/ (instructor inputs:
-# manifest + seed files) is instructor-owned, group pedagog so the daemon can
-# read seeds; staging/ (submission packaging) is pedagog-only; config/ holds
-# resolved state (e.g. nftables.conf), root-owned, group pedagog. All hidden
-# from student.
+# runtime; build just sets the mountpoint owner). It is group pedagogc with the
+# setgid bit so an instructor session (uid 1003, in pedagogc) can open the same
+# folder and see the real student environment; in a student exam only the student
+# uid runs there. source/ (instructor inputs: manifest + seed files) is
+# instructor-owned, group pedagog so the daemon can read seeds; staging/
+# (submission packaging) is pedagog-only; config/ holds resolved state (e.g.
+# nftables.conf), root-owned, group pedagog. All hidden from student.
 RUN mkdir -p /pedagog/student /pedagog/source /pedagog/staging /pedagog/config \
  && chmod 0755 /pedagog \
- && chown student:student     /pedagog/student && chmod 0700 /pedagog/student \
+ && chown student:pedagogc    /pedagog/student && chmod 2770 /pedagog/student \
  && chown instructor:pedagog  /pedagog/source  && chmod 0750 /pedagog/source \
  && chown pedagog:pedagog     /pedagog/staging && chmod 0700 /pedagog/staging \
  && chown root:pedagog        /pedagog/config  && chmod 0750 /pedagog/config
 
 # Keep code-server's runtime state out of the student's work folder so the workspace
-# stays clean and is never captured by archives/submissions.
+# stays clean and is never captured by archives/submissions. Shared (group pedagogc,
+# setgid dirs) between the student and instructor uids so either can run the editor
+# per PEDAGOG_USER_TYPE; new files in a session inherit the group.
 RUN mkdir -p /var/lib/code-server/data/User \
              /var/lib/code-server/extensions \
              /var/lib/code-server/cache \
              /var/lib/code-server/share \
- && chown -R student:student /var/lib/code-server
+ && chown -R root:pedagogc /var/lib/code-server \
+ && find /var/lib/code-server -type d -exec chmod 2770 {} + \
+ && find /var/lib/code-server -type f -exec chmod 0660 {} +
 
 # Lock the extensions dir read-only so students cannot add/remove extensions; pre-seed
 # the empty manifest code-server expects.
@@ -75,7 +81,7 @@ RUN printf '[]' > /var/lib/code-server/extensions/extensions.json \
  && chmod -R a=rX /var/lib/code-server/extensions
 
 # Locked-down default settings (telemetry off, no online lookups, no auto-update).
-COPY --chown=student:student images/base/settings.json /var/lib/code-server/data/User/settings.json
+COPY --chown=root:pedagogc --chmod=0660 images/base/settings.json /var/lib/code-server/data/User/settings.json
 
 # Disable the extension marketplace; relocate the last stray cache/data dirs out of the
 # work folder.
@@ -93,9 +99,10 @@ COPY --from=build --chown=root:instructor --chmod=0750 /usr/local/bin/pedagog /u
 # per-assignment build overwrites it via `pedagog image network compile`.
 RUN pedagog image network compile
 
-# Egress firewall is locked at boot by default. Set to 0 only for non-exam
-# (test/instructor) sessions, which leave nft editable in-container.
-ENV PEDAGOG_FIREWALL_LOCK=1
+# Session identity (fail-safe default: student). "instructor" runs the editor as
+# the instructor uid and leaves nft editable in-container; set only for non-exam
+# (authoring/test) sessions. See rootfs/etc/runit/boot and the code-server run.
+ENV PEDAGOG_USER_TYPE=student
 
 # Boot model: a tiny PID 1 (/etc/runit/boot) runs one-time setup, then execs
 # runsvdir to supervise the services in /etc/service. code-server drops to the

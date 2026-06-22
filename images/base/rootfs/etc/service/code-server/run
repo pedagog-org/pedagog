@@ -1,10 +1,22 @@
 #!/bin/sh
-# Supervised editor, dropped to the unprivileged student uid (with its
-# supplementary groups). Auth/SEB validation happen at the proxy, not here;
-# the lockdown flags disable telemetry, updates, up/downloads, the port proxy,
-# and trust/getting-started prompts. The trailing path opens the work folder.
+# Supervised editor. PEDAGOG_USER_TYPE picks the session identity, but both open
+# /pedagog/student so an instructor sees exactly the student's environment:
+#   student (default) -> uid 1001, no net_admin
+#   instructor        -> uid 1003, ambient net_admin so the editor and its
+#                        terminals can edit the live firewall.
+# Auth/SEB validation happen at the proxy, not here; the lockdown flags disable
+# telemetry, updates, up/downloads, the port proxy, and trust/getting-started
+# prompts. The trailing path opens the work folder.
 export HOME=/pedagog/student
-exec chpst -u student code-server \
+if [ "${PEDAGOG_USER_TYPE:-student}" = instructor ]; then
+  set -- setpriv --reuid 1003 --regid 1003 --init-groups \
+    --inh-caps=+net_admin --ambient-caps=+net_admin code-server
+else
+  # Name the pedagogc group explicitly: chpst -u sets only the primary gid, but
+  # the editor state dirs are group-shared via pedagogc (see Containerfile).
+  set -- chpst -u student:student:pedagogc code-server
+fi
+exec "$@" \
   --bind-addr 0.0.0.0:8080 \
   --auth none \
   --app-name pedagog \

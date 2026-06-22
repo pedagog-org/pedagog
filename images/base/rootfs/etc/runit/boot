@@ -6,13 +6,14 @@
 # so hangs under rootless podman.
 set -e
 /etc/runit/1
-# Unlocked (test/instructor) session: leave net_admin in the bounding set so a
-# root process can edit egress live. NEVER use this for a student exam.
-if [ "${PEDAGOG_FIREWALL_LOCK:-1}" = "0" ]; then
-  echo "pedagog: FIREWALL UNLOCKED (test session) -- egress is editable in-container" >&2
+# Instructor session: leave net_admin in the bounding set so the instructor's
+# code-server (which gets it as an ambient cap) can edit egress live. NEVER for
+# a student exam.
+if [ "${PEDAGOG_USER_TYPE:-student}" = instructor ]; then
+  echo "pedagog: INSTRUCTOR session -- egress firewall is editable in-container" >&2
   exec runsvdir -P /etc/service
 fi
-# Lock the firewall (default): drop net_admin (and setpcap, so the bounding set
+# Student session (default): lock the firewall -- drop net_admin (and setpcap, so the bounding set
 # can't be widened again) from the bounding set. Every later exec re-derives caps
 # from the bounding set, so afterwards no process -- not even a root one -- can
 # alter nft. setuid/setgid stay so chpst can drop services to their uids. Requires

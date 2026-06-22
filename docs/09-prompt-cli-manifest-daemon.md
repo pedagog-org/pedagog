@@ -69,6 +69,26 @@ timing-agnostic, must just happen before students log in; operations idempotent)
 - **Sequencing = Plan A** — bootstrap the Rust workspace now; build it as static musl binaries baked
   into the image.
 
+### Follow-ups (2026-06-22) — session user type
+
+- **Per-session "user type" job param** — `student` (default) or `instructor`. It is the single knob
+  that selects the session identity; it replaces the earlier standalone firewall-lock parameter.
+- **Instructor sessions** must be able to **edit the egress firewall**, and **code-server runs as the
+  instructor** (uid 1003). The instructor still opens **`/pedagog/student`** (not their own tree) so
+  they experience exactly what students experience. Mechanism (spiked, PASS): the editor is launched
+  with `net_admin` as an **ambient** capability (`setpriv --reuid 1003 --regid 1003 --init-groups
+  --inh-caps=+net_admin --ambient-caps=+net_admin`), so the editor *and its terminals* can run `nft`;
+  boot does **not** drop `net_admin` from the bounding set for an instructor session.
+- **Student sessions** are unchanged: editor runs as `student` (uid 1001) opening `/pedagog/student`,
+  and boot locks the firewall (drops `net_admin`/`setpcap` from the bounding set).
+- **`/pedagog/student`** is therefore group `pedagogc` with the setgid bit (`student:pedagogc 2770`)
+  so the instructor uid (also in `pedagogc`) can open it; in a student exam only the student uid runs
+  there, so isolation is unchanged in practice (no instructor-uid process exists in that session, and
+  `pedagog` is not in `pedagogc`).
+- **Editor runtime state** (`/var/lib/code-server/{data,cache,share}`) is likewise shared between the
+  two uids via group `pedagogc` (setgid dirs, `0660`/`2770`); the extensions dir stays root-owned
+  read-only.
+
 ## Still open / to refine
 
 - **toolchain definition schema** — may install pkgs and/or run commands (user to define).
