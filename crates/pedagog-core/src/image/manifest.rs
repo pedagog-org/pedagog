@@ -31,7 +31,7 @@ pub enum ManifestError {
 
 /// Schema version 0.
 mod v0 {
-    use ipnet::IpNet;
+    use ipnet::{IpNet, Ipv4Net, Ipv6Net};
     use magic_migrate::TryMigrate;
     use semver::{Version, VersionReq};
     use serde::{Deserialize, Deserializer};
@@ -111,6 +111,27 @@ mod v0 {
                 NetworkConfig::Open { block } => (from(Action::Block, block), Action::Allow),
                 NetworkConfig::Custom { rules } => (rules.clone(), Action::Block),
             }
+        }
+
+        /// Express the policy as an ordered `custom` rule list: the rules that,
+        /// followed by the implicit terminal drop, reproduce this policy exactly.
+        /// Used by `network convert` to expand a sugar mode into editable rules.
+        ///
+        /// `open`'s terminal *accept* has no terminal-drop equivalent, so it is
+        /// encoded by appending catch-all allow-all rules for both families.
+        pub fn to_custom_rules(&self) -> Vec<Rule> {
+            let (mut rules, terminal) = self.lower();
+            if terminal == Action::Allow {
+                rules.push(Rule {
+                    action: Action::Allow,
+                    target: IpNet::V4(Ipv4Net::default()),
+                });
+                rules.push(Rule {
+                    action: Action::Allow,
+                    target: IpNet::V6(Ipv6Net::default()),
+                });
+            }
+            rules
         }
     }
 }
@@ -192,6 +213,53 @@ mod tests {
         let err = parse("version = \"0.1.0\"\nbogus = true\n[network]\nmode = \"default\"\n")
             .unwrap_err();
         assert!(matches!(err, ManifestError::Parse(_)));
+    }
+
+    #[test]
+    fn to_custom_rules_maps_block_allows() {
+        let rules = NetworkConfig::Block {
+            allow: vec![net("10.0.0.5/32")],
+        }
+        .to_custom_rules();
+        assert_eq!(
+            rules,
+            vec![Rule {
+                action: Action::Allow,
+                target: net("10.0.0.5/32")
+            }]
+        );
+    }
+
+    #[test]
+    fn to_custom_rules_default_is_empty() {
+        assert!(NetworkConfig::Default.to_custom_rules().is_empty());
+    }
+
+    #[test]
+    fn to_custom_rules_open_appends_catch_all_allows() {
+        let rules = NetworkConfig::Open {
+            block: vec![net("192.168.0.0/16")],
+        }
+        .to_custom_rules();
+        // The block becomes a drop rule, then both-family allow-alls reproduce the
+        // terminal accept under custom's terminal drop.
+        assert_eq!(
+            rules,
+            vec![
+                Rule {
+                    action: Action::Block,
+                    target: net("192.168.0.0/16")
+                },
+                Rule {
+                    action: Action::Allow,
+                    target: net("0.0.0.0/0")
+                },
+                Rule {
+                    action: Action::Allow,
+                    target: net("::/0")
+                },
+            ]
+        );
     }
 
     // Probe: does serde reject a field that belongs to a different mode?

@@ -352,6 +352,7 @@ dependencies = [
  "miette",
  "pedagog-core",
  "tabled",
+ "toml_edit",
 ]
 
 [[package]]
