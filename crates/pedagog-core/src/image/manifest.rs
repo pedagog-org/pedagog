@@ -5,7 +5,7 @@
 use magic_migrate::TryMigrate;
 use std::str::FromStr;
 
-pub use v0::{Action, Manifest, NetworkConfig, Rule};
+pub use v0::{Action, ImageConfig, Manifest, NetworkConfig, Rule};
 
 impl FromStr for Manifest {
     type Err = ManifestError;
@@ -42,7 +42,24 @@ mod v0 {
     pub struct Manifest {
         #[serde(deserialize_with = "deserialize_version")]
         pub version: Version,
+        pub image: ImageConfig,
+    }
+
+    /// `[image]` — how the per-assignment container image is built and configured.
+    /// Kept separate from assignment-level config (timing, archival, …) so the two
+    /// concerns don't share a namespace.
+    #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+    #[serde(deny_unknown_fields)]
+    pub struct ImageConfig {
+        /// Student egress policy.
         pub network: NetworkConfig,
+        /// Registered toolchain ids to install (resolved against the defs in
+        /// `/pedagog/config/toolchain/`).
+        #[serde(default)]
+        pub toolchains: Vec<String>,
+        /// Extra apk packages to install directly.
+        #[serde(default)]
+        pub additional_packages: Vec<String>,
     }
 
     /// Accept any version compatible with `0.1` and reject anything else. The
@@ -150,23 +167,24 @@ mod tests {
 
     #[test]
     fn parses_default() {
-        let m = parse("version = \"0.1.0\"\n[network]\nmode = \"default\"\n").unwrap();
-        assert_eq!(m.network, NetworkConfig::Default);
+        let m = parse("version = \"0.1.0\"\n[image.network]\nmode = \"default\"\n").unwrap();
+        assert_eq!(m.image.network, NetworkConfig::Default);
     }
 
     #[test]
     fn accepts_compatible_patch() {
-        let m = parse("version = \"0.1.7\"\n[network]\nmode = \"default\"\n").unwrap();
-        assert_eq!(m.network, NetworkConfig::Default);
+        let m = parse("version = \"0.1.7\"\n[image.network]\nmode = \"default\"\n").unwrap();
+        assert_eq!(m.image.network, NetworkConfig::Default);
     }
 
     #[test]
     fn parses_block_with_allow() {
-        let m =
-            parse("version = \"0.1.0\"\n[network]\nmode = \"block\"\nallow = [\"10.0.0.0/24\"]\n")
-                .unwrap();
+        let m = parse(
+            "version = \"0.1.0\"\n[image.network]\nmode = \"block\"\nallow = [\"10.0.0.0/24\"]\n",
+        )
+        .unwrap();
         assert_eq!(
-            m.network,
+            m.image.network,
             NetworkConfig::Block {
                 allow: vec![net("10.0.0.0/24")]
             }
@@ -175,12 +193,12 @@ mod tests {
 
     #[test]
     fn parses_custom_rules_in_order() {
-        let toml = "version = \"0.1.0\"\n[network]\nmode = \"custom\"\n\
-            [[network.rules]]\naction = \"allow\"\nto = \"10.0.0.5/32\"\n\
-            [[network.rules]]\naction = \"block\"\nto = \"10.0.0.0/8\"\n";
+        let toml = "version = \"0.1.0\"\n[image.network]\nmode = \"custom\"\n\
+            [[image.network.rules]]\naction = \"allow\"\nto = \"10.0.0.5/32\"\n\
+            [[image.network.rules]]\naction = \"block\"\nto = \"10.0.0.0/8\"\n";
         let m = parse(toml).unwrap();
         assert_eq!(
-            m.network,
+            m.image.network,
             NetworkConfig::Custom {
                 rules: vec![
                     Rule {
@@ -198,19 +216,19 @@ mod tests {
 
     #[test]
     fn rejects_incompatible_minor() {
-        let err = parse("version = \"0.2.0\"\n[network]\nmode = \"default\"\n").unwrap_err();
+        let err = parse("version = \"0.2.0\"\n[image.network]\nmode = \"default\"\n").unwrap_err();
         assert!(matches!(err, ManifestError::Parse(_)));
     }
 
     #[test]
     fn rejects_future_major() {
-        let err = parse("version = \"1.0.0\"\n[network]\nmode = \"default\"\n").unwrap_err();
+        let err = parse("version = \"1.0.0\"\n[image.network]\nmode = \"default\"\n").unwrap_err();
         assert!(matches!(err, ManifestError::Parse(_)));
     }
 
     #[test]
     fn rejects_unknown_top_level_field() {
-        let err = parse("version = \"0.1.0\"\nbogus = true\n[network]\nmode = \"default\"\n")
+        let err = parse("version = \"0.1.0\"\nbogus = true\n[image.network]\nmode = \"default\"\n")
             .unwrap_err();
         assert!(matches!(err, ManifestError::Parse(_)));
     }
@@ -262,11 +280,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn toolchains_and_packages_default_empty_when_absent() {
+        let m = parse("version = \"0.1.0\"\n[image.network]\nmode = \"default\"\n").unwrap();
+        assert!(m.image.toolchains.is_empty());
+        assert!(m.image.additional_packages.is_empty());
+    }
+
+    #[test]
+    fn parses_toolchains_and_packages() {
+        let toml = "version = \"0.1.0\"\n\
+            [image]\ntoolchains = [\"rust\", \"python\"]\nadditional_packages = [\"ripgrep\"]\n\
+            [image.network]\nmode = \"default\"\n";
+        let m = parse(toml).unwrap();
+        assert_eq!(m.image.toolchains, vec!["rust", "python"]);
+        assert_eq!(m.image.additional_packages, vec!["ripgrep"]);
+    }
+
+    #[test]
+    fn rejects_unknown_field_in_image() {
+        let toml = "version = \"0.1.0\"\n\
+            [image]\ntoolchains = [\"rust\"]\nbogus = 1\n[image.network]\nmode = \"default\"\n";
+        assert!(matches!(parse(toml), Err(ManifestError::Parse(_))));
+    }
+
     // Probe: does serde reject a field that belongs to a different mode?
     #[test]
     fn stray_field_under_mode() {
         let r = parse(
-            "version = \"0.1.0\"\n[network]\nmode = \"default\"\nallow = [\"10.0.0.0/24\"]\n",
+            "version = \"0.1.0\"\n[image.network]\nmode = \"default\"\nallow = [\"10.0.0.0/24\"]\n",
         );
         assert!(r.is_ok());
     }

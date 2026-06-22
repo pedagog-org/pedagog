@@ -65,13 +65,18 @@ Declarative source of truth. **Versioned**: a top-level `version` is a full semv
 against the caret requirement `^0.1` (`>= 0.1.0, < 0.2.0`) — minor/patch are backward-compatible
 within the line; a breaking change bumps the minor and adds a new schema module. Forward-migration of
 older schemas is handled by `magic_migrate` in `pedagog-core` (each version's types grouped in its own
-`vN` module; the latest re-exported). `version` and `network` are defined now; the rest is sketched
-(refined at their milestones).
+`vN` module; the latest re-exported). Image-build config lives under **`[image]`**, kept separate from
+assignment-level config (timing, archival, …) which gets its own top-level tables at their milestones.
+`version` and `[image]` (with `network`) are defined now; the rest is sketched.
 
 ```toml
 version = "0.1.0"
 
-[network]
+[image]
+toolchains = ["rust"]               # registered toolchain ids to install (doc 10)
+additional_packages = ["ripgrep"]   # extra apk packages (doc 10)
+
+[image.network]
 # EGRESS only. Targets are IP addresses or CIDRs (no hostnames in v1).
 mode = "default"            # "default" | "block" | "open" | "custom"
 
@@ -82,10 +87,9 @@ rules = [                              # mode = "custom": ordered, first-match; 
   { action = "block", to = "10.0.0.0/8" },
 ]
 
-[toolchains]    # sketch — list of registered toolchains to install
-[packages]      # sketch — pkgs to install (pedagog image pkg)
-[archive]       # sketch — submit/archive include/exclude (M3)
-[quotas]        # sketch — maps to codebox job vars (doc 08)
+# Future top-level (assignment-level) tables, sketched:
+# [archive]   # submit/archive include/exclude (M3)
+# [quotas]    # maps to codebox job vars (doc 08)
 ```
 
 **Modes** (only the field matching the mode is used):

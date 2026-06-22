@@ -66,7 +66,7 @@ impl NetworkCommand {
     pub fn run(self) -> Result<()> {
         match self {
             NetworkCommand::Status { config, nft } => {
-                let network = manifest::load(&config)?.network;
+                let network = manifest::load(&config)?.image.network;
                 if nft {
                     print!("{}", nft::render(&network));
                 } else {
@@ -83,7 +83,7 @@ impl NetworkCommand {
                 // the base image bakes its default-deny ruleset); a malformed one
                 // is an error, so authors see it.
                 let network = if config.exists() {
-                    manifest::load(&config)?.network
+                    manifest::load(&config)?.image.network
                 } else {
                     eprintln!(
                         "no manifest at {}; using fail-closed default",
@@ -118,6 +118,7 @@ fn convert(config: &Path) -> Result<()> {
         .parse::<Manifest>()
         .into_diagnostic()
         .wrap_err_with(|| format!("parsing manifest {}", config.display()))?
+        .image
         .network;
 
     if let NetworkConfig::Custom { .. } = network {
@@ -141,7 +142,7 @@ fn convert(config: &Path) -> Result<()> {
         arr.push(item);
     }
     table.insert("rules", value(arr));
-    doc["network"] = Item::Table(table);
+    doc["image"]["network"] = Item::Table(table);
     let edited = doc.to_string();
 
     // Never persist a manifest that won't load.

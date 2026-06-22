@@ -4,12 +4,17 @@
 
 version = "0.1.0"
 
+# How the per-assignment image is built and configured.
+[image]
+toolchains = []           # registered toolchain ids to install
+additional_packages = []  # extra apk packages
+
 # Student egress policy. Try swapping `mode` to exercise each branch:
 #   default  -> all student egress dropped (no list)
 #   block    -> dropped except `allow`
 #   open     -> allowed except `block`
 #   custom   -> ordered, first-match `rules`; unmatched is dropped
-[network]
+[image.network]
 mode = "custom"
 rules = [
   { action = "allow", to = "10.0.0.5/32" },     # the grading host
