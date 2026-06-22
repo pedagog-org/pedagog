@@ -93,6 +93,10 @@ COPY --from=build --chown=root:instructor --chmod=0750 /usr/local/bin/pedagog /u
 # per-assignment build overwrites it via `pedagog image network compile`.
 RUN pedagog image network compile
 
+# Egress firewall is locked at boot by default. Set to 0 only for non-exam
+# (test/instructor) sessions, which leave nft editable in-container.
+ENV PEDAGOG_FIREWALL_LOCK=1
+
 # Boot model: a tiny PID 1 (/etc/runit/boot) runs one-time setup, then execs
 # runsvdir to supervise the services in /etc/service. code-server drops to the
 # student uid via chpst. Scripts live in rootfs/.

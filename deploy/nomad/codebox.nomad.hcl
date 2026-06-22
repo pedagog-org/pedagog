@@ -25,6 +25,13 @@ variable "memory" {
   default = 1024
 }
 
+# Lock the egress firewall at boot (immutable for the session). Set false only
+# for non-exam test/instructor sessions, which leave nft editable in-container.
+variable "lock_firewall" {
+  type    = bool
+  default = true
+}
+
 job "codebox" {
   type = "batch"
 
@@ -80,6 +87,12 @@ job "codebox" {
         # Without these, `nft -f` fails and boot aborts. See rootfs/etc/runit/boot.
         cap_drop = ["all"]
         cap_add  = ["net_admin", "setpcap", "setuid", "setgid"]
+      }
+
+      # Locked by default; `-var lock_firewall=false` leaves egress editable
+      # in-container for test/instructor sessions.
+      env {
+        PEDAGOG_FIREWALL_LOCK = var.lock_firewall ? "1" : "0"
       }
 
       resources {
