@@ -74,6 +74,12 @@ job "codebox" {
         image    = var.image
         ports    = ["http"]
         hostname = "pedagog"
+
+        # Boot loads + locks the egress firewall: net_admin to load nft, setpcap
+        # to drop it (and itself) from the bounding set, setuid/setgid for chpst.
+        # Without these, `nft -f` fails and boot aborts. See rootfs/etc/runit/boot.
+        cap_drop = ["all"]
+        cap_add  = ["net_admin", "setpcap", "setuid", "setgid"]
       }
 
       resources {
