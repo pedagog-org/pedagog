@@ -58,26 +58,26 @@ One ledger (`root:pedagog`), the single source of truth for "what's installed". 
 it verbatim.
 
 ```toml
+# packages installed directly via `pkg install` (not owned by a toolchain).
+# Listed first so the file is valid TOML (array keys precede `[toolchains.*]` tables).
+additional_packages = ["ripgrep", "jq"]
+
 # toolchains installed by `toolchain install` / `build`, with the packages each brought in
 [toolchains.rust]
 packages = ["rust", "cargo"]
-
-# packages installed directly via `pkg install` (not owned by a toolchain)
-[packages]
-installed = ["ripgrep", "jq"]
 ```
 
-`pkg installed` reads `[packages].installed`; `toolchain list --installed` reads the `[toolchains.*]`
-keys. This lets `pkg remove` refuse to touch toolchain-owned or system packages, and lets `--purge`
-know exactly which packages a toolchain brought in.
+`pkg installed` lists `additional_packages` plus every toolchain's packages; `toolchain list
+--installed` reads the `[toolchains.*]` keys. This lets `pkg remove` refuse to touch toolchain-owned
+packages, and lets `--purge` know exactly which packages a toolchain brought in.
 
 ## 4. CLI — `pkg` (the apk wrapper)
 
 | Verb | Behavior |
 |---|---|
-| `pkg install [PKGS…]` | `apk add` each; record in `[packages].installed`. Idempotent (already-present is a no-op). |
-| `pkg remove [PKGS…]` | `apk del` (dependency-gated, §5.1), then drop from `[packages].installed`. Removes a package **even if `pkg` didn't install it**, but **refuses** any package an installed toolchain depends on, naming it. |
-| `pkg installed` | List `[packages].installed`. |
+| `pkg install [PKGS…]` | `apk add` each; record in `additional_packages`. Idempotent (already-present is a no-op). |
+| `pkg remove [PKGS…]` | `apk del` (dependency-gated, §5.1), then drop from `additional_packages`. Removes a package **even if `pkg` didn't install it**, but **refuses** any package an installed toolchain depends on, naming it. |
+| `pkg installed` | List **every** installed package — directly-installed and toolchain-owned — annotating toolchain-required ones with the toolchain(s), e.g. `curl (go, rust)`. |
 
 ## 5. CLI — `toolchain`
 
@@ -158,8 +158,11 @@ Both lists default to empty. `network` stays required within `[image]`.
   the `build.toml` resolved-state types (serde). `BuildState` also owns the **dependency-gated removal
   logic** (`remove_package` errors if a toolchain needs it; `remove_toolchain` returns the packages now
   safe to purge) — pure, so the CLI just calls it then performs the apk side effects. No I/O.
-- **`pedagog-cli`:** the verbs. Side effects (apk, command exec, filesystem) sit **behind traits** so
-  the orchestration is unit-testable with fakes; a real impl shells out. `miette` at the boundary.
+- **`pedagog-cli`:** the verbs. Side effects sit **behind traits** so the orchestration is
+  unit-testable with fakes; the real impls shell out. The **`PackageManager`** trait (in
+  `image::apk`) supplies `add`/`del` primitives and owns the shared `install`/`remove` logic as default
+  methods that **mutate the `BuildState`** they're handed; the command loads the ledger, passes it in,
+  and saves it. Filesystem ledger I/O lives in `image::ledger`. `miette` at the boundary.
 
 ## 10. Sequencing (small increments within B)
 

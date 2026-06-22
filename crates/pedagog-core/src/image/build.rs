@@ -3,20 +3,22 @@
 //! rewritten by those verbs; `build --info` prints it.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 /// The resolved provisioning state of an image.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BuildState {
+    /// Packages installed directly via `pkg` (the manifest's `additional_packages`),
+    /// not owned by a toolchain. Listed before the toolchain tables so the ledger
+    /// serializes to valid TOML (array keys precede `[toolchains.*]` tables).
+    #[serde(default)]
+    pub additional_packages: Vec<String>,
     /// Installed toolchains, keyed by id; each records the packages it brought in
     /// (so removal can be dependency-gated).
     #[serde(default)]
     pub toolchains: BTreeMap<String, ToolchainRecord>,
-    /// Packages installed directly via `pkg` (not owned by a toolchain).
-    #[serde(default)]
-    pub packages: PackagesRecord,
 }
 
 /// What an installed toolchain brought in, recorded at install time.
@@ -25,14 +27,6 @@ pub struct BuildState {
 pub struct ToolchainRecord {
     #[serde(default)]
     pub packages: Vec<String>,
-}
-
-/// Packages installed directly via `pkg install`.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PackagesRecord {
-    #[serde(default)]
-    pub installed: Vec<String>,
 }
 
 impl FromStr for BuildState {
@@ -76,7 +70,7 @@ impl BuildState {
     /// Whether `pkg` is still needed by any toolchain or by a directly-installed
     /// package — i.e. it must not be purged.
     fn is_required(&self, pkg: &str) -> bool {
-        self.packages.installed.iter().any(|p| p == pkg)
+        self.additional_packages.iter().any(|p| p == pkg)
             || self.toolchains.values().any(|r| r.packages.iter().any(|p| p == pkg))
     }
 
@@ -92,7 +86,7 @@ impl BuildState {
                 toolchains: dependents,
             });
         }
-        self.packages.installed.retain(|p| p != pkg);
+        self.additional_packages.retain(|p| p != pkg);
         Ok(())
     }
 
@@ -110,6 +104,21 @@ impl BuildState {
             .filter(|pkg| !self.is_required(pkg))
             .collect())
     }
+
+    /// Every installed package — directly-installed and toolchain-owned — paired
+    /// with the toolchains that require it (empty = directly-installed only).
+    /// Sorted by package name. Backs `pkg installed`.
+    pub fn installed_packages(&self) -> Vec<(String, Vec<String>)> {
+        let mut names: BTreeSet<&str> =
+            self.additional_packages.iter().map(String::as_str).collect();
+        for record in self.toolchains.values() {
+            names.extend(record.packages.iter().map(String::as_str));
+        }
+        names
+            .into_iter()
+            .map(|name| (name.to_owned(), self.toolchains_requiring(name)))
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -124,14 +133,16 @@ mod tests {
 
     #[test]
     fn round_trips_through_toml() {
-        let mut state = BuildState::default();
+        let mut state = BuildState {
+            additional_packages: vec!["ripgrep".to_owned()],
+            ..Default::default()
+        };
         state.toolchains.insert(
             "rust".to_owned(),
             ToolchainRecord {
                 packages: vec!["bash".to_owned(), "curl".to_owned()],
             },
         );
-        state.packages.installed = vec!["ripgrep".to_owned()];
 
         let reparsed: BuildState = state.to_toml().unwrap().parse().unwrap();
         assert_eq!(reparsed, state);
@@ -139,17 +150,17 @@ mod tests {
 
     #[test]
     fn records_toolchain_packages() {
-        let toml = "[toolchains.rust]\npackages = [\"bash\", \"curl\"]\n\
-            [packages]\ninstalled = [\"jq\"]\n";
+        let toml = "additional_packages = [\"jq\"]\n\
+            [toolchains.rust]\npackages = [\"bash\", \"curl\"]\n";
         let state: BuildState = toml.parse().unwrap();
         assert_eq!(state.toolchains["rust"].packages, vec!["bash", "curl"]);
-        assert_eq!(state.packages.installed, vec!["jq"]);
+        assert_eq!(state.additional_packages, vec!["jq"]);
     }
 
     /// A ledger with toolchain `rust` (bash, curl) and direct packages (jq, curl).
     fn fixture() -> BuildState {
-        let toml = "[toolchains.rust]\npackages = [\"bash\", \"curl\"]\n\
-            [packages]\ninstalled = [\"jq\", \"curl\"]\n";
+        let toml = "additional_packages = [\"jq\", \"curl\"]\n\
+            [toolchains.rust]\npackages = [\"bash\", \"curl\"]\n";
         toml.parse().unwrap()
     }
 
@@ -158,7 +169,7 @@ mod tests {
         let mut state = fixture();
         // jq isn't needed by a toolchain -> removable.
         assert_eq!(state.remove_package("jq"), Ok(()));
-        assert_eq!(state.packages.installed, vec!["curl"]);
+        assert_eq!(state.additional_packages, vec!["curl"]);
     }
 
     #[test]
@@ -174,14 +185,14 @@ mod tests {
             }
         );
         // Unchanged on error.
-        assert_eq!(state.packages.installed, vec!["jq", "curl"]);
+        assert_eq!(state.additional_packages, vec!["jq", "curl"]);
     }
 
     #[test]
     fn remove_package_unknown_is_noop_ok() {
         let mut state = fixture();
         assert_eq!(state.remove_package("nope"), Ok(()));
-        assert_eq!(state.packages.installed, vec!["jq", "curl"]);
+        assert_eq!(state.additional_packages, vec!["jq", "curl"]);
     }
 
     #[test]
@@ -214,5 +225,36 @@ mod tests {
             state.remove_toolchain("python"),
             Err(RemoveError::ToolchainNotInstalled("python".to_owned()))
         );
+    }
+
+    #[test]
+    fn installed_packages_attributes_toolchains() {
+        // fixture: rust -> {bash, curl}; direct -> {jq, curl}.
+        let listing = fixture().installed_packages();
+        assert_eq!(
+            listing,
+            vec![
+                ("bash".to_owned(), vec!["rust".to_owned()]), // toolchain-owned
+                ("curl".to_owned(), vec!["rust".to_owned()]), // direct AND rust -> attributed
+                ("jq".to_owned(), vec![]),                    // direct only
+            ]
+        );
+    }
+
+    #[test]
+    fn installed_packages_lists_a_package_shared_by_two_toolchains() {
+        let mut state = fixture();
+        state.toolchains.insert(
+            "go".to_owned(),
+            ToolchainRecord {
+                packages: vec!["curl".to_owned()],
+            },
+        );
+        let curl = state
+            .installed_packages()
+            .into_iter()
+            .find(|(name, _)| name == "curl")
+            .unwrap();
+        assert_eq!(curl.1, vec!["go".to_owned(), "rust".to_owned()]);
     }
 }

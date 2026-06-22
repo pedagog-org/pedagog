@@ -1,8 +1,8 @@
-//! `pedagog image network …` — inspect the student egress policy.
+//! Inspect and apply the student egress policy — the logic behind
+//! `pedagog image network …` (clap surface in the parent module).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use clap::Subcommand;
 use miette::{IntoDiagnostic, Result, WrapErr};
 use pedagog_core::image::manifest::{Action, Manifest, NetworkConfig};
 use pedagog_core::image::nft;
@@ -12,46 +12,7 @@ use tabled::settings::{Alignment, Panel, Style};
 use tabled::{Table, Tabled};
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table as TomlTable, value};
 
-use crate::manifest;
-
-/// Default manifest location inside the image.
-const DEFAULT_MANIFEST: &str = "/pedagog/source/pedagog.toml";
-
-/// Default location of the compiled ruleset, loaded at boot by `nft -f`.
-const DEFAULT_RULESET: &str = "/pedagog/config/nftables.conf";
-
-#[derive(Debug, Subcommand)]
-pub enum NetworkCommand {
-    /// Summarize the student egress policy from the manifest.
-    Status {
-        /// Path to the manifest.
-        #[arg(long, default_value = DEFAULT_MANIFEST)]
-        config: PathBuf,
-        /// Print the raw nftables ruleset instead of the summary.
-        #[arg(long)]
-        nft: bool,
-    },
-    /// Render the manifest's egress policy and apply it live (`nft -f -`), or
-    /// write it to the boot-loaded ruleset file with `--compile-only`.
-    Load {
-        /// Path to the manifest.
-        #[arg(long, default_value = DEFAULT_MANIFEST)]
-        config: PathBuf,
-        /// Where to write the ruleset (with `--compile-only`).
-        #[arg(long, default_value = DEFAULT_RULESET)]
-        out: PathBuf,
-        /// Write the ruleset file instead of applying it live (build-time path).
-        #[arg(long)]
-        compile_only: bool,
-    },
-    /// Rewrite the manifest's `[network]` table into an equivalent `custom` rule
-    /// list, so its ordered rules can be hand-edited.
-    Convert {
-        /// Path to the manifest.
-        #[arg(long, default_value = DEFAULT_MANIFEST)]
-        config: PathBuf,
-    },
-}
+use crate::image::manifest;
 
 /// One row of the egress summary: an action applied to a destination.
 #[derive(Tabled)]
@@ -62,55 +23,48 @@ struct PolicyRow {
     destination: String,
 }
 
-impl NetworkCommand {
-    pub fn run(self) -> Result<()> {
-        match self {
-            NetworkCommand::Status { config, nft } => {
-                let network = manifest::load(&config)?.image.network;
-                if nft {
-                    print!("{}", nft::render(&network));
-                } else {
-                    print_summary(&network);
-                }
-                Ok(())
-            }
-            NetworkCommand::Load {
-                config,
-                out,
-                compile_only,
-            } => {
-                // A missing manifest renders the fail-closed default (this is how
-                // the base image bakes its default-deny ruleset); a malformed one
-                // is an error, so authors see it.
-                let network = if config.exists() {
-                    manifest::load(&config)?.image.network
-                } else {
-                    eprintln!(
-                        "no manifest at {}; using fail-closed default",
-                        config.display()
-                    );
-                    NetworkConfig::Default
-                };
-                let ruleset = nft::render(&network);
-                if compile_only {
-                    std::fs::write(&out, &ruleset)
-                        .into_diagnostic()
-                        .wrap_err_with(|| format!("writing ruleset {}", out.display()))?;
-                } else {
-                    apply(&ruleset)?;
-                }
-                Ok(())
-            }
-            NetworkCommand::Convert { config } => convert(&config),
-        }
+/// Summarize the manifest's egress policy, or print its raw nftables ruleset.
+pub fn status(config: &Path, nft: bool) -> Result<()> {
+    let network = manifest::load(config)?.image.network;
+    if nft {
+        print!("{}", nft::render(&network));
+    } else {
+        print_summary(&network);
     }
+    Ok(())
+}
+
+/// Render the manifest's egress policy and apply it live, or write the boot
+/// ruleset file with `compile_only`.
+pub fn load(config: &Path, out: &Path, compile_only: bool) -> Result<()> {
+    // A missing manifest renders the fail-closed default (this is how the base
+    // image bakes its default-deny ruleset); a malformed one is an error, so
+    // authors see it.
+    let network = if config.exists() {
+        manifest::load(config)?.image.network
+    } else {
+        eprintln!(
+            "no manifest at {}; using fail-closed default",
+            config.display()
+        );
+        NetworkConfig::Default
+    };
+    let ruleset = nft::render(&network);
+    if compile_only {
+        std::fs::write(out, &ruleset)
+            .into_diagnostic()
+            .wrap_err_with(|| format!("writing ruleset {}", out.display()))?;
+    } else {
+        apply(&ruleset)?;
+    }
+    Ok(())
 }
 
 /// Rewrite the manifest's `[network]` table into an equivalent `custom` rule list.
 /// Only that table is touched — the rest of the file (comments, other tables,
 /// ordering) is preserved — and the result is re-parsed to validate before it
 /// replaces the original atomically.
-fn convert(config: &Path) -> Result<()> {
+pub fn convert(config: &Path) -> Result<()> {
     let original = std::fs::read_to_string(config)
         .into_diagnostic()
         .wrap_err_with(|| format!("reading manifest {}", config.display()))?;

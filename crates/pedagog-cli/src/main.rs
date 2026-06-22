@@ -2,7 +2,6 @@
 
 mod cli;
 mod image;
-mod manifest;
 
 use clap::Parser;
 
