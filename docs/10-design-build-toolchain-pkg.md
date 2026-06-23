@@ -24,9 +24,12 @@ pedagog.toml [toolchains]/[packages]      registered defs: /pedagog/config/toolc
 ## 2. Toolchain definition
 
 A registered TOML describing the toolchain's lifecycle as two phases — `[install]` and `[uninstall]`.
-Command fields are **arrays of shell commands** run in order.
+Command fields are **arrays of shell commands** run in order. The schema is **versioned** like the
+manifest (`version` + a `v0` module, migratable via `magic_migrate`); `version` is validated against
+`^0.1`.
 
 ```toml
+version     = "0.1.0"
 id          = "rust"
 description = "Rust 1.88.0 via rustup (shared install under /opt/rust)"
 
@@ -40,36 +43,41 @@ cmd = [
 # verify: assert it actually works.
 verify = ["CARGO_HOME=/opt/rust /opt/rust/bin/cargo --version"]
 
+# env: vars exposed to the student session (see §6.1). Emitted into the shared
+# env.sh in id order; PATH-like values go through a prepend-if-absent guard.
+[env]
+CARGO_HOME = "/opt/rust"
+PATH       = "/opt/rust/bin:$PATH"
+
 [uninstall]
 # cmd: tear down what the install put on disk.
 cmd = ["rm -rf /opt/rust"]
 ```
 
-All fields except `id` are optional; a pure-apk toolchain just sets `[install].pkg`.
+All fields except `version` and `id` are optional; a pure-apk toolchain just sets `[install].pkg`.
 
-- **Install:** `apk add [install].pkg` → run `[install].cmd` → run `[install].verify`. Any non-zero
-  exit **fails the build** (fail-fast; the author sees it). No rollback in v1.
+- **Install:** `apk add [install].pkg` → run `[install].cmd` → run `[install].verify` → (re)generate
+  `env.sh`. Any non-zero exit **fails the build** (fail-fast; the author sees it). No rollback in v1.
 - **Remove:** run `[uninstall].cmd` → **dependency-gated** `apk del` of `[install].pkg` → drop the
-  ledger entry. Flags adjust this (§5).
+  ledger id → regenerate `env.sh`. The packages and env to act on come from the **registered defn**
+  (the ledger stores only ids, §3), which is why a clean uninstall assumes the defn is present. Flags
+  adjust this (§5).
 
 ## 3. Resolved state — `/pedagog/config/build.toml`
 
 One ledger (`root:pedagog`), the single source of truth for "what's installed". `build --info` prints
-it verbatim.
+it verbatim. It records only **ids** — the directly-installed packages and the installed toolchain
+ids; a toolchain's packages/env come from its **registered defn**, not a ledger snapshot.
 
 ```toml
-# packages installed directly via `pkg install` (not owned by a toolchain).
-# Listed first so the file is valid TOML (array keys precede `[toolchains.*]` tables).
-additional_packages = ["ripgrep", "jq"]
-
-# toolchains installed by `toolchain install` / `build`, with the packages each brought in
-[toolchains.rust]
-packages = ["rust", "cargo"]
+additional_packages = ["ripgrep", "jq"]   # installed directly via `pkg install`
+toolchains          = ["rust", "go"]      # installed toolchain ids
 ```
 
-`pkg installed` lists `additional_packages` plus every toolchain's packages; `toolchain list
---installed` reads the `[toolchains.*]` keys. This lets `pkg remove` refuse to touch toolchain-owned
-packages, and lets `--purge` know exactly which packages a toolchain brought in.
+`pkg installed` lists `additional_packages` plus, for each installed toolchain id, that defn's
+`[install].pkg`; `toolchain list --installed` reads `toolchains`. The dependency-gating that lets
+`pkg remove` / toolchain purge avoid yanking a shared package is computed from the **defns** of the
+installed toolchains (§5.1), not from the ledger.
 
 ## 4. CLI — `pkg` (the apk wrapper)
 
@@ -81,14 +89,19 @@ packages, and lets `--purge` know exactly which packages a toolchain brought in.
 
 ## 5. CLI — `toolchain`
 
+Defns live in **one registry dir, `/pedagog/config/toolchain/`**. Immutability is by file mode: a
+defn whose file is **read-only** (`0444`) is *immutable* — the base image bakes its curated defns that
+way; instructor `register` writes `0644`. The verbs run as root, so this is a CLI-honored convention,
+not an OS guarantee. One file per `id`, so there is no shadowing.
+
 | Verb | Behavior |
 |---|---|
-| `toolchain register [DEFN.toml…]` | Validate it parses as a def; copy to `/pedagog/config/toolchain/<id>.toml`. |
-| `toolchain unregister [PATH\|ID…]` | Remove the registered def file (by path or `id`). Warns if currently installed. |
-| `toolchain list [-a/--all \| -i/--installed (default) \| -u/--uninstalled]` | `installed` = keys in `build.toml`; `uninstalled` = registered-but-not-installed; `all` = both. |
-| `toolchain install [IDS…]` | For each: resolve the registered def, run the install lifecycle (§2), record `[install].pkg` under `[toolchains.<id>]`. Already-installed = no-op (skips command re-runs). |
+| `toolchain register [DEFN.toml…] [--force]` | Parse+validate each as a def; copy to `/pedagog/config/toolchain/<id>.toml` (target filename is the def's `id`, not the source name), mode `0644`. **Refuses if the target is immutable** (read-only/base). Refuses to overwrite an existing *custom* defn without `--force`. |
+| `toolchain unregister [PATH\|ID…]` | Remove the registered def file (by path or `id`). **Errors on an immutable (base) defn.** Warns if currently installed. |
+| `toolchain list [-a/--all \| -i/--installed (default) \| -u/--uninstalled]` | `installed` = ids in `build.toml`; `uninstalled` = registered-but-not-installed; `all` = both. Flags each row's **origin** (`immutable`/base vs custom). |
+| `toolchain install [IDS…]` | For each: resolve the registered def, run the install lifecycle (§2), then record the id in `toolchains` **only after `verify` passes** — a failed install isn't marked installed, so a re-run retries it (no rollback of `cmd`'s on-disk effects in v1). Already-installed = no-op (skips command re-runs). |
 | `toolchain verify (IDS… \| -a/--all)` | For each: check every `[install].pkg` is installed (apk query), then run `[install].verify` commands. Reports pass/fail per toolchain; a missing package fails before the commands run. `--all` verifies every installed toolchain. Read-only. |
-| `toolchain remove [IDS…] [--no-purge] [--no-cmd] [--dry-run] [--forget]` | Default: run `[uninstall].cmd` → dependency-gated `apk del` of the toolchain's packages → drop the ledger entry. (`uninstall` is an alias of `remove`.) |
+| `toolchain remove [IDS…] [--no-purge] [--no-cmd] [--dry-run] [--forget]` | Default: run `[uninstall].cmd` → dependency-gated `apk del` of the defn's `[install].pkg` → drop the ledger id → regenerate `env.sh`. (`uninstall` is an alias of `remove`.) Reads the **registered defn** for the cmd/packages/env; `--forget` works without it, but a default remove **errors if the defn is missing**, pointing at `--no-cmd`/`--forget`. |
 
 **`remove` flags:**
 
@@ -103,14 +116,16 @@ packages, and lets `--purge` know exactly which packages a toolchain brought in.
 ### 5.1 Dependency-tracked package removal
 
 Both `pkg remove` and a toolchain purge gate every `apk del` on whether the package is still needed.
-A package's **requirers** are:
+A package's **requirers** are computed from the **registered defns of the installed toolchains** (the
+ledger holds only ids, §3):
 
-- every **installed toolchain** that lists it in `[install].pkg`, and
-- the **assignment itself** — the manifest's `[image].additional_packages` (§8).
+- every **installed toolchain** whose defn lists it in `[install].pkg`, and
+- the **assignment itself** — `additional_packages` in the ledger (and the manifest, §8).
 
-A package is removed only when **no requirer remains** (excluding the toolchain being removed). So
-removing `rust` won't yank `bash`/`curl` if another installed toolchain or the assignment still needs
-them; those are reported as *kept*.
+So the CLI resolves the installed ids → defns, then calls the pure requirer/purgeable functions in
+`pedagog-core`. A package is removed only when **no requirer remains** (excluding the toolchain being
+removed); removing `rust` won't yank `bash`/`curl` if another installed toolchain or the assignment
+still needs them — those are reported as *kept*.
 
 `pkg remove X` (§4) uses the same check: it will remove `X` **even if `pkg` didn't install it**, but
 **refuses** if an installed toolchain depends on `X`, naming that toolchain.
@@ -127,6 +142,29 @@ them; those are reported as *kept*.
 v1 is **additive** (installs what the manifest asks for). Declarative *pruning* — removing things
 present in `build.toml` but absent from the manifest — is deferred (noted in §11) to avoid surprising
 removals early.
+
+### 6.1 Toolchain env — `/pedagog/config/env.sh`
+
+A shared install (e.g. `/opt/rust`) needs `CARGO_HOME`/`PATH` set in the *student's* session. Each
+defn's `[env]` (§2) declares those vars. `install`/`remove`/`build` **regenerate a single managed
+file**, `/pedagog/config/env.sh`, from the `[env]` of all installed toolchains (in id order):
+
+```sh
+# generated — do not edit
+_pedagog_path_prepend() { case ":$PATH:" in *":$1:"*) ;; *) PATH="$1:$PATH" ;; esac; }
+export CARGO_HOME="/opt/rust"
+_pedagog_path_prepend "/opt/rust/bin"
+export PATH
+```
+
+- Plain vars are emitted as `export KEY="VALUE"` (double-quoted, so values expand when sourced).
+- A `PATH` entry goes through the `prepend-if-absent` guard, so sourcing twice (login profile **and**
+  the code-server launch) doesn't duplicate entries.
+- **Both** the login profile and the code-server launch source `env.sh`, so the editor, its integrated
+  terminal, and SSH shells all see the same env regardless of login-shell semantics.
+
+One regenerated file (not per-toolchain `env.d/*.sh` fragments) keeps the `PATH` merge simple and
+leaves no stale fragments on removal. This is its own increment (**B3c**, §10).
 
 ## 7. Execution & idempotency
 
@@ -154,22 +192,44 @@ Both lists default to empty. `network` stays required within `[image]`.
 
 ## 9. Rust structure (per doc 05)
 
-- **`pedagog-core` (pure):** the `Toolchain` def type + parse/validate; the manifest `[image]` types;
-  the `build.toml` resolved-state types (serde). `BuildState` also owns the **dependency-gated removal
-  logic** (`remove_package` errors if a toolchain needs it; `remove_toolchain` returns the packages now
-  safe to purge) — pure, so the CLI just calls it then performs the apk side effects. No I/O.
-- **`pedagog-cli`:** the verbs. Side effects sit **behind traits** so the orchestration is
-  unit-testable with fakes; the real impls shell out. The **`PackageManager`** trait (in
-  `image::apk`) supplies `add`/`del` primitives and owns the shared `install`/`remove` logic as default
-  methods that **mutate the `BuildState`** they're handed; the command loads the ledger, passes it in,
-  and saves it. Filesystem ledger I/O lives in `image::ledger`. `miette` at the boundary.
+- **`pedagog-core` (pure):** the versioned `Toolchain` def type (`v0` + `magic_migrate`, like
+  `Manifest`) with its `[env]`; the manifest `[image]` types; the `build.toml` `BuildState` (now just
+  `additional_packages` + `toolchains` ids). The **dependency-gating** is pure functions fed the
+  installed toolchains' **defns** (`requirers_of(pkg, &[Toolchain], …)`,
+  `purgeable_on_remove(removing, remaining, …)`) — the CLI resolves ids → defns from the registry,
+  calls these, then performs the apk side effects. `BuildState` itself just adds/drops ids + serializes.
+  No I/O.
+- **`pedagog-cli`:** the verbs. **Each command is its own directory** — `image/<cmd>/mod.rs` is the
+  clap surface (the `Subcommand` + a thin `run()` that dispatches) and `image/<cmd>/ops.rs` is the
+  logic; shared helpers (`apk`, `ledger`, `manifest`, `registry`, `shell`) sit at `image/` root.
+  Side effects sit **behind traits** so the orchestration is unit-testable with fakes; the real impls
+  shell out:
+  - **`PackageManager`** (in `image::apk`, impl `Apk`) — `add`/`del` primitives + `is_installed` (apk
+    query, for `verify`); owns the shared `pkg install`/`remove` logic as default methods that
+    **mutate the `BuildState`** they're handed.
+  - **`Shell`** (in `image::shell`, impl `Sh`) — runs `install.cmd`/`uninstall.cmd`/`verify` scripts
+    via `sh -c`, fail-fast, with a `run_all` default method.
+
+  `toolchain`'s lifecycle uses *both* traits, so its `ops` are free functions generic over them
+  (not default methods on one trait). The command loads the ledger, passes it in, saves it. Registered
+  defs are read/written via `image::registry` (one dir; immutability = the file's read-only mode;
+  resolves an id → defn, lists with origin); ledger I/O via `image::ledger`; the `env.sh` regeneration
+  (§6.1) is its own helper. `miette` at the boundary.
 
 ## 10. Sequencing (small increments within B)
 
-- **B1** — manifest `[toolchains]`/`[packages]` types + `Toolchain` def + `build.toml` types in
-  `pedagog-core` (pure, tested).
-- **B2** — `pkg` (apk wrapper + ledger), with the exec/apk traits.
-- **B3** — `toolchain` register/unregister/list, then install/remove (uses B2).
+- **B1** — manifest `[image]` types + `Toolchain` def + `build.toml` types in `pedagog-core` (pure,
+  tested).
+- **B2** — `pkg` (apk wrapper + ledger) behind the `PackageManager` trait. *(done)*
+- **B3a** — the toolchain **registry** (`image/registry.rs`: load/save/list `<id>.toml`) +
+  `register`/`unregister`/`list`. No command execution, so no new side-effect traits — trivially
+  tested.
+- **B3b** — `install`/`verify`/`remove`, the execution path. Adds the `Shell` trait (run shell
+  scripts) and `PackageManager::is_installed` (apk query for verify); `toolchain` ops are free
+  functions generic over both traits (the lifecycle uses package + shell side effects together).
+  Gating recomputed from installed defns (§5.1).
+- **B3c** — toolchain **env** (§6.1): `[env]` in the defn schema + regenerating `/pedagog/config/env.sh`
+  on install/remove, and sourcing it from the login profile + code-server launch.
 - **B4** — `build` orchestration + `--info`; wire `RUN pedagog image build` into a per-assignment
   image (and/or the base as a no-op).
 
@@ -177,8 +237,5 @@ Both lists default to empty. `network` stays required within `[image]`.
 
 - **Declarative pruning in `build`** (§6) — additive-only for v1; revisit whether `build` should also
   remove things dropped from the manifest.
-- **Toolchain env / PATH exposure** — a shared install like `/opt/rust` needs `CARGO_HOME`/`PATH` set
-  in the *student's* session for `cargo` to work. The def's `cmd` puts it on disk; how the resulting
-  env reaches the editor (profile.d? a manifest `[env]`?) is unspecified here — likely its own step.
-- **Where defs come from for the base vs per-assignment image** — registered at base-build time, or
-  shipped by the instructor alongside `pedagog.toml`.
+- **`env.sh` wiring details** (§6.1) — the exact profile/launch hook points (which login file, where in
+  the code-server launch) get nailed down in B3c against the running image.

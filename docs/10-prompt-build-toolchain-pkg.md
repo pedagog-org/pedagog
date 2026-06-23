@@ -53,6 +53,38 @@ Constraints carried over from doc 09:
   and directly-installed packages; `build --info` prints it. Idempotency is ledger-based (install
   verbs skip what's already recorded).
 
+## B3 decisions (agreed in discussion)
+
+- **Side-effect traits.** Add a `Shell` trait (run `sh -c <cmd>`, fail-fast, `run_all` helper) for the
+  install/uninstall/verify scripts, and extend `PackageManager` with `is_installed` (apk query) for
+  `verify`. `toolchain` ops are free functions generic over **both** traits (the lifecycle needs
+  package + shell side effects together) — not default methods on one trait like `pkg` was.
+- **register.** Target filename is the def's `id` (`<id>.toml`), not the source filename. Refuses to
+  overwrite an existing registered def without `--force`.
+- **install records after verify.** The ledger entry is written only after `verify` passes, so a
+  failed install isn't marked installed and a re-run retries it (no rollback of `cmd` effects in v1).
+- **remove + missing def.** Purge list comes from the ledger, so `--no-cmd`/`--forget` work without
+  the def; a default `remove` errors if the registered def is missing (can't run `[uninstall].cmd`).
+- **Sub-increments.** B3a = registry + `register`/`unregister`/`list` (no execution). B3b =
+  `install`/`verify`/`remove` (the trait-backed execution path). B3c = toolchain env.
+
+### B3 decisions — round 2
+
+- **Versioned defn.** The toolchain definition is versioned like the manifest (`version` field, `v0`
+  module, `magic_migrate`), validated against `^0.1`.
+- **Ledger stores ids only.** `BuildState` becomes `additional_packages` + `toolchains` (ids); drop the
+  per-toolchain package snapshot. A toolchain's packages/env come from its **registered defn**, read at
+  remove/verify time — we assume uninstall is clean and the defn is present.
+- **Gating still kept, computed from defns.** Keep the shared-package purge gate; the CLI resolves
+  installed ids → defns and feeds pure requirer/purgeable functions in core. `pkg remove` gating
+  (shipped in B2) is updated to consult installed defns too.
+- **Env config.** Toolchain defn gets `[env]`. One regenerated `/pedagog/config/env.sh` (id order),
+  `export KEY="VALUE"` for plain vars, a `prepend-if-absent` guard for `PATH`; sourced by both the
+  login profile and the code-server launch. One file (not `env.d/*` fragments). This is B3c.
+- **Base vs custom defns.** One registry dir (`/pedagog/config/toolchain/`). Base ships curated defns
+  **read-only (`0444`) = immutable**; instructor `register` writes `0644`. `register`/`unregister`
+  refuse immutable defns; `list` flags each row's origin. One file per id → no shadowing.
+
 ## Open (to settle in design)
 
 - Declarative pruning in `build` (additive-only for v1?).
