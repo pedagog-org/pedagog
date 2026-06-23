@@ -1,12 +1,13 @@
 //! The `pedagog image …` verb group. Each verb is a folder (`mod.rs` = clap
-//! surface, `ops.rs` = logic); `apk`/`ledger`/`manifest`/`toolchains` are shared
-//! helpers.
+//! surface, `ops.rs` = logic); `apk`/`ledger`/`manifest`/`shell`/`toolchains`
+//! are shared helpers.
 
 mod apk;
 mod ledger;
 mod manifest;
 mod network;
 mod pkg;
+mod shell;
 mod toolchain;
 mod toolchains;
 

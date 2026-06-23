@@ -55,3 +55,5 @@ warnings left in the tree.
 - **Commit often on a feature branch** (not directly on `main`), then **squash-merge** to `main`
   later. Use descriptive branch names (e.g. `feat/m1-code-server`).
 - After each small increment, pause for review before continuing to the next.
+- **Never commit (or amend) before the user has reviewed the changes.** Make the change, run
+  tests/clippy, summarize what changed, and wait for the user's explicit go-ahead before committing.

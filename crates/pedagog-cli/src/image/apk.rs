@@ -1,7 +1,7 @@
 //! The apk package manager, behind a trait so the verb orchestration is
 //! unit-testable with fakes. The real implementation shells out to `apk`.
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use miette::{IntoDiagnostic, Result, WrapErr};
 use pedagog_core::image::ledger::Ledger;
@@ -14,6 +14,11 @@ pub trait PackageManager {
     fn add(&self, packages: &[String]) -> Result<()>;
     /// Remove packages (`apk del`). Empty list is a no-op.
     fn del(&self, packages: &[String]) -> Result<()>;
+    /// Whether `package` is currently installed (`apk info -e`). Used by
+    /// `verify` and by the dependency-gated purge.
+    // wired in by `toolchain install`/`verify` (next increment)
+    #[allow(dead_code)]
+    fn is_installed(&self, package: &str) -> Result<bool>;
 
     /// Install `packages` and record them as directly-installed. Records only
     /// after `add` succeeds; re-recording an already-listed package is a no-op.
@@ -66,6 +71,18 @@ impl PackageManager for Apk {
     fn del(&self, packages: &[String]) -> Result<()> {
         Self::run("del", packages)
     }
+
+    fn is_installed(&self, package: &str) -> Result<bool> {
+        // `apk info -e <pkg>` exits 0 (and echoes the name) if installed, 1 if
+        // not; silence stdout and read the status.
+        let status = Command::new("apk")
+            .args(["info", "-e", package])
+            .stdout(Stdio::null())
+            .status()
+            .into_diagnostic()
+            .wrap_err("spawning apk (is it installed?)")?;
+        Ok(status.success())
+    }
 }
 
 #[cfg(test)]
@@ -79,6 +96,7 @@ mod tests {
     struct FakePackageManager {
         added: RefCell<Vec<String>>,
         removed: RefCell<Vec<String>>,
+        present: Vec<String>,
     }
 
     impl PackageManager for FakePackageManager {
@@ -89,6 +107,9 @@ mod tests {
         fn del(&self, packages: &[String]) -> Result<()> {
             self.removed.borrow_mut().extend_from_slice(packages);
             Ok(())
+        }
+        fn is_installed(&self, package: &str) -> Result<bool> {
+            Ok(self.present.iter().any(|p| p == package))
         }
     }
 
@@ -124,5 +145,15 @@ mod tests {
         pm.remove(&mut ledger, &pkgs(&["jq"])).unwrap();
         assert_eq!(ledger.additional_packages, vec!["ripgrep"]);
         assert_eq!(*pm.removed.borrow(), vec!["jq"]);
+    }
+
+    #[test]
+    fn is_installed_reflects_present_set() {
+        let pm = FakePackageManager {
+            present: pkgs(&["jq"]),
+            ..Default::default()
+        };
+        assert!(pm.is_installed("jq").unwrap());
+        assert!(!pm.is_installed("ripgrep").unwrap());
     }
 }
