@@ -77,6 +77,25 @@ pub fn toolchains_requiring<'a>(pkg: &str, toolchains: &'a [Toolchain]) -> BTree
         .unwrap_or_default()
 }
 
+/// The packages `removed`'s uninstall can safely `apk del`: those in its
+/// `[install].pkg` that no *other* still-installed toolchain (`others`) and no
+/// directly-installed package (`direct`) still requires. Backs `toolchain
+/// remove`'s dependency-gated purge.
+pub fn purgeable_packages<'a>(
+    removed: &'a Toolchain,
+    others: &'a [Toolchain],
+    direct: &'a [String],
+) -> Vec<&'a str> {
+    let still_needed = package_dependencies(direct, others);
+    removed
+        .install
+        .pkg
+        .iter()
+        .map(String::as_str)
+        .filter(|pkg| !still_needed.contains_key(pkg))
+        .collect()
+}
+
 /// Schema version 0.
 mod v0 {
     use magic_migrate::TryMigrate;
@@ -293,5 +312,30 @@ cmd = ["rm -rf /opt/rust"]
             BTreeSet::from(["rust"])
         );
         assert!(toolchains_requiring("ripgrep", &installed).is_empty());
+    }
+
+    #[test]
+    fn purgeable_packages_purges_all_when_nothing_else_needs_them() {
+        let rust = parse(RUST).unwrap();
+        let purge = purgeable_packages(&rust, &[], &[]);
+        assert_eq!(purge, vec!["bash", "curl", "gcc", "musl-dev"]);
+    }
+
+    #[test]
+    fn purgeable_packages_keeps_those_another_toolchain_needs() {
+        let rust = parse(RUST).unwrap();
+        let other =
+            parse("version = \"0.1.0\"\nid = \"py\"\n[install]\npkg = [\"bash\", \"curl\"]\n").unwrap();
+        let others = [other];
+        // bash/curl are still needed by py; gcc/musl-dev are rust-only.
+        assert_eq!(purgeable_packages(&rust, &others, &[]), vec!["gcc", "musl-dev"]);
+    }
+
+    #[test]
+    fn purgeable_packages_keeps_directly_installed() {
+        let rust = parse(RUST).unwrap();
+        let direct = vec!["gcc".to_owned()];
+        let purge = purgeable_packages(&rust, &[], &direct);
+        assert_eq!(purge, vec!["bash", "curl", "musl-dev"]);
     }
 }

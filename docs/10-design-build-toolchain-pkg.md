@@ -7,8 +7,9 @@
 > [`09-design-cli-manifest-daemon.md`](./09-design-cli-manifest-daemon.md).
 >
 > **Implemented so far:** `pkg` (install/remove/installed, with def-based remove gating);
-> `toolchain register`/`unregister`/`list`; the `Ledger` type and the toolchains-directory helper.
-> **Still planned:** `toolchain install`/`verify`/`remove` (B3b), toolchain env (B3c), `build` (B4).
+> `toolchain register`/`unregister`/`list`/`install`/`verify`/`remove`; the `Ledger` type, the
+> toolchains-directory helper, and the `Shell` trait + `PackageManager::is_installed`.
+> **Still planned:** toolchain env (B3c), `build` (B4).
 
 ## 1. Shape
 
@@ -128,7 +129,7 @@ unregistered (subject to the install guard below).
 | `toolchain list` | **done** | List registered toolchains, annotating each as `installed` or `registered`. |
 | `toolchain install [IDS…]` | B3b | For each: resolve the def, run the install lifecycle (§2), then set `installed = true` in the ledger **only after `verify` passes** — a failed install isn't marked installed, so a re-run retries it. Already-installed = no-op. |
 | `toolchain verify (IDS… \| -a/--all)` | B3b | For each: check every `[install].pkg` is installed (apk query), then run `[install].verify`. Reports pass/fail; a missing package fails before the commands run. Read-only. |
-| `toolchain remove [IDS…] [--no-purge] [--no-cmd] [--dry-run]` | B3b | Run `[uninstall].cmd` → dependency-gated `apk del` of the def's `[install].pkg` → set `installed = false`. Reads the **def file** for the cmd/packages; a default remove **errors if the def is missing**, pointing at `--no-cmd`. (`uninstall` is an alias of `remove`.) |
+| `toolchain remove (IDS… \| -a/--all) [--no-purge] [--no-cmd] [--forget] [--dry-run]` | B3b | Run `[uninstall].cmd` → dependency-gated `apk del` of the def's `[install].pkg` → set `installed = false`. `--all` removes every installed toolchain. Reads the **def file** for the cmd/packages; a default remove **errors if the def is missing**, pointing at `--forget`. (`uninstall` is an alias of `remove`.) |
 
 **`remove` flags (B3b):**
 
@@ -137,6 +138,7 @@ unregistered (subject to the install guard below).
 | *(default)* | uninstall cmd → dependency-gated purge → mark uninstalled |
 | `--no-purge` | keep packages; still run uninstall cmd + mark uninstalled |
 | `--no-cmd` | skip the uninstall cmd; still purge (gated) + mark uninstalled |
+| `--forget` | just mark uninstalled — shorthand for `--no-cmd --no-purge`. The only form that works when the def is missing (it needs nothing from it). |
 | `--dry-run` | print the plan; change nothing |
 
 ### 5.1 Dependency-tracked package removal

@@ -130,6 +130,27 @@ Constraints carried over from doc 09:
   ledger's filename earlier in this increment, before the ledger became `ledger.toml`; it is now the
   manifest.)
 
+### B3 decisions — round 5 (B3b execution path)
+
+- **`install` returns an outcome.** The lifecycle reports `Installed` vs `AlreadyInstalled`; the ledger
+  flips to installed only after `verify` passes. `install [IDS…]` stops at the first failure, persisting
+  the ledger with successes so far. A path-like argument (contains `/` or ends `.toml`) is registered
+  first, but only with `--register` (and `--overwrite` flows into that registration); a bare id must
+  already be registered.
+- **`verify` is not fail-fast across toolchains.** It checks every target, prints `id: ok` / `id:
+  FAILED: <reason>`, then errors if any failed (a missing def counts as a failure). `-a/--all` selects
+  every installed toolchain; ids and `--all` are mutually exclusive.
+- **`remove` takes `-a/--all` too** (every installed toolchain), with the same ids-xor-`--all` rule as
+  `verify`.
+- **Keep `--forget`.** Re-added after round 4's flag list dropped it: `--forget` is shorthand for
+  `--no-cmd --no-purge` (just mark uninstalled). It is also the only `remove` form that works when the
+  def is missing, since it needs nothing from it. A default `remove` errors on a missing def, pointing
+  at `--forget`.
+- **`Shell` returns stdout, no `run_all`.** `Shell::run` runs one `sh -c` command, captures stdout
+  (returned) and streams stderr so progress stays visible; the lifecycle loops over a def's
+  `cmd`/`verify` list itself so it can print each command. `PackageManager::is_installed` (apk `info
+  -e`) backs `verify` and the purge gate.
+
 ## Open (to settle in design)
 
 - Declarative pruning in `build` (additive-only for v1?).

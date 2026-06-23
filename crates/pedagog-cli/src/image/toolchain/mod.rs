@@ -69,6 +69,34 @@ pub enum ToolchainCommand {
         #[arg(long, default_value = DEFAULT_LEDGER)]
         ledger: PathBuf,
     },
+    /// Remove installed toolchains: run their uninstall command, purge the
+    /// packages nothing else needs, and mark them uninstalled.
+    #[command(visible_alias = "uninstall")]
+    Remove {
+        /// Toolchain ids to remove (omit with `--all`).
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        ids: Vec<String>,
+        /// Remove every installed toolchain.
+        #[arg(long, short)]
+        all: bool,
+        /// Keep the toolchains' packages (skip the purge).
+        #[arg(long)]
+        no_purge: bool,
+        /// Skip the uninstall command.
+        #[arg(long)]
+        no_cmd: bool,
+        /// Just mark uninstalled: no uninstall command, no purge (also removes a
+        /// toolchain whose definition is missing).
+        #[arg(long)]
+        forget: bool,
+        /// Print the plan and change nothing.
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, default_value = DEFAULT_TOOLCHAINS)]
+        toolchains: PathBuf,
+        #[arg(long, default_value = DEFAULT_LEDGER)]
+        ledger: PathBuf,
+    },
     /// List registered toolchains and whether each is installed.
     List {
         #[arg(long, default_value = DEFAULT_TOOLCHAINS)]
@@ -106,6 +134,27 @@ impl ToolchainCommand {
                 toolchains,
                 ledger,
             } => ops::verify(&ids, all, &toolchains, &ledger),
+            ToolchainCommand::Remove {
+                ids,
+                all,
+                no_purge,
+                no_cmd,
+                forget,
+                dry_run,
+                toolchains,
+                ledger,
+            } => ops::remove(
+                &ids,
+                ops::RemoveFlags {
+                    all,
+                    no_purge,
+                    no_cmd,
+                    forget,
+                    dry_run,
+                },
+                &toolchains,
+                &ledger,
+            ),
             ToolchainCommand::List { toolchains, ledger } => ops::list(&toolchains, &ledger),
         }
     }

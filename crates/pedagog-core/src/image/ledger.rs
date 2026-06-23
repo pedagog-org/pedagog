@@ -125,6 +125,14 @@ impl Ledger {
         self.toolchains.insert(id.to_owned(), true);
     }
 
+    /// Mark `id` not installed, keeping it registered. No-op if it is unknown
+    /// (nothing to flip).
+    pub fn mark_uninstalled(&mut self, id: &str) {
+        if let Some(installed) = self.toolchains.get_mut(id) {
+            *installed = false;
+        }
+    }
+
     /// Whether `id` is registered and installed.
     pub fn is_installed(&self, id: &str) -> bool {
         self.toolchains.get(id).copied().unwrap_or(false)
@@ -221,6 +229,22 @@ mod tests {
         let mut ledger = Ledger::default();
         ledger.mark_installed("rust");
         assert!(ledger.is_installed("rust"));
+    }
+
+    #[test]
+    fn mark_uninstalled_clears_flag_but_keeps_registered() {
+        let mut ledger = Ledger::default();
+        ledger.mark_installed("rust");
+        ledger.mark_uninstalled("rust");
+        assert!(!ledger.is_installed("rust"));
+        assert!(ledger.toolchains.contains_key("rust"));
+    }
+
+    #[test]
+    fn mark_uninstalled_unknown_is_noop() {
+        let mut ledger = Ledger::default();
+        ledger.mark_uninstalled("rust");
+        assert!(!ledger.toolchains.contains_key("rust"));
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use pedagog_core::image::ledger::Ledger;
-use pedagog_core::image::toolchain::{Toolchain, valid_id};
+use pedagog_core::image::toolchain::{Toolchain, purgeable_packages, valid_id};
 
 use crate::image::apk::PackageManager;
 use crate::image::shell::Shell;
@@ -153,6 +153,79 @@ pub fn verify(pm: &impl PackageManager, sh: &impl Shell, tc: &Toolchain) -> Resu
     Ok(())
 }
 
+/// How `remove` behaves, set from the CLI flags.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RemoveOptions {
+    /// Skip the `[uninstall].cmd`.
+    pub no_cmd: bool,
+    /// Keep the toolchain's packages (no `apk del`).
+    pub no_purge: bool,
+    /// Print the plan and change nothing.
+    pub dry_run: bool,
+}
+
+/// Remove an installed toolchain: run its `[uninstall].cmd` (unless `no_cmd`),
+/// `apk del` the packages it brought in that nothing else still needs (unless
+/// `no_purge`), then mark it uninstalled in the ledger. `others` are the *other*
+/// installed toolchains' defs and `direct` the directly-installed packages —
+/// together the requirers that keep a shared package. With `dry_run`, print the
+/// plan and change nothing.
+pub fn remove(
+    pm: &impl PackageManager,
+    sh: &impl Shell,
+    ledger: &mut Ledger,
+    tc: &Toolchain,
+    others: &[Toolchain],
+    direct: &[String],
+    opts: RemoveOptions,
+) -> Result<()> {
+    let purge: Vec<String> = if opts.no_purge {
+        Vec::new()
+    } else {
+        purgeable_packages(tc, others, direct)
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    };
+
+    if opts.dry_run {
+        print_plan(tc, &purge, opts);
+        return Ok(());
+    }
+
+    if !opts.no_cmd {
+        for cmd in &tc.uninstall.cmd {
+            println!("  $ {cmd}");
+            sh.run(cmd)?;
+        }
+    }
+    pm.del(&purge)?;
+    ledger.mark_uninstalled(&tc.id);
+    Ok(())
+}
+
+/// Print what a `remove` would do, for `--dry-run`.
+fn print_plan(tc: &Toolchain, purge: &[String], opts: RemoveOptions) {
+    println!("dry-run: remove '{}'", tc.id);
+    if opts.no_cmd {
+        println!("  uninstall cmd: skipped");
+    } else if tc.uninstall.cmd.is_empty() {
+        println!("  uninstall cmd: (none)");
+    } else {
+        for cmd in &tc.uninstall.cmd {
+            println!("  uninstall cmd: {cmd}");
+        }
+    }
+    if opts.no_purge {
+        println!("  purge: skipped");
+    } else if purge.is_empty() {
+        println!("  purge: (nothing)");
+    } else {
+        println!("  purge: {}", purge.join(", "));
+    }
+    println!("  -> mark uninstalled");
+}
+
 /// List the ids of every registered definition, sorted. A missing toolchains
 /// directory is empty.
 pub fn list(dir: &Path) -> Result<Vec<String>> {
@@ -187,10 +260,12 @@ mod tests {
 
     const DEF: &str = "version = \"0.1.0\"\nid = \"rust\"\n";
 
-    /// Records the packages it was asked to add; reports `present` as installed.
+    /// Records the packages it was asked to add/remove; reports `present` as
+    /// installed.
     #[derive(Default)]
     struct FakePm {
         added: RefCell<Vec<String>>,
+        removed: RefCell<Vec<String>>,
         present: Vec<String>,
     }
 
@@ -199,7 +274,8 @@ mod tests {
             self.added.borrow_mut().extend_from_slice(packages);
             Ok(())
         }
-        fn del(&self, _packages: &[String]) -> Result<()> {
+        fn del(&self, packages: &[String]) -> Result<()> {
+            self.removed.borrow_mut().extend_from_slice(packages);
             Ok(())
         }
         fn is_installed(&self, package: &str) -> Result<bool> {
@@ -229,10 +305,18 @@ mod tests {
     }
 
     const RUST: &str = "version = \"0.1.0\"\nid = \"rust\"\n\
-        [install]\npkg = [\"curl\", \"gcc\"]\ncmd = [\"do-install\"]\nverify = [\"check\"]\n";
+        [install]\npkg = [\"curl\", \"gcc\"]\ncmd = [\"do-install\"]\nverify = [\"check\"]\n\
+        [uninstall]\ncmd = [\"do-uninstall\"]\n";
 
     fn def(toml: &str) -> Toolchain {
         toml.parse().unwrap()
+    }
+
+    /// A ledger with `rust` installed, for exercising remove.
+    fn rust_installed() -> Ledger {
+        let mut led = Ledger::default();
+        led.mark_installed("rust");
+        led
     }
 
     /// Write a source def file in `dir` and return its path (its filename differs
@@ -436,5 +520,78 @@ mod tests {
             ..Default::default()
         };
         assert!(verify(&pm, &sh, &def(RUST)).is_err());
+    }
+
+    #[test]
+    fn remove_runs_cmd_purges_and_marks_uninstalled() {
+        let pm = FakePm::default();
+        let sh = FakeSh::default();
+        let mut led = rust_installed();
+
+        remove(&pm, &sh, &mut led, &def(RUST), &[], &[], RemoveOptions::default()).unwrap();
+        assert_eq!(*sh.ran.borrow(), strs(&["do-uninstall"]));
+        assert_eq!(*pm.removed.borrow(), strs(&["curl", "gcc"]));
+        assert!(!led.is_installed("rust"));
+        assert!(led.toolchains.contains_key("rust")); // still registered
+    }
+
+    #[test]
+    fn remove_no_purge_keeps_packages() {
+        let pm = FakePm::default();
+        let sh = FakeSh::default();
+        let mut led = rust_installed();
+
+        let opts = RemoveOptions {
+            no_purge: true,
+            ..Default::default()
+        };
+        remove(&pm, &sh, &mut led, &def(RUST), &[], &[], opts).unwrap();
+        assert_eq!(*sh.ran.borrow(), strs(&["do-uninstall"]));
+        assert!(pm.removed.borrow().is_empty());
+        assert!(!led.is_installed("rust"));
+    }
+
+    #[test]
+    fn remove_no_cmd_skips_cmd_but_purges() {
+        let pm = FakePm::default();
+        let sh = FakeSh::default();
+        let mut led = rust_installed();
+
+        let opts = RemoveOptions {
+            no_cmd: true,
+            ..Default::default()
+        };
+        remove(&pm, &sh, &mut led, &def(RUST), &[], &[], opts).unwrap();
+        assert!(sh.ran.borrow().is_empty());
+        assert_eq!(*pm.removed.borrow(), strs(&["curl", "gcc"]));
+        assert!(!led.is_installed("rust"));
+    }
+
+    #[test]
+    fn remove_purge_is_gated_by_other_toolchain() {
+        let pm = FakePm::default();
+        let sh = FakeSh::default();
+        let mut led = rust_installed();
+        // py still needs curl, so only gcc is purged.
+        let py = def("version = \"0.1.0\"\nid = \"py\"\n[install]\npkg = [\"curl\"]\n");
+
+        remove(&pm, &sh, &mut led, &def(RUST), &[py], &[], RemoveOptions::default()).unwrap();
+        assert_eq!(*pm.removed.borrow(), strs(&["gcc"]));
+    }
+
+    #[test]
+    fn remove_dry_run_changes_nothing() {
+        let pm = FakePm::default();
+        let sh = FakeSh::default();
+        let mut led = rust_installed();
+
+        let opts = RemoveOptions {
+            dry_run: true,
+            ..Default::default()
+        };
+        remove(&pm, &sh, &mut led, &def(RUST), &[], &[], opts).unwrap();
+        assert!(sh.ran.borrow().is_empty());
+        assert!(pm.removed.borrow().is_empty());
+        assert!(led.is_installed("rust")); // untouched
     }
 }

@@ -8,11 +8,12 @@ use std::path::Path;
 use miette::{Result, miette};
 
 use pedagog_core::image::ledger::Ledger;
+use pedagog_core::image::toolchain::Toolchain;
 
 use crate::image::apk::Apk;
 use crate::image::ledger;
 use crate::image::shell::Sh;
-use crate::image::toolchains::{self, InstallOutcome};
+use crate::image::toolchains::{self, InstallOutcome, RemoveOptions};
 
 /// Register the definition at `file`: copy it into the toolchains directory under
 /// its own id and record it (uninstalled) in the ledger.
@@ -146,6 +147,100 @@ fn verify_one(pm: &Apk, sh: &Sh, dir: &Path, id: &str) -> Result<()> {
     let tc = toolchains::resolve(dir, id)?
         .ok_or_else(|| miette!("not registered"))?;
     toolchains::verify(pm, sh, &tc)
+}
+
+/// The `remove` CLI flags (clap surface in the parent module).
+#[derive(Debug, Clone, Copy)]
+pub struct RemoveFlags {
+    /// Remove every installed toolchain instead of a given id list.
+    pub all: bool,
+    /// Keep the toolchains' packages (skip the purge).
+    pub no_purge: bool,
+    /// Skip the uninstall command.
+    pub no_cmd: bool,
+    /// Just mark uninstalled — shorthand for `no_cmd` + `no_purge`.
+    pub forget: bool,
+    /// Print the plan and change nothing.
+    pub dry_run: bool,
+}
+
+/// Remove each toolchain in order: run its uninstall cmd, dependency-gated purge,
+/// then mark it uninstalled (§2). `--forget` is shorthand for `--no-cmd
+/// --no-purge` (just mark uninstalled), which is also the only way to remove a
+/// toolchain whose def is missing. Stops at the first failure, persisting the
+/// ledger with whatever succeeded (skipped entirely under `--dry-run`).
+pub fn remove(ids: &[String], flags: RemoveFlags, dir: &Path, ledger_path: &Path) -> Result<()> {
+    let mut led = ledger::load(ledger_path)?;
+    let targets: Vec<String> = if flags.all {
+        led.toolchains
+            .iter()
+            .filter(|(_, installed)| **installed)
+            .map(|(id, _)| id.clone())
+            .collect()
+    } else {
+        ids.to_vec()
+    };
+    let opts = RemoveOptions {
+        no_cmd: flags.no_cmd || flags.forget,
+        no_purge: flags.no_purge || flags.forget,
+        dry_run: flags.dry_run,
+    };
+
+    let result = remove_all(&mut led, &targets, opts, dir);
+    if flags.dry_run {
+        return result; // changed nothing; nothing to persist
+    }
+    let saved = ledger::save(ledger_path, &led);
+    result.and(saved)
+}
+
+/// Remove each id in order, returning at the first failure.
+fn remove_all(led: &mut Ledger, ids: &[String], opts: RemoveOptions, dir: &Path) -> Result<()> {
+    let pm = Apk;
+    let sh = Sh;
+    for id in ids {
+        match toolchains::resolve(dir, id)? {
+            Some(tc) => {
+                let others = other_installed(led, dir, id)?;
+                let direct = led.additional_packages.clone();
+                toolchains::remove(&pm, &sh, led, &tc, &others, &direct, opts)?;
+            }
+            // No def: we can only mark it uninstalled, and only when nothing is
+            // wanted from the def (i.e. --forget / --no-cmd --no-purge).
+            None if opts.no_cmd && opts.no_purge => {
+                if opts.dry_run {
+                    println!("dry-run: remove '{id}' (no def): mark uninstalled");
+                } else {
+                    led.mark_uninstalled(id);
+                }
+            }
+            None => {
+                return Err(miette!(
+                    "toolchain '{id}' has no registered def; use --forget to just mark it uninstalled"
+                ));
+            }
+        }
+        if !opts.dry_run {
+            println!("removed toolchain '{id}'");
+        }
+    }
+    Ok(())
+}
+
+/// Resolve the defs of every installed toolchain except `except` (the one being
+/// removed) — the requirers that keep a shared package alive. A registered
+/// toolchain whose def is missing is skipped.
+fn other_installed(led: &Ledger, dir: &Path, except: &str) -> Result<Vec<Toolchain>> {
+    let mut defs = Vec::new();
+    for (id, installed) in &led.toolchains {
+        if !*installed || id == except {
+            continue;
+        }
+        if let Some(def) = toolchains::resolve(dir, id)? {
+            defs.push(def);
+        }
+    }
+    Ok(defs)
 }
 
 /// List registered toolchains, each annotated with whether it is installed.
