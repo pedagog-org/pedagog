@@ -10,8 +10,6 @@ use miette::{IntoDiagnostic, Result};
 /// Runs a single shell command, fail-fast. The toolchain lifecycle runs a def's
 /// `cmd`/`verify` list one command at a time — the caller loops — so it can
 /// report progress between commands; each call returns the command's stdout.
-// wired in by `toolchain install`/`verify`/`remove` (next increment)
-#[allow(dead_code)]
 pub trait Shell {
     /// Run one command, erroring if it exits non-zero; returns its stdout.
     fn run(&self, cmd: &str) -> Result<String>;
@@ -19,7 +17,6 @@ pub trait Shell {
 
 /// `Shell` backed by the real `sh` binary: captures stdout, streams stderr so
 /// command progress stays visible.
-#[allow(dead_code)]
 pub struct Sh;
 
 impl Shell for Sh {

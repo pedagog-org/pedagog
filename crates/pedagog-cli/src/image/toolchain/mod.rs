@@ -38,6 +38,23 @@ pub enum ToolchainCommand {
         #[arg(long, default_value = DEFAULT_LEDGER)]
         ledger: PathBuf,
     },
+    /// Install toolchains by id (packages, install commands, then verify). Path
+    /// arguments are registered first with `--register`.
+    Install {
+        /// Toolchain ids, or paths to definitions (the latter need `--register`).
+        #[arg(required = true)]
+        targets: Vec<String>,
+        /// Register any path arguments before installing them.
+        #[arg(long)]
+        register: bool,
+        /// When registering, replace an already-registered toolchain.
+        #[arg(long, requires = "register")]
+        overwrite: bool,
+        #[arg(long, default_value = DEFAULT_TOOLCHAINS)]
+        toolchains: PathBuf,
+        #[arg(long, default_value = DEFAULT_LEDGER)]
+        ledger: PathBuf,
+    },
     /// List registered toolchains and whether each is installed.
     List {
         #[arg(long, default_value = DEFAULT_TOOLCHAINS)]
@@ -62,6 +79,13 @@ impl ToolchainCommand {
                 toolchains,
                 ledger,
             } => ops::unregister(&id, force, &toolchains, &ledger),
+            ToolchainCommand::Install {
+                targets,
+                register,
+                overwrite,
+                toolchains,
+                ledger,
+            } => ops::install(&targets, register, overwrite, &toolchains, &ledger),
             ToolchainCommand::List { toolchains, ledger } => ops::list(&toolchains, &ledger),
         }
     }

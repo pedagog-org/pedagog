@@ -9,6 +9,9 @@ use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use pedagog_core::image::ledger::Ledger;
 use pedagog_core::image::toolchain::{Toolchain, valid_id};
 
+use crate::image::apk::PackageManager;
+use crate::image::shell::Shell;
+
 pub use pedagog_core::image::toolchain::DEFAULT_TOOLCHAINS;
 
 /// Path of the definition file for `id` within `dir`. Rejects an id that isn't a
@@ -96,6 +99,39 @@ pub fn unregister(dir: &Path, ledger: &mut Ledger, id: &str, force: bool) -> Res
     Ok(())
 }
 
+/// Whether `install` provisioned the toolchain or found it already done.
+#[derive(Debug, PartialEq, Eq)]
+pub enum InstallOutcome {
+    Installed,
+    AlreadyInstalled,
+}
+
+/// Install a resolved toolchain: add its packages, run its install commands, then
+/// its verify commands, and only on success mark it installed in `ledger`. A
+/// failure at any step leaves the installed flag unset, so a re-run retries
+/// (there is no rollback of commands already run). Already-installed is a no-op.
+pub fn install(
+    pm: &impl PackageManager,
+    sh: &impl Shell,
+    ledger: &mut Ledger,
+    tc: &Toolchain,
+) -> Result<InstallOutcome> {
+    if ledger.is_installed(&tc.id) {
+        return Ok(InstallOutcome::AlreadyInstalled);
+    }
+    pm.add(&tc.install.pkg)?;
+    for cmd in &tc.install.cmd {
+        println!("  $ {cmd}");
+        sh.run(cmd)?;
+    }
+    for cmd in &tc.install.verify {
+        println!("  $ {cmd}");
+        sh.run(cmd)?;
+    }
+    ledger.mark_installed(&tc.id);
+    Ok(InstallOutcome::Installed)
+}
+
 /// List the ids of every registered definition, sorted. A missing toolchains
 /// directory is empty.
 pub fn list(dir: &Path) -> Result<Vec<String>> {
@@ -124,9 +160,58 @@ pub fn list(dir: &Path) -> Result<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
 
     const DEF: &str = "version = \"0.1.0\"\nid = \"rust\"\n";
+
+    /// Records the packages it was asked to add; never shells out.
+    #[derive(Default)]
+    struct FakePm {
+        added: RefCell<Vec<String>>,
+    }
+
+    impl PackageManager for FakePm {
+        fn add(&self, packages: &[String]) -> Result<()> {
+            self.added.borrow_mut().extend_from_slice(packages);
+            Ok(())
+        }
+        fn del(&self, _packages: &[String]) -> Result<()> {
+            Ok(())
+        }
+        fn is_installed(&self, _package: &str) -> Result<bool> {
+            Ok(false)
+        }
+    }
+
+    /// Records the commands it ran; fails any command listed in `fail`.
+    #[derive(Default)]
+    struct FakeSh {
+        ran: RefCell<Vec<String>>,
+        fail: Vec<String>,
+    }
+
+    impl Shell for FakeSh {
+        fn run(&self, cmd: &str) -> Result<String> {
+            self.ran.borrow_mut().push(cmd.to_owned());
+            if self.fail.iter().any(|c| c == cmd) {
+                return Err(miette!("forced failure: {cmd}"));
+            }
+            Ok(String::new())
+        }
+    }
+
+    fn strs(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    const RUST: &str = "version = \"0.1.0\"\nid = \"rust\"\n\
+        [install]\npkg = [\"curl\", \"gcc\"]\ncmd = [\"do-install\"]\nverify = [\"check\"]\n";
+
+    fn def(toml: &str) -> Toolchain {
+        toml.parse().unwrap()
+    }
 
     /// Write a source def file in `dir` and return its path (its filename differs
     /// from the id, so we exercise id-derived naming).
@@ -238,5 +323,60 @@ mod tests {
     fn list_empty_when_dir_absent() {
         let dir = tempfile::tempdir().unwrap();
         assert!(list(&dir.path().join("nope")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn install_adds_pkgs_runs_scripts_then_marks_installed() {
+        let pm = FakePm::default();
+        let sh = FakeSh::default();
+        let mut led = Ledger::default();
+
+        let outcome = install(&pm, &sh, &mut led, &def(RUST)).unwrap();
+        assert_eq!(outcome, InstallOutcome::Installed);
+        assert_eq!(*pm.added.borrow(), strs(&["curl", "gcc"]));
+        // install commands run before verify commands.
+        assert_eq!(*sh.ran.borrow(), strs(&["do-install", "check"]));
+        assert!(led.is_installed("rust"));
+    }
+
+    #[test]
+    fn install_skips_when_already_installed() {
+        let pm = FakePm::default();
+        let sh = FakeSh::default();
+        let mut led = Ledger::default();
+        led.mark_installed("rust");
+
+        let outcome = install(&pm, &sh, &mut led, &def(RUST)).unwrap();
+        assert_eq!(outcome, InstallOutcome::AlreadyInstalled);
+        assert!(pm.added.borrow().is_empty());
+        assert!(sh.ran.borrow().is_empty());
+    }
+
+    #[test]
+    fn install_does_not_mark_on_cmd_failure() {
+        let pm = FakePm::default();
+        let sh = FakeSh {
+            fail: strs(&["do-install"]),
+            ..Default::default()
+        };
+        let mut led = Ledger::default();
+
+        assert!(install(&pm, &sh, &mut led, &def(RUST)).is_err());
+        // verify never ran, and the toolchain is not recorded installed.
+        assert_eq!(*sh.ran.borrow(), strs(&["do-install"]));
+        assert!(!led.is_installed("rust"));
+    }
+
+    #[test]
+    fn install_does_not_mark_on_verify_failure() {
+        let pm = FakePm::default();
+        let sh = FakeSh {
+            fail: strs(&["check"]),
+            ..Default::default()
+        };
+        let mut led = Ledger::default();
+
+        assert!(install(&pm, &sh, &mut led, &def(RUST)).is_err());
+        assert!(!led.is_installed("rust"));
     }
 }

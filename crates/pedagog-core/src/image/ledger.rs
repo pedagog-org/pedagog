@@ -120,6 +120,11 @@ impl Ledger {
         self.toolchains.remove(id);
     }
 
+    /// Mark `id` installed, registering it if not already known.
+    pub fn mark_installed(&mut self, id: &str) {
+        self.toolchains.insert(id.to_owned(), true);
+    }
+
     /// Whether `id` is registered and installed.
     pub fn is_installed(&self, id: &str) -> bool {
         self.toolchains.get(id).copied().unwrap_or(false)
@@ -208,6 +213,13 @@ mod tests {
         ledger.toolchains.insert("rust".to_owned(), true);
         // Re-registering must not reset the installed flag.
         ledger.register_toolchain("rust");
+        assert!(ledger.is_installed("rust"));
+    }
+
+    #[test]
+    fn mark_installed_sets_flag_and_registers() {
+        let mut ledger = Ledger::default();
+        ledger.mark_installed("rust");
         assert!(ledger.is_installed("rust"));
     }
 
