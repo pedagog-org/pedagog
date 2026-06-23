@@ -107,6 +107,47 @@ fn looks_like_path(target: &str) -> bool {
     target.contains('/') || target.ends_with(".toml")
 }
 
+/// Health-check toolchains: confirm each one's packages are present and its verify
+/// commands pass. `--all` checks every installed toolchain; otherwise the given
+/// ids. Read-only. Checks every target (not fail-fast) and reports each, then
+/// errors if any failed.
+pub fn verify(ids: &[String], all: bool, dir: &Path, ledger_path: &Path) -> Result<()> {
+    let led = ledger::load(ledger_path)?;
+    let targets: Vec<String> = if all {
+        led.toolchains
+            .iter()
+            .filter(|(_, installed)| **installed)
+            .map(|(id, _)| id.clone())
+            .collect()
+    } else {
+        ids.to_vec()
+    };
+
+    let pm = Apk;
+    let sh = Sh;
+    let mut failed = 0;
+    for id in &targets {
+        match verify_one(&pm, &sh, dir, id) {
+            Ok(()) => println!("{id}: ok"),
+            Err(e) => {
+                println!("{id}: FAILED: {e}");
+                failed += 1;
+            }
+        }
+    }
+    if failed > 0 {
+        return Err(miette!("{failed} of {} toolchain(s) failed", targets.len()));
+    }
+    Ok(())
+}
+
+/// Resolve `id`'s definition and health-check it; a missing def is a failure.
+fn verify_one(pm: &Apk, sh: &Sh, dir: &Path, id: &str) -> Result<()> {
+    let tc = toolchains::resolve(dir, id)?
+        .ok_or_else(|| miette!("not registered"))?;
+    toolchains::verify(pm, sh, &tc)
+}
+
 /// List registered toolchains, each annotated with whether it is installed.
 pub fn list(dir: &Path, ledger_path: &Path) -> Result<()> {
     let ids = toolchains::list(dir)?;

@@ -16,8 +16,6 @@ pub trait PackageManager {
     fn del(&self, packages: &[String]) -> Result<()>;
     /// Whether `package` is currently installed (`apk info -e`). Used by
     /// `verify` and by the dependency-gated purge.
-    // wired in by `toolchain install`/`verify` (next increment)
-    #[allow(dead_code)]
     fn is_installed(&self, package: &str) -> Result<bool>;
 
     /// Install `packages` and record them as directly-installed. Records only

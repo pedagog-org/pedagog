@@ -132,6 +132,27 @@ pub fn install(
     Ok(InstallOutcome::Installed)
 }
 
+/// Health-check a resolved toolchain: confirm its `[install].pkg` are installed,
+/// then run its `[install].verify` commands. Read-only — it touches neither
+/// packages nor the ledger. Errors on the first problem (missing packages, or a
+/// failed verify command).
+pub fn verify(pm: &impl PackageManager, sh: &impl Shell, tc: &Toolchain) -> Result<()> {
+    let mut missing = Vec::new();
+    for pkg in &tc.install.pkg {
+        if !pm.is_installed(pkg)? {
+            missing.push(pkg.as_str());
+        }
+    }
+    if !missing.is_empty() {
+        return Err(miette!("missing packages: {}", missing.join(", ")));
+    }
+    for cmd in &tc.install.verify {
+        println!("  $ {cmd}");
+        sh.run(cmd)?;
+    }
+    Ok(())
+}
+
 /// List the ids of every registered definition, sorted. A missing toolchains
 /// directory is empty.
 pub fn list(dir: &Path) -> Result<Vec<String>> {
@@ -166,10 +187,11 @@ mod tests {
 
     const DEF: &str = "version = \"0.1.0\"\nid = \"rust\"\n";
 
-    /// Records the packages it was asked to add; never shells out.
+    /// Records the packages it was asked to add; reports `present` as installed.
     #[derive(Default)]
     struct FakePm {
         added: RefCell<Vec<String>>,
+        present: Vec<String>,
     }
 
     impl PackageManager for FakePm {
@@ -180,8 +202,8 @@ mod tests {
         fn del(&self, _packages: &[String]) -> Result<()> {
             Ok(())
         }
-        fn is_installed(&self, _package: &str) -> Result<bool> {
-            Ok(false)
+        fn is_installed(&self, package: &str) -> Result<bool> {
+            Ok(self.present.iter().any(|p| p == package))
         }
     }
 
@@ -378,5 +400,41 @@ mod tests {
 
         assert!(install(&pm, &sh, &mut led, &def(RUST)).is_err());
         assert!(!led.is_installed("rust"));
+    }
+
+    #[test]
+    fn verify_passes_when_pkgs_present_and_checks_pass() {
+        let pm = FakePm {
+            present: strs(&["curl", "gcc"]),
+            ..Default::default()
+        };
+        let sh = FakeSh::default();
+        verify(&pm, &sh, &def(RUST)).unwrap();
+        assert_eq!(*sh.ran.borrow(), strs(&["check"]));
+    }
+
+    #[test]
+    fn verify_fails_on_missing_pkg_without_running_checks() {
+        let pm = FakePm {
+            present: strs(&["curl"]), // gcc missing
+            ..Default::default()
+        };
+        let sh = FakeSh::default();
+        assert!(verify(&pm, &sh, &def(RUST)).is_err());
+        // Bailed before running any verify command.
+        assert!(sh.ran.borrow().is_empty());
+    }
+
+    #[test]
+    fn verify_fails_when_check_fails() {
+        let pm = FakePm {
+            present: strs(&["curl", "gcc"]),
+            ..Default::default()
+        };
+        let sh = FakeSh {
+            fail: strs(&["check"]),
+            ..Default::default()
+        };
+        assert!(verify(&pm, &sh, &def(RUST)).is_err());
     }
 }

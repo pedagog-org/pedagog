@@ -55,6 +55,20 @@ pub enum ToolchainCommand {
         #[arg(long, default_value = DEFAULT_LEDGER)]
         ledger: PathBuf,
     },
+    /// Health-check toolchains: confirm their packages are present and their
+    /// verify commands pass. Read-only.
+    Verify {
+        /// Toolchain ids to verify (omit with `--all`).
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        ids: Vec<String>,
+        /// Verify every installed toolchain.
+        #[arg(long, short)]
+        all: bool,
+        #[arg(long, default_value = DEFAULT_TOOLCHAINS)]
+        toolchains: PathBuf,
+        #[arg(long, default_value = DEFAULT_LEDGER)]
+        ledger: PathBuf,
+    },
     /// List registered toolchains and whether each is installed.
     List {
         #[arg(long, default_value = DEFAULT_TOOLCHAINS)]
@@ -86,6 +100,12 @@ impl ToolchainCommand {
                 toolchains,
                 ledger,
             } => ops::install(&targets, register, overwrite, &toolchains, &ledger),
+            ToolchainCommand::Verify {
+                ids,
+                all,
+                toolchains,
+                ledger,
+            } => ops::verify(&ids, all, &toolchains, &ledger),
             ToolchainCommand::List { toolchains, ledger } => ops::list(&toolchains, &ledger),
         }
     }
