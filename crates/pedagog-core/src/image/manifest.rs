@@ -1,16 +1,19 @@
-//! The versioned `pedagog.toml` manifest: load it and migrate any older schema
-//! version forward. Each schema version's types are grouped in its own module
-//! (`v0`, …); the latest is re-exported as the crate's manifest types.
+//! The versioned build manifest (`build.toml`): load it and migrate any older
+//! schema version forward. Each schema version's types are grouped in its own
+//! module (`v0`, …); the latest is re-exported as the crate's manifest types.
 
 use magic_migrate::TryMigrate;
 use std::str::FromStr;
 
 pub use v0::{Action, ImageConfig, Manifest, NetworkConfig, Rule};
 
+/// Canonical manifest location inside the image.
+pub const DEFAULT_MANIFEST: &str = "/pedagog/source/build.toml";
+
 impl FromStr for Manifest {
     type Err = ManifestError;
 
-    /// Parse a `pedagog.toml`, migrating any older schema version forward.
+    /// Parse a `build.toml`, migrating any older schema version forward.
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         match Manifest::try_from_str_migrations(input) {
             Some(result) => Ok(result?),

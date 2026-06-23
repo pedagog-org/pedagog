@@ -85,6 +85,51 @@ Constraints carried over from doc 09:
   **read-only (`0444`) = immutable**; instructor `register` writes `0644`. `register`/`unregister`
   refuse immutable defns; `list` flags each row's origin. One file per id → no shadowing.
 
+### B3 decisions — round 3 (redline; supersedes parts of rounds 1–2)
+
+- **Terminology flip.** "Registry" now means the **ledger** (`ledger.toml`) — the in-config record of
+  what's provisioned. The *directory of definition files* is the **toolchains directory**,
+  `/pedagog/config/toolchains/`. (Earlier docs called that dir "the registry"; that's gone.)
+- **Ledger renamed.** `/pedagog/config/build.toml` → **`/pedagog/config/ledger.toml`**; the core type
+  `BuildState` → **`Ledger`** (module `pedagog_core::image::ledger`).
+- **Ledger model = packages + toolchain install-state.** `additional_packages` plus `toolchains` as a
+  map of **id → installed** (tracks every *registered* toolchain and whether it is installed) — not a
+  bare list of installed ids. A toolchain's packages live **only in its def file**, never in the
+  ledger. (Supersedes round 2's "ledger stores ids only".)
+- **No mutability.** Drop the immutable/base-vs-custom (`0444`/`0644`) concept entirely. Toolchains
+  have no mutability tracked. (Supersedes round 2's "base vs custom defns".)
+- **register / unregister.** `register <file> [--overwrite]` copies the def into the toolchains dir as
+  `<id>.toml`; refuses an already-registered id unless `--overwrite` (was `--force`). `unregister <id>
+  [--force]` deletes the def and drops the ledger entry; **refuses if the toolchain is installed unless
+  `--force`**.
+- **`pkg remove` gating shipped now.** `pkg remove [PKGS…] [--force]` resolves the **installed**
+  toolchains' defs from the toolchains dir and refuses to remove a package any of them depends on,
+  unless `--force`. Implemented in this increment (not deferred to B3b).
+- **`pkg installed`** still attributes toolchain-owned packages, e.g. `curl (python, rust)`, by
+  resolving installed toolchains' defs.
+- **Flag convention.** Any command that reads the **ledger** takes `--ledger` (default
+  `/pedagog/config/ledger.toml`); any command that reads the **toolchains dir** takes `--toolchains`
+  (default `/pedagog/config/toolchains`).
+
+### B3 decisions — round 4
+
+- **Ledger is versioned.** Like the manifest and toolchain def, the ledger carries a `version`
+  validated against `^0.1` (`v0` module + `magic_migrate`). Because it is also written and constructed
+  in-process, its `Default` stamps the current version (`0.1.0`) so a fresh ledger round-trips through
+  the gate.
+- **Toolchain id charset.** A toolchain `id` must be non-empty and contain only ASCII alphanumerics
+  plus `.`, `-`, `_`. Enforced both at parse time (on the def's `id` field) and at path-construction
+  time in the CLI — the latter because `id` becomes the `<id>.toml` filename, so the restriction also
+  prevents a raw id from traversing out of the toolchains dir.
+- **Default paths live in `pedagog-core`.** `DEFAULT_LEDGER`, `DEFAULT_TOOLCHAINS`, `DEFAULT_MANIFEST`,
+  and `DEFAULT_RULESET` are defined in core (path data, no I/O, so core stays pure) and re-exported by
+  the CLI, which keeps clap defaults pointing at one canonical definition.
+- **Manifest renamed to `build.toml`.** The instructor's manifest defaults to
+  `/pedagog/source/build.toml` (was `pedagog.toml`). Naming story: **`build.toml`** (declarative input)
+  → `pedagog image build` → **`ledger.toml`** (resolved state). (Note: `build.toml` was briefly the
+  ledger's filename earlier in this increment, before the ledger became `ledger.toml`; it is now the
+  manifest.)
+
 ## Open (to settle in design)
 
 - Declarative pruning in `build` (additive-only for v1?).

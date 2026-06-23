@@ -4,9 +4,25 @@
 //! re-exported.
 
 use magic_migrate::TryMigrate;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 pub use v0::{InstallPhase, Toolchain, UninstallPhase};
+
+/// Canonical directory of registered toolchain definitions inside the image.
+pub const DEFAULT_TOOLCHAINS: &str = "/pedagog/config/toolchains";
+
+/// Whether `c` is allowed in a toolchain id.
+fn is_id_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')
+}
+
+/// Whether `id` is a legal toolchain id: non-empty and only ASCII alphanumerics
+/// plus `.`, `-`, `_`. This also keeps an id safe to use as a `<id>.toml`
+/// filename — it admits no path separators, so it cannot traverse directories.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(is_id_char)
+}
 
 impl FromStr for Toolchain {
     type Err = ToolchainError;
@@ -30,6 +46,37 @@ pub enum ToolchainError {
     Migrate(#[from] magic_migrate::MigrateError),
 }
 
+/// Map each package to the toolchains that bring it in. `direct` packages
+/// (installed without a toolchain) appear with an empty owner set; a package a
+/// toolchain's `[install].pkg` lists records that toolchain's id. The owner set
+/// of a package is exactly the toolchains that would break if it were removed.
+/// Backs `pkg installed` (the listing) and `pkg remove` (the dependency gate).
+pub fn package_dependencies<'a>(
+    direct: &'a [String],
+    toolchains: &'a [Toolchain],
+) -> BTreeMap<&'a str, BTreeSet<&'a str>> {
+    let mut owners: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for pkg in direct {
+        owners.entry(pkg).or_default();
+    }
+    for tc in toolchains {
+        for pkg in &tc.install.pkg {
+            owners.entry(pkg).or_default().insert(&tc.id);
+        }
+    }
+    owners
+}
+
+/// The toolchains whose install brings in `pkg` — i.e. those that would break if
+/// it were removed. The `'static` empty `direct` keeps the result borrowed from
+/// `toolchains` (so it outlives the call). Backs `pkg remove`'s dependency gate.
+pub fn toolchains_requiring<'a>(pkg: &str, toolchains: &'a [Toolchain]) -> BTreeSet<&'a str> {
+    const NONE: &[String] = &[];
+    package_dependencies(NONE, toolchains)
+        .remove(pkg)
+        .unwrap_or_default()
+}
+
 /// Schema version 0.
 mod v0 {
     use magic_migrate::TryMigrate;
@@ -45,6 +92,7 @@ mod v0 {
     pub struct Toolchain {
         #[serde(deserialize_with = "deserialize_version")]
         pub version: Version,
+        #[serde(deserialize_with = "deserialize_id")]
         pub id: String,
         #[serde(default)]
         pub description: Option<String>,
@@ -98,6 +146,26 @@ mod v0 {
                 "toolchain version {version} is not supported (expected ^0.1)"
             )))
         }
+    }
+
+    /// Validate the id charset at parse time: non-empty, ASCII alphanumeric plus
+    /// `.`, `-`, `_`.
+    fn deserialize_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+
+        let id = String::deserialize(deserializer)?;
+        if id.is_empty() {
+            return Err(D::Error::custom("toolchain id must not be empty"));
+        }
+        if let Some(bad) = id.chars().find(|&c| !super::is_id_char(c)) {
+            return Err(D::Error::custom(format!(
+                "toolchain id '{id}' contains invalid character '{bad}' (allowed: alphanumeric, '.', '-', '_')"
+            )));
+        }
+        Ok(id)
     }
 }
 
@@ -174,5 +242,56 @@ cmd = ["rm -rf /opt/rust"]
     #[test]
     fn rejects_unknown_field() {
         assert!(parse("version = \"0.1.0\"\nid = \"x\"\nbogus = true\n").is_err());
+    }
+
+    #[test]
+    fn accepts_id_with_allowed_punctuation() {
+        let tc = parse("version = \"0.1.0\"\nid = \"python-3.11_x\"\n").unwrap();
+        assert_eq!(tc.id, "python-3.11_x");
+    }
+
+    #[test]
+    fn rejects_id_with_path_separator() {
+        assert!(parse("version = \"0.1.0\"\nid = \"../evil\"\n").is_err());
+    }
+
+    #[test]
+    fn rejects_id_with_space() {
+        assert!(parse("version = \"0.1.0\"\nid = \"bad id\"\n").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_id() {
+        assert!(parse("version = \"0.1.0\"\nid = \"\"\n").is_err());
+    }
+
+    #[test]
+    fn package_dependencies_attributes_owners() {
+        let rust = parse(RUST).unwrap();
+        let jq = parse("version = \"0.1.0\"\nid = \"jq\"\n[install]\npkg = [\"jq\", \"curl\"]\n").unwrap();
+        let direct = vec!["ripgrep".to_owned()];
+        let installed = [rust, jq];
+        let deps = package_dependencies(&direct, &installed);
+
+        // Directly-installed only: present, no owners.
+        assert!(deps["ripgrep"].is_empty());
+        // Shared across toolchains: both owners.
+        assert_eq!(deps["curl"], BTreeSet::from(["jq", "rust"]));
+        // Single owner.
+        assert_eq!(deps["gcc"], BTreeSet::from(["rust"]));
+        // Not installed anywhere: absent.
+        assert!(!deps.contains_key("python"));
+    }
+
+    #[test]
+    fn toolchains_requiring_finds_dependents() {
+        let rust = parse(RUST).unwrap();
+        let jq = parse("version = \"0.1.0\"\nid = \"jq\"\n[install]\npkg = [\"jq\"]\n").unwrap();
+        let installed = vec![rust, jq];
+        assert_eq!(
+            toolchains_requiring("curl", &installed),
+            BTreeSet::from(["rust"])
+        );
+        assert!(toolchains_requiring("ripgrep", &installed).is_empty());
     }
 }

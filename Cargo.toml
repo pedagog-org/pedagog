@@ -24,6 +24,7 @@ toml = "0.8"
 toml_edit = "0.22"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tempfile = "3"
 
 # No panics in production paths. Allowed in tests via clippy.toml.
 [workspace.lints.clippy]

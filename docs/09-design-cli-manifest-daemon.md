@@ -1,4 +1,4 @@
-# 09 — Design (Draft): `pedagog` CLI, `pedagog.toml` Manifest, and Minimal Daemon
+# 09 — Design (Draft): `pedagog` CLI, `build.toml` Manifest, and Minimal Daemon
 
 > **Date:** 2026-06-21
 > **Status:** **Draft** — agreed direction; redline welcome. Implements
@@ -12,7 +12,7 @@
 Three trust domains in the container: **student** (untrusted editor), **pedagog** (trusted broker
 daemon), **instructor** (owns the source tree). The `pedagog` binary exposes **admin/authoring verbs
 under `pedagog image …`**, runnable **at build time or by an instructor over SSH** — timing-agnostic
-and **idempotent**; they just have to complete before students log in. `pedagog.toml` is the
+and **idempotent**; they just have to complete before students log in. `build.toml` is the
 **declarative** source; `pedagog image build` orchestrates the **imperative** primitives from it.
 
 All `pedagog image …` verbs are **instructor/root-only** — never executable by `student`. That is
@@ -21,12 +21,12 @@ what lets us keep the package manager in the image (for debugging) without handi
 ## 2. Pipeline & boot
 
 ```
-instructor: pedagog.toml + seeds
+instructor: build.toml + seeds
         │  pedagog image build  (host or in-container; idempotent)
         ▼
 per-assignment image:
   /pedagog/source/*            instructor inputs (manifest + seeds)
-  /pedagog/config/*            resolved state: toolchain defs, build.toml, nftables.conf
+  /pedagog/config/*            resolved state: toolchain defs, ledger.toml, nftables.conf
   toolchains + pkgs installed
   pedagog runit service registered
   pedagog binaries baked in
@@ -51,15 +51,15 @@ are **persisted as a file** and loaded each boot — exactly like `/etc/nftables
 
 | Path | Owner / mode | Contents |
 |---|---|---|
-| `/pedagog/source/` | `instructor:pedagog` `0750` | Instructor inputs: `pedagog.toml` + seed files (student: none) |
+| `/pedagog/source/` | `instructor:pedagog` `0750` | Instructor inputs: `build.toml` + seed files (student: none) |
 | `/pedagog/config/` | `root:pedagog` `0750` | Pedagog-managed resolved state (student: none) |
-| `/pedagog/config/toolchain/` | `root:pedagog` | Registered toolchain definition TOMLs |
-| `/pedagog/config/build.toml` | `root:pedagog` | The registered build config (`build --info` prints this) |
+| `/pedagog/config/toolchains/` | `root:pedagog` | Registered toolchain definition TOMLs |
+| `/pedagog/config/ledger.toml` | `root:pedagog` | The build ledger (`build --info` prints this) |
 | `/pedagog/config/nftables.conf` | `root:pedagog` | Compiled **egress** ruleset, loaded at boot |
 | `/pedagog/student/` | `student:pedagogc` `2770` | Student home (named volume at runtime); group-shared so an instructor session (uid 1003) can open it |
 | `/pedagog/staging/` | `pedagog:pedagog` `0700` | Submission packaging |
 
-## 4. `pedagog.toml` manifest
+## 4. `build.toml` manifest
 
 Declarative source of truth. **Versioned**: a top-level `version` is a full semver string, validated
 against the caret requirement `^0.1` (`>= 0.1.0, < 0.2.0`) — minor/patch are backward-compatible
@@ -104,10 +104,10 @@ Missing file / `[network]` / parse error ⇒ **fail closed to `default`**.
 
 | Verb | Notes |
 |---|---|
-| `build [CONFIG=/pedagog/source/pedagog.toml]` | Declarative; orchestrates the primitives from the manifest. `--info` prints the registered `build.toml`. |
+| `build [CONFIG=/pedagog/source/build.toml]` | Declarative; orchestrates the primitives from the manifest. `--info` prints the build ledger (`ledger.toml`). |
 | `toolchain list [-a/--all \| -i/--installed (default) \| -u/--uninstalled]` | |
 | `toolchain install [TOOLCHAINS…]` / `remove [TOOLCHAINS…]` | `uninstall` = alias of `remove` |
-| `toolchain register [DEFN.toml…]` | Copies def into `/pedagog/config/toolchain/` |
+| `toolchain register [DEFN.toml…]` | Copies def into `/pedagog/config/toolchains/` |
 | `toolchain unregister [PATH\|ID…]` | Removes the registered def file (by path or toolchain id) |
 | `pkg installed` / `install [PKGS…]` / `remove [PKGS…]` | Wraps `apk`; tracks what it installed. (renamed from `apt`) |
 | `daemon init` | Registers the runit service (`/etc/service/pedagog/`). No `start`/`stop` — runit owns lifecycle. |
@@ -115,16 +115,16 @@ Missing file / `[network]` / parse error ⇒ **fail closed to `default`**.
 | `network convert [--config C]` | Rewrite the manifest's `[network]` into an equivalent `custom` rule list |
 | `network load [--config C] [--out O] [--compile-only]` | Render the manifest and **apply it live** (`nft -f -`); `--compile-only` instead **writes** `nftables.conf` |
 
-There are **no `rules add/remove` verbs**: the instructor edits `pedagog.toml` directly in the editor
+There are **no `rules add/remove` verbs**: the instructor edits `build.toml` directly in the editor
 (using `convert` first if they need an ordered list), then `load`s it. The live apply is `nft -f -`;
 the boot load is `nft -f /pedagog/config/nftables.conf` in `/etc/runit/1`.
 
 ### 5.1 `convert` — manifest → custom
 
-- Rewrites only the `[network]` table of `pedagog.toml` via **`toml_edit`** (other tables, comments,
+- Rewrites only the `[network]` table of `build.toml` via **`toml_edit`** (other tables, comments,
   and ordering preserved), setting `mode = "custom"` with the `lower()`'d rules. The result is
   **re-parsed into the typed `Manifest` to validate before the file is written** (atomic temp+rename),
-  so we never persist a manifest that won't load. The manifest (`/pedagog/source/pedagog.toml`) is
+  so we never persist a manifest that won't load. The manifest (`/pedagog/source/build.toml`) is
   instructor-owned, so this works at build time *and* in an instructor session.
 - Semantics are preserved: `default`→empty rules; `block`→its `allow` list as `accept` rules;
   `custom`→no-op. **`open`** is the one verbose case — its terminal *accept* is expressed in a

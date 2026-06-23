@@ -1,0 +1,68 @@
+//! `pedagog image toolchain …` — clap surface for managing toolchain
+//! definitions; the logic lives in [`ops`].
+
+use std::path::PathBuf;
+
+use clap::Subcommand;
+use miette::Result;
+
+use crate::image::ledger::DEFAULT_LEDGER;
+use crate::image::toolchains::DEFAULT_TOOLCHAINS;
+
+mod ops;
+
+#[derive(Debug, Subcommand)]
+pub enum ToolchainCommand {
+    /// Register a toolchain definition, copying it into the toolchains directory.
+    Register {
+        /// Path to the toolchain definition (`<id>.toml`).
+        file: PathBuf,
+        /// Replace an already-registered toolchain.
+        #[arg(long)]
+        overwrite: bool,
+        #[arg(long, default_value = DEFAULT_TOOLCHAINS)]
+        toolchains: PathBuf,
+        #[arg(long, default_value = DEFAULT_LEDGER)]
+        ledger: PathBuf,
+    },
+    /// Unregister a toolchain, deleting its definition. Refused if it is installed
+    /// unless `--force`.
+    Unregister {
+        /// Toolchain id.
+        id: String,
+        /// Unregister even if it is installed.
+        #[arg(long)]
+        force: bool,
+        #[arg(long, default_value = DEFAULT_TOOLCHAINS)]
+        toolchains: PathBuf,
+        #[arg(long, default_value = DEFAULT_LEDGER)]
+        ledger: PathBuf,
+    },
+    /// List registered toolchains and whether each is installed.
+    List {
+        #[arg(long, default_value = DEFAULT_TOOLCHAINS)]
+        toolchains: PathBuf,
+        #[arg(long, default_value = DEFAULT_LEDGER)]
+        ledger: PathBuf,
+    },
+}
+
+impl ToolchainCommand {
+    pub fn run(self) -> Result<()> {
+        match self {
+            ToolchainCommand::Register {
+                file,
+                overwrite,
+                toolchains,
+                ledger,
+            } => ops::register(&file, overwrite, &toolchains, &ledger),
+            ToolchainCommand::Unregister {
+                id,
+                force,
+                toolchains,
+                ledger,
+            } => ops::unregister(&id, force, &toolchains, &ledger),
+            ToolchainCommand::List { toolchains, ledger } => ops::list(&toolchains, &ledger),
+        }
+    }
+}

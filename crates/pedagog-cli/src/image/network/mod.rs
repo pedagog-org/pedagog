@@ -5,14 +5,10 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 use miette::Result;
+use pedagog_core::image::manifest::DEFAULT_MANIFEST;
+use pedagog_core::image::nft::DEFAULT_RULESET;
 
 mod ops;
-
-/// Default manifest location inside the image.
-const DEFAULT_MANIFEST: &str = "/pedagog/source/pedagog.toml";
-
-/// Default location of the compiled ruleset, loaded at boot by `nft -f`.
-const DEFAULT_RULESET: &str = "/pedagog/config/nftables.conf";
 
 #[derive(Debug, Subcommand)]
 pub enum NetworkCommand {

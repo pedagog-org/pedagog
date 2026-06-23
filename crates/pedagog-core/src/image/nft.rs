@@ -4,6 +4,9 @@ use super::ids::{PEDAGOG_UID, STUDENT_UID};
 use super::manifest::{Action, NetworkConfig};
 use ipnet::IpNet;
 
+/// Canonical location of the compiled ruleset, loaded at boot by `nft -f`.
+pub const DEFAULT_RULESET: &str = "/pedagog/config/nftables.conf";
+
 /// Render the nftables script that enforces `config` for the student uid.
 ///
 /// Loopback and the pedagog broker always keep egress; only the student uid is
