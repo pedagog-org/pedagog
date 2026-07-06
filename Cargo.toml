@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+version = "0.0.0"
+publish = false
+
+# Shared dependency versions (referenced by crates as `dep.workspace = true` when
+# code actually needs them).
+[workspace.dependencies]
+
+
+# No panics in production paths. Allowed in tests via clippy.toml.
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
