@@ -1,0 +1,10 @@
+[package]
+name = "pedagog-web"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

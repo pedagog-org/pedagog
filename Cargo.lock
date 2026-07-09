@@ -3,5 +3,29 @@
 version = 4
 
 [[package]]
+name = "pedagog-api"
+version = "0.0.0"
+
+[[package]]
+name = "pedagog-cli"
+version = "0.0.0"
+
+[[package]]
 name = "pedagog-core"
+version = "0.0.0"
+
+[[package]]
+name = "pedagog-daemon"
+version = "0.0.0"
+
+[[package]]
+name = "pedagog-jobs"
+version = "0.0.0"
+
+[[package]]
+name = "pedagog-k8s"
+version = "0.0.0"
+
+[[package]]
+name = "pedagog-web"
 version = "0.0.0"
