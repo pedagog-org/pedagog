@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespaces/pedagog-system.yaml
+  - namespaces/pedagog-data.yaml
+  - cert-manager/
+  - traefik/rbac.yaml
+  - traefik/deployment.yaml
+  - traefik/service.yaml
+  - traefik/ingress-class.yaml
+  - postgres/deployment.yaml
+  - postgres/service.yaml
+  - postgres/pvc.yaml
+  - registry/deployment.yaml
+  - registry/service.yaml
+  - registry/pvc.yaml
+  - registry/network-policy.yaml

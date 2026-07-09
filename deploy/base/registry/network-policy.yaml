@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: registry
+  namespace: pedagog-data
+spec:
+  podSelector:
+    matchLabels:
+      app: registry
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: pedagog-system
+      ports:
+        - protocol: TCP
+          port: 5000
+    # Node-to-pod traffic via MetalLB LoadBalancer originates from the host
+    # network and is typically not subject to CNI NetworkPolicy. Isolation for
+    # k3s image pulls relies on MetalLB L2 being confined to the local network.

@@ -185,10 +185,80 @@ deploy/
     MetalLB IP pool, ClusterIssuer for `dev.pedagog.app`).
 11. Write `overlays/prod/kustomization.yaml` and patches (storage sizes, replica counts,
     MetalLB IP pool, ClusterIssuer for `pedagog.app`).
-12. Document setup steps in `docs/SETUP.md`:
-    - k3s install command (disabled Traefik + local-storage, pinned version)
-    - Pre-deploy Secret creation (all secrets created by hand before first deploy):
-      - Cloudflare API token (`pedagog-system`)
-      - Postgres credentials (`pedagog-data`)
-    - `registries.yaml` config on each node
-13. Validate: `kubectl apply -k deploy/overlays/dev` on a local k3s node.
+12. Document setup steps in `docs/SETUP.md` (see Deploy Order below).
+
+---
+
+## Deploy Order
+
+Documented in `docs/SETUP.md` and followed on every fresh cluster.
+
+### Phase 0 — k3s install
+
+```sh
+# Install k3s with built-in Traefik and local-path storage disabled
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=<pinned> sh -s - \
+  --disable=traefik \
+  --disable=local-storage
+```
+
+Repeat on each node (agent nodes join the server via `K3S_URL` + `K3S_TOKEN`).
+
+Configure `/etc/rancher/k3s/registries.yaml` on each node once the registry
+LoadBalancer IP is known (after Phase 2).
+
+### Phase 1 — Secrets (before any workloads)
+
+```sh
+# Cloudflare API token for cert-manager DNS-01
+kubectl create secret generic cloudflare-api-token \
+  --from-literal=api-token=<token> \
+  -n pedagog-system
+
+# Postgres credentials
+kubectl create secret generic postgres-credentials \
+  --from-literal=password=<password> \
+  -n pedagog-data
+```
+
+### Phase 2 — Storage + load balancing (CRDs + controllers first)
+
+```sh
+kubectl apply -k deploy/base/longhorn
+kubectl wait --for=condition=ready pod -l app=longhorn-manager \
+  -n longhorn-system --timeout=300s
+
+kubectl apply -k deploy/base/metallb
+kubectl wait --for=condition=ready pod -l app=metallb \
+  -n metallb-system --timeout=120s
+```
+
+### Phase 3 — Platform infrastructure
+
+```sh
+# First pass: registers CRDs (cert-manager, Traefik)
+kubectl apply -k deploy/overlays/dev
+
+# Second pass: applies resources that depend on those CRDs (ClusterIssuer, IngressClass)
+kubectl apply -k deploy/overlays/dev
+```
+
+---
+
+## Verification Checklist
+
+After deploy, confirm each component is healthy:
+
+- **Longhorn** — Longhorn UI accessible; dashboard shows all nodes healthy and storage
+  available
+- **MetalLB** — `kubectl get svc -A` shows `LoadBalancer` services with assigned
+  external IPs (not `<pending>`)
+- **Traefik** — Traefik pod running in `pedagog-system`; LoadBalancer IP assigned on
+  ports 80/443; a test `Ingress` routes to a dummy pod
+- **cert-manager** — `ClusterIssuer` shows `Ready: True`; a test `Certificate`
+  resource issues successfully via DNS-01 (check with `kubectl describe certificate`)
+- **Postgres** — pod running in `pedagog-data`; reachable from within cluster via
+  `kubectl exec` + `psql`
+- **Registry** — pod running in `pedagog-data`; LoadBalancer IP assigned; a test
+  `docker push` from within the cluster succeeds; a push from outside the cluster is
+  rejected by the NetworkPolicy
