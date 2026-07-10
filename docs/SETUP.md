@@ -211,23 +211,37 @@ kubectl get svc registry-service -n pedagog-data
 - **Dev:** Klipper assigns the node's own IP (e.g. `192.168.1.23`).
 - **Prod:** MetalLB assigns an IP from the pool configured in Phase 2.
 
-On **each k3s node**, create or update `/etc/rancher/k3s/registries.yaml`:
+On **each k3s node**, create or update `/etc/rancher/k3s/registries.yaml`,
+substituting the actual IP:
 
 ```yaml
 mirrors:
   "<registry-ip>:5000":
     endpoint:
       - "http://<registry-ip>:5000"
+configs:
+  "<registry-ip>:5000":
+    tls:
+      insecure_skip_verify: true
 ```
 
 Then restart k3s on each node:
 
 ```sh
 # server node
-systemctl restart k3s
+sudo systemctl restart k3s
 
 # agent nodes
-systemctl restart k3s-agent
+sudo systemctl restart k3s-agent
+```
+
+To push images to the registry from the host machine, configure podman to treat it as
+insecure. Create `/etc/containers/registries.conf.d/pedagog-registry.conf`:
+
+```toml
+[[registry]]
+location = "<registry-ip>:5000"
+insecure = true
 ```
 
 ---
