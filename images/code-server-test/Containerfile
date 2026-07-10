@@ -1,0 +1,45 @@
+FROM ubuntu:22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Install code-server from the vendored .deb, then remove the package file and apt cache.
+COPY code-server.deb /tmp/code-server.deb
+RUN apt-get update \
+    && apt-get install -y /tmp/code-server.deb \
+    && rm /tmp/code-server.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create a locked-down student user with no login shell and a workspace directory.
+RUN useradd -m -s /usr/sbin/nologin student \
+    && mkdir -p /home/student/workspace \
+    && chown -R student:student /home/student
+
+# Create the code-server data directories so code-server doesn't recreate them as root.
+RUN mkdir -p /home/student/.local/share/code-server/Machine \
+    && mkdir -p /home/student/.local/share/code-server/extensions \
+    && mkdir -p /home/student/.local/share/code-server/User \
+    && chown -R student:student /home/student/.local
+
+# Machine-scoped settings: UX defaults not covered by policy.
+COPY --chown=student:student machine-settings.json /home/student/.local/share/code-server/Machine/settings.json
+
+# Policy file: enforces extension allowlist, disables AI features, telemetry, and updates.
+RUN mkdir -p /etc/vscode
+COPY policy.json /etc/vscode/policy.json
+
+# Remove built-in extensions that are not needed and increase attack surface.
+RUN for ext in tunnel-forwarding simple-browser github github-authentication copilot terminal-suggest; do \
+      rm -rf "/usr/lib/code-server/lib/vscode/extensions/${ext}"; \
+    done
+
+EXPOSE 8080
+
+USER student
+ENTRYPOINT ["code-server", \
+    "--bind-addr", "0.0.0.0:8080", \
+    "--auth", "none", \
+    "--disable-file-downloads", \
+    "--disable-file-uploads", \
+    "--disable-update-check", \
+    "--disable-workspace-trust", \
+    "/home/student/workspace"]

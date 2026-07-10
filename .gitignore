@@ -1,5 +1,6 @@
 /target
 .env
+*.deb
 
 
 # Added by cargo
