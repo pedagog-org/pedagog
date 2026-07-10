@@ -4,7 +4,7 @@
 
 Pedagog is a multi-tenant programming assignment and assessment platform for universities. Instructors define development environments, test suites, and submission policies in a YAML file. Students interact with assignments through a Secure Exam Browser (SEB), either via an ephemeral code-server session or by uploading files for automated testing.
 
-Two assignment modes:
+Two assignment platforms:
 
 - **Interactive** — student gets an ephemeral container with code-server, accessed through SEB. Long-lived for the duration of the exam window.
 - **Submission-only** — student uploads files or an archive. Platform unpacks, builds, and runs the test suite. No interactive session.
@@ -48,7 +48,7 @@ Instructors submit an assignment as a TGZ archive containing:
 
 ```yaml
 name: pointers-and-memory
-mode: interactive          # interactive | submission
+platform: interactive      # interactive | submission
 
 environment:
   toolchains:
@@ -56,13 +56,12 @@ environment:
       version: "13"
       options:
         std: "17"
-      addons: [gdb, valgrind]
+      addons: [gdb:14, valgrind:3]
   editor:                  # interactive mode only
-    marketplace: false     # disables the VS Code extension marketplace
+    terminal: true         # default true; false sets student shell to /usr/sbin/nologin
     extensions:
-      install: [cpptools]  # pre-installed at image build time
-      lock: true           # prevents student from adding or removing extensions
-      allow: [vim]         # student may install; only meaningful if marketplace: true
+      install: [cpptools]        # pre-installed at image build time; always in allowlist
+      allow: [vim]               # in allowlist only; student may install from marketplace
   network:                 # build-time only — runtime policy is managed in the platform
     egress: deny
     allow:
@@ -181,19 +180,95 @@ Configured in `assignment.results.visibility`:
 
 Building happens in two stages:
 
-1. **Base image** — platform-managed. Contains the OS, code-server, and the in-container daemon. Rebuilt by platform operators on updates. Defined in `images/base/Containerfile`.
-2. **Instructor layer** — built immediately when the instructor uploads the assignment archive. Installs toolchains, addons, and locked extensions declared in `assignment.yml`. The solution is run against the test suite at this step to validate the assignment before any student sees it. Build-time network policy from the YAML is applied during this step only.
+1. **OS base image** — platform-managed. Contains the OS and any platform-level configuration. Built by `hammer build-os <os-id>` and pushed to the cluster registry (e.g. `pedagog/ubuntu:22`). Rebuilt by platform operators on updates.
+2. **Instructor image** — built when the instructor uploads the assignment archive. Starts FROM the OS base image; installs toolchains, addons, platform components (code-server for interactive), and locked extensions declared in `assignment.yml`. The solution is run against the test suite at this step to validate the assignment. Build-time network policy is applied during this step only.
+
+All builds run in-cluster via **Kaniko** — no Docker daemon required. `hammer` generates the Containerfile from resolved recipes and submits a Kubernetes Job.
+
+### `hammer` — Build Tool
+
+`hammer` is a CLI tool (`crates/hammer/`) that owns the entire image build pipeline.
+
+**Recipe files** — YAML definitions for OS definitions, toolchains, and platforms:
+
+```text
+crates/hammer/
+  os/
+    ubuntu-22.yaml
+  toolchains/
+    ubuntu-22/
+      gcc/13.yaml
+      gdb/14.yaml
+      valgrind/3.yaml
+      python/3.12.yaml
+      rust/1.79.yaml
+      nodejs/22.yaml
+  platforms/
+    ubuntu-22/
+      interactive.yaml
+      submission.yaml
+      multi-submission.yaml
+```
+
+Default recipes are embedded in the `hammer` binary at compile time and extracted read-only to `/etc/hammer/` before any build. Instructors may specify additional toolchain search paths in `assignment.yml`; these are searched before the defaults.
+
+**OS definition** (`os/ubuntu-22.yaml`):
+```yaml
+id: ubuntu-22
+upstream: ubuntu:22.04      # base image for os builds
+image: pedagog/ubuntu:22    # tag pushed to cluster registry
+pkg_manager: apt
+```
+
+**Toolchain recipe** (`toolchains/ubuntu-22/gcc/13.yaml`):
+```yaml
+id: gcc
+version: "13"
+os: ubuntu-22
+steps:
+  - name: Install gcc 13
+    packages:
+      - gcc-13
+      - g++-13
+  - name: Set as default compiler
+    run:
+      - update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
+addons:
+  - gdb:14
+  - valgrind:3
+```
+
+Addons reference other toolchain IDs with an optional version (`id:version`), resolved using the same search paths. Omitting the version errors if multiple version files exist.
+
+**Platform recipe** (`platforms/ubuntu-22/interactive.yaml`):
+```yaml
+id: interactive
+os: ubuntu-22
+steps:
+  - name: Install code-server
+    run:
+      - ...
+```
+
+Platforms are fixed by the system (`interactive`, `submission`, `multi-submission`). Custom platforms are not supported.
+
+**Subcommands:**
+
+| Command | Description |
+| --- | --- |
+| `hammer plan <assignment.yml>` | Resolve recipes and print the ordered build plan without building |
+| `hammer build <assignment.yml>` | Submit a Kaniko job to build the instructor image |
+| `hammer build-os <os-id>` | Submit a Kaniko job to build a pedagog OS base image |
 
 ### Base Image Layout (in repo)
 
 ```text
 images/
   base/
-    Containerfile
     entrypoint.sh    # starts code-server + daemon, performs session handoff
 ```
 
-The daemon binary is copied into the image from the compiled Rust artifact at build time.
+The daemon binary is copied into the image from the compiled Rust artifact at build time. The Containerfile is generated by `hammer` from the OS definition and platform recipe — it is not a static file in the repo.
 
 Built images are stored in the cluster's internal registry using immutable version tags (e.g. `:v1`, `:v2`). The platform reference-counts active sessions per image version. Old versions with no active sessions are eligible for GC and removed by a background job; the latest version is always retained. The image version is recorded on each submission row in Postgres for audit purposes. The instructor layer is rebuilt if the assignment is updated (subject to the update rules above).
 
@@ -395,7 +470,7 @@ crates/
   api/      # REST API server (axum)
   jobs/     # long-lived Jobs service
   daemon/   # in-container daemon
-  cli/      # pedagog CLI
+  hammer/   # build tool: recipe resolution, Containerfile generation, Kaniko job submission
   web/      # Leptos frontend
   k8s/      # shared Kubernetes client — wraps k8s API operations used by api and jobs
 ```
@@ -436,16 +511,6 @@ The frontend and API are independently deployable. The API is callable by any HT
 - Course creation and instructor assignment
 - Per-course resource limit management (separate limits for interactive and submission-only containers)
 - User and roster management
-
----
-
-## CLI
-
-An instructor-facing tool for local workflows:
-
-- Package an assignment directory into a TGZ archive
-- Upload an archive to the platform
-- Stream build logs for an assignment
 
 ---
 
