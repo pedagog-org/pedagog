@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use serde::Deserialize;
 
-use super::primitives::{deserialize_one_or_many, Id, MaybeVersioned, Step, Version};
+use super::primitives::{deserialize_one_or_many, Id, ParamVal, Step, Version, Versioned};
 
 #[derive(Debug, Deserialize)]
 pub struct ToolchainRecipe {
@@ -9,7 +11,9 @@ pub struct ToolchainRecipe {
     #[serde(deserialize_with = "deserialize_one_or_many")]
     pub os: Vec<Id>,
     #[serde(default)]
+    pub params: HashMap<String, ParamVal>,
+    #[serde(default)]
     pub steps: Vec<Step>,
     #[serde(default)]
-    pub addons: Vec<MaybeVersioned>,
+    pub addons: Vec<Versioned>,
 }
