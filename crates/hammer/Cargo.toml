@@ -11,5 +11,5 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
-serde = { workspace = true }
+pedagog-core = { path = "../core" }
 serde_yaml = { workspace = true }

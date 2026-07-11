@@ -12,6 +12,8 @@ publish = false
 [workspace.dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+regex = "1"
+semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 
