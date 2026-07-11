@@ -18,6 +18,8 @@ pub struct PlatformRecipe {
 #[serde(rename_all = "kebab-case")]
 pub enum PlatformKind {
     Interactive,
+    Submission,
+    MultiSubmission,
 }
 
 #[derive(Debug, Deserialize)]
