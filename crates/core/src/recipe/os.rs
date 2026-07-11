@@ -2,43 +2,38 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use super::primitives::{Id, Step};
+use super::primitives::{HookDef, Id, Step};
 
 #[derive(Debug, Deserialize)]
 pub struct OsDef {
     pub id: Id,
     pub upstream: String,
     pub image: String,
-    pub hooks: OsHooks,
+    pub hooks: OsHookDefs,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct OsHooks {
-    pub init: Hook,
-    pub pkg: PkgHooks,
-    pub network: NetworkHooks,
+pub struct OsHookDefs {
+    pub init: HookDef,
+    pub pkg: PkgHookDefs,
+    pub network: NetworkHookDefs,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct PkgHooks {
-    pub install: ParamHook,
-    pub remove: ParamHook,
+pub struct PkgHookDefs {
+    pub install: ParamHookDef,
+    pub remove: ParamHookDef,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct NetworkHooks {
-    pub transcribe: ParamHook,
-    pub enable: Hook,
-    pub disable: Hook,
+pub struct NetworkHookDefs {
+    pub transcribe: ParamHookDef,
+    pub enable: HookDef,
+    pub disable: HookDef,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Hook {
-    pub steps: Vec<Step>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ParamHook {
+pub struct ParamHookDef {
     pub params: Vec<Param>,
     pub steps: Vec<Step>,
 }

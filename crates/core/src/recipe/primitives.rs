@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -232,6 +233,25 @@ pub enum Step {
         name: Option<String>,
         run: Vec<String>,
     },
+}
+
+// ---- HookDef -------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct HookDef {
+    pub steps: Vec<Step>,
+}
+
+// ---- ParamVal ---------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum ParamVal {
+    Bool(bool),
+    Int(i64),
+    Str(String),
+    List(Vec<ParamVal>),
+    Map(HashMap<String, ParamVal>),
 }
 
 // ---- deserialize_one_or_many ------------------------------------------------
