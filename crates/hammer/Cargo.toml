@@ -8,8 +8,16 @@ publish.workspace = true
 name = "hammer"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
-anyhow = { workspace = true }
 clap = { workspace = true }
+console = "0.15"
+miette = { workspace = true }
 pedagog-core = { path = "../core" }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+walkdir = { workspace = true }

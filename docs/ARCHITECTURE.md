@@ -187,78 +187,141 @@ All builds run in-cluster via **Kaniko** — no Docker daemon required. `hammer`
 
 ### `hammer` — Build Tool
 
-`hammer` is a CLI tool (`crates/hammer/`) that owns the entire image build pipeline.
+`hammer` is a CLI tool (`crates/hammer/`) that resolves recipe YAML into Containerfiles. Recipes live in a separate `recipes` repo, pointed to via `HAMMER_RECIPES`.
 
-**Recipe files** — YAML definitions for OS definitions, toolchains, and platforms:
-
+**Recipe layout:**
 ```text
-crates/hammer/
+$HAMMER_RECIPES/
   os/
     ubuntu-22.yaml
   toolchains/
     ubuntu-22/
-      gcc/13.yaml
-      gdb/14.yaml
-      valgrind/3.yaml
-      python/3.12.yaml
-      rust/1.79.yaml
-      nodejs/22.yaml
+      gcc/12.yaml  13.yaml
+      clangd/14.yaml
+      ...
   platforms/
     ubuntu-22/
       interactive.yaml
       submission.yaml
       multi-submission.yaml
+  lib/
+    vend            ← shell function installed by OS init hook
+  ingredients/
+    .keep
+    platform/
+      interactive/
+        code-server.deb   ← gitignored; populated by `hammer vend`
+  examples/
+    pointers.yaml
 ```
-
-Default recipes are embedded in the `hammer` binary at compile time and extracted read-only to `/etc/hammer/` before any build. Instructors may specify additional toolchain search paths in `assignment.yml`; these are searched before the defaults.
-
-**OS definition** (`os/ubuntu-22.yaml`):
-```yaml
-id: ubuntu-22
-upstream: ubuntu:22.04      # base image for os builds
-image: pedagog/ubuntu:22    # tag pushed to cluster registry
-pkg_manager: apt
-```
-
-**Toolchain recipe** (`toolchains/ubuntu-22/gcc/13.yaml`):
-```yaml
-id: gcc
-version: "13"
-os: ubuntu-22
-steps:
-  - name: Install gcc 13
-    packages:
-      - gcc-13
-      - g++-13
-  - name: Set as default compiler
-    run:
-      - update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
-addons:
-  - gdb:14
-  - valgrind:3
-```
-
-Addons reference other toolchain IDs with an optional version (`id:version`), resolved using the same search paths. Omitting the version errors if multiple version files exist.
-
-**Platform recipe** (`platforms/ubuntu-22/interactive.yaml`):
-```yaml
-id: interactive
-os: ubuntu-22
-steps:
-  - name: Install code-server
-    run:
-      - ...
-```
-
-Platforms are fixed by the system (`interactive`, `submission`, `multi-submission`). Custom platforms are not supported.
 
 **Subcommands:**
 
 | Command | Description |
 | --- | --- |
-| `hammer plan <assignment.yml>` | Resolve recipes and print the ordered build plan without building |
-| `hammer build <assignment.yml>` | Submit a Kaniko job to build the instructor image |
-| `hammer build-os <os-id>` | Submit a Kaniko job to build a pedagog OS base image |
+| `hammer plan --assignment FILE` | Resolve recipes and print the build plan (default: human-readable) |
+| `hammer plan --os ID` | Print the base OS image plan |
+| `hammer plan --format containerfile` | Emit a Containerfile instead of the describe view |
+| `hammer vend` | Download `ingredients:` assets declared in recipes into `$HAMMER_RECIPES/ingredients/` |
+| `hammer vend --platform ID` | Vend a specific platform's assets only |
+
+Both `plan` and `vend` accept `--recipes DIR` (repeatable) to add recipe directories beyond `HAMMER_RECIPES`.
+
+### Building and Running a Container Locally
+
+1. **Vendor dev assets** (skip if pulling from source at build time is acceptable):
+   ```sh
+   HAMMER_RECIPES=/path/to/recipes hammer vend
+   ```
+
+2. **Generate the Containerfile:**
+   ```sh
+   HAMMER_RECIPES=/path/to/recipes hammer plan \
+     --assignment /path/to/recipes/examples/pointers.yaml \
+     --format containerfile \
+     --show-base \
+     --output Containerfile
+   ```
+
+3. **Build the image:**
+   ```sh
+   podman build \
+     -v /path/to/recipes:/pedagog/recipes:ro,z \
+     -v /path/to/recipes/ingredients:/pedagog/ingredients:ro,z \
+     -f Containerfile \
+     -t pedagog/pointers-and-memory:dev
+   ```
+
+   > **SELinux tip:** On SELinux-enforcing systems (Fedora, RHEL), bind mounts require
+   > the `,z` option to relabel the source for container access. Without it, the build
+   > step that reads from `/pedagog/recipes/lib/vend` will fail with "Permission denied".
+
+4. **Run the container:**
+   ```sh
+   podman run --rm -p 8080:8080 pedagog/pointers-and-memory:dev
+   ```
+
+### Ingredient Vendoring
+
+Platform and toolchain recipes may declare `ingredients:` — dev assets that are fetched
+locally to speed up or enable offline builds. Each entry is either a GitHub release asset
+or a plain URL:
+
+```yaml
+# platforms/ubuntu-22/interactive.yaml
+ingredients:
+  - output: code-server.deb
+    github:
+      repo: pedagog-org/code-server
+      asset: "code-server_*_arm64.deb"
+      tag: v4.127.0-pedagog.1
+```
+
+`hammer vend` downloads these into `$HAMMER_RECIPES/ingredients/<type>/<id>/`. The
+`ingredients/` directory is gitignored (except for `.keep`); only `lib/` and recipe
+YAMLs are tracked.
+
+Recipe steps check for the vendored file before falling back to the source URL:
+```bash
+if [ -f "$(vend code-server.deb)" ]; then
+  dpkg -i "$(vend code-server.deb)"
+else
+  curl -fsSL "https://..." -o /tmp/code-server.deb && dpkg -i /tmp/code-server.deb
+fi
+```
+
+### The `vend` Shell Function
+
+`vend <filename>` resolves a vendored asset path using two env vars that hammer emits as
+`ENV` instructions before each recipe section's steps:
+
+- `PEDAGOG_TYPE` — `os`, `platform`, or `toolchain`
+- `PEDAGOG_ID` — e.g. `ubuntu-22`, `interactive`, `gcc/12`
+
+The function lives at `$HAMMER_RECIPES/lib/vend` and is part of the OS init contract
+(see below). Every OS recipe's init hook must install it.
+
+### OS Init Contract
+
+Every OS recipe's `init` hook must fulfill these guarantees before control passes to
+platform or toolchain steps. Platform recipes rely on this contract and must not
+re-implement it.
+
+| Requirement | Details |
+| --- | --- |
+| **`student` user** | Created via `useradd -m -s /bin/bash student`. Home at `/home/student`. Shell may be replaced later by the platform (e.g. `/usr/sbin/nologin` when `terminal: false`). |
+| **Workspace directory** | `/home/student/workspace` exists and is owned `student:student`. |
+| **Home ownership** | Full `chown -R student:student /home/student` applied after directory creation. |
+| **`gosu`** | Installed. Used to drop privileges in entrypoint scripts. |
+| **`ca-certificates`** | Installed. Required for TLS in package downloads and API calls. |
+| **`curl`** | Installed. Used in platform build steps. |
+| **`vend` function** | `install -m755 /pedagog/recipes/lib/vend /usr/local/bin/vend` — makes `vend` available in all subsequent recipe steps. |
+
+Platform and toolchain steps must not depend on anything outside this contract and the
+package manager being functional.
+
+The Containerfile renderer always emits `USER student` immediately before `ENTRYPOINT`,
+so the entrypoint always runs as the student user.
 
 ### Base Image Layout (in repo)
 
