@@ -50,7 +50,7 @@ mod tests {
     #[test]
     fn ingredients_default_empty() {
         use crate::recipe::os::OsDef;
-        let yaml = "id: test-os\nupstream: ubuntu:22.04\nimage: test/os:1\nhooks:\n  init:\n    steps: []\n  pkg:\n    install:\n      steps: []\n    remove:\n      steps: []\n  network:\n    transcribe:\n      steps: []\n    enable:\n      steps: []\n    disable:\n      steps: []\n";
+        let yaml = "id: test-os\nupstream: ubuntu:22.04\nimage: test/os:1\nhooks:\n  build:\n    init: []\n  pkg:\n    install:\n      steps: []\n    remove:\n      steps: []\n  network:\n    transcribe:\n      steps: []\n    enable:\n      steps: []\n    disable:\n      steps: []\n";
         let def: OsDef = serde_yaml::from_str(yaml).unwrap();
         assert!(def.ingredients.is_empty());
     }

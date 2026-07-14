@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use super::primitives::{ArgHook, Ingredient, OsId};
+use super::primitives::{ArgHook, Ingredient, OsId, Step};
 
 // ---- Arg enums ---------------------------------------------------------------
 
@@ -38,9 +38,16 @@ pub struct OsDef {
 
 #[derive(Debug, Deserialize)]
 pub struct OsHookDefs {
-    pub init: ArgHook<NoArg>,
+    pub build: BuildHookDefs,
     pub pkg: PkgHookDefs,
     pub network: NetworkHookDefs,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BuildHookDefs {
+    pub init: Vec<Step>,
+    #[serde(default)]
+    pub cleanup: Vec<Step>,
 }
 
 #[derive(Debug, Deserialize)]
