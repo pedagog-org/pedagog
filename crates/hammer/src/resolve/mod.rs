@@ -19,7 +19,7 @@ pub fn resolve_base(os_id: &OsId, store: &RecipeStore) -> Result<BasePlan, Strin
     let empty_params = HashMap::new();
     let layers = vec![Layer {
         source: LayerSource::Os(os_id.clone()),
-        steps: resolve_steps(&os.hooks.init.steps, &os.hooks.pkg.install, &empty_params)?,
+        steps: resolve_steps(&os.hooks.build.init, &os.hooks.pkg.install, &empty_params)?,
     }];
 
     Ok(BasePlan {
@@ -55,14 +55,25 @@ pub fn resolve_platform(
     let id = Id::try_from(platform_kind.as_str().to_owned())
         .map_err(|e| format!("internal: {e}"))?;
 
+    let mut layers = Vec::new();
+
+    layers.push(Layer {
+        source: LayerSource::Platform(platform_kind.clone()),
+        steps: resolve_steps(&platform.hooks.build.steps, &os.hooks.pkg.install, &params)?,
+    });
+
+    if !os.hooks.build.cleanup.is_empty() {
+        layers.push(Layer {
+            source: LayerSource::BuildCleanup,
+            steps: resolve_steps(&os.hooks.build.cleanup, &os.hooks.pkg.install, &HashMap::new())?,
+        });
+    }
+
     Ok(BuildPlan {
         name: format!("{platform_kind} platform"),
         id,
         base_image: os.image.clone(),
-        layers: vec![Layer {
-            source: LayerSource::Platform(platform_kind.clone()),
-            steps: resolve_steps(&platform.hooks.build.steps, &os.hooks.pkg.install, &params)?,
-        }],
+        layers,
         entrypoint,
     })
 }
@@ -110,6 +121,13 @@ pub fn resolve_build(assignment: &AssignmentYaml, store: &RecipeStore) -> Result
         layers.push(Layer {
             source: LayerSource::Toolchain(tc_ref.clone()),
             steps: resolve_steps(&tc.steps, &os.hooks.pkg.install, &tc.params)?,
+        });
+    }
+
+    if !os.hooks.build.cleanup.is_empty() {
+        layers.push(Layer {
+            source: LayerSource::BuildCleanup,
+            steps: resolve_steps(&os.hooks.build.cleanup, &os.hooks.pkg.install, &HashMap::new())?,
         });
     }
 

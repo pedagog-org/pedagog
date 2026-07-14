@@ -53,7 +53,7 @@ fn run_plan(args: PlanArgs) -> Result<()> {
         miette!("failed to load {} recipe file(s):\n{}", messages.len(), messages.join("\n"))
     })?;
 
-    let renderer = make_renderer(&args.format, args.quiet);
+    let renderer = make_renderer(&args.format, args.registry.clone());
     let text = match (&args.assignment, &args.platform, &args.os) {
         (Some(path), None, None) => {
             let path = &expand_tilde(path.clone());
@@ -106,10 +106,10 @@ fn run_plan(args: PlanArgs) -> Result<()> {
     Ok(())
 }
 
-fn make_renderer(format: &Format, _quiet: bool) -> Box<dyn Renderer> {
+fn make_renderer(format: &Format, registry: Option<String>) -> Box<dyn Renderer> {
     match format {
         Format::Describe => Box::new(render::describe::Describe),
-        Format::Containerfile => Box::new(render::containerfile::Containerfile),
+        Format::Containerfile => Box::new(render::containerfile::Containerfile { registry }),
     }
 }
 

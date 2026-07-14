@@ -30,6 +30,7 @@ pub enum LayerSource {
     Os(OsId),
     Platform(PlatformKind),
     Toolchain(Versioned<ToolchainId>),
+    BuildCleanup,
 }
 
 #[derive(Clone)]

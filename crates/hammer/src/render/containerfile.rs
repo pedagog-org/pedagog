@@ -2,11 +2,31 @@ use std::fmt::Write;
 
 use crate::resolve::plan::{BasePlan, BuildPlan, Layer, LayerSource};
 
-pub struct Containerfile;
+pub struct Containerfile {
+    pub registry: Option<String>,
+}
+
+impl Containerfile {
+    fn prefixed<'a>(&self, image: &'a str) -> std::borrow::Cow<'a, str> {
+        match &self.registry {
+            Some(reg) => format!("{reg}/{image}").into(),
+            None => image.into(),
+        }
+    }
+}
 
 impl super::Renderer for Containerfile {
     fn render_build(&self, plan: &BuildPlan) -> String {
-        render_build(plan)
+        let mut out = String::new();
+        writeln!(out, "FROM {}", self.prefixed(&plan.base_image)).unwrap();
+        for layer in &plan.layers {
+            render_layer(&mut out, layer);
+        }
+        let entrypoint_args = shell_words(&plan.entrypoint);
+        writeln!(out).unwrap();
+        writeln!(out, "USER student").unwrap();
+        writeln!(out, "ENTRYPOINT [{}]", entrypoint_args.join(", ")).unwrap();
+        out
     }
 
     fn render_base(&self, plan: &BasePlan) -> String {
@@ -16,19 +36,6 @@ impl super::Renderer for Containerfile {
     fn render_build_with_base(&self, base: &BasePlan, build: &BuildPlan) -> String {
         render_build_with_base(base, build)
     }
-}
-
-pub fn render_build(plan: &BuildPlan) -> String {
-    let mut out = String::new();
-    writeln!(out, "FROM {}", plan.base_image).unwrap();
-    for layer in &plan.layers {
-        render_layer(&mut out, layer);
-    }
-    let entrypoint_args = shell_words(&plan.entrypoint);
-    writeln!(out).unwrap();
-    writeln!(out, "USER student").unwrap();
-    writeln!(out, "ENTRYPOINT [{}]", entrypoint_args.join(", ")).unwrap();
-    out
 }
 
 pub fn render_base(plan: &BasePlan) -> String {
@@ -102,6 +109,7 @@ fn layer_context(source: &LayerSource) -> (String, String) {
         LayerSource::Os(id) => ("os".into(), id.to_string()),
         LayerSource::Platform(kind) => ("platform".into(), kind.to_string()),
         LayerSource::Toolchain(v) => ("toolchain".into(), format!("{}/{}", v.id, v.version)),
+        LayerSource::BuildCleanup => ("build".into(), "cleanup".into()),
     }
 }
 
@@ -110,6 +118,7 @@ fn layer_header(source: &LayerSource) -> String {
         LayerSource::Os(id) => format!("OS {id}"),
         LayerSource::Platform(kind) => format!("Platform {kind}"),
         LayerSource::Toolchain(v) => format!("Toolchain {v}"),
+        LayerSource::BuildCleanup => "Build cleanup".into(),
     }
 }
 

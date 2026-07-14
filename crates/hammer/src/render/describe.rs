@@ -48,6 +48,7 @@ pub fn render_build(plan: &BuildPlan) -> String {
         .filter(|l| !matches!(l.source, LayerSource::Os(_)))
         .collect();
 
+
     if !os_layers.is_empty() {
         let mut base_node = Node::new(style("Base").bold().to_string());
         for layer in os_layers {
@@ -201,5 +202,6 @@ fn layer_header(source: &LayerSource) -> String {
         LayerSource::Os(id) => format!("OS: {id}"),
         LayerSource::Platform(kind) => format!("Platform: {kind}"),
         LayerSource::Toolchain(v) => format!("Toolchain: {v}"),
+        LayerSource::BuildCleanup => "Build: cleanup".into(),
     }
 }

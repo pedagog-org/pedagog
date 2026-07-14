@@ -55,6 +55,10 @@ pub struct PlanArgs {
     #[arg(short = 'O', long, value_name = "FILE")]
     pub output: Option<PathBuf>,
 
+    /// Registry prefix for base image names in Containerfile output (e.g. localhost).
+    #[arg(long, value_name = "REGISTRY")]
+    pub registry: Option<String>,
+
     /// Prepend OS base image layers to an assignment or platform plan.
     #[arg(short = 'b', long)]
     pub show_base: bool,
