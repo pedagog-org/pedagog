@@ -6,6 +6,16 @@ A platform for secure browser-based coding assignments.
 
 See [docs/SETUP.md](docs/SETUP.md) for infrastructure setup instructions.
 
+## Development
+
+Run once per clone to enable the git hooks (a pre-commit hook runs
+`cargo clippy --workspace --all-targets -- -D warnings`, rejecting commits with any
+warning — bypass with `git commit --no-verify`):
+
+```sh
+just install-hooks
+```
+
 ## Building & Running Assignments (Justfile)
 
 The root [`Justfile`](Justfile) wraps `hammer` (the recipe-resolution CLI) and `podman`
@@ -35,9 +45,11 @@ Override any of these on the command line, e.g. `just PORT=3000 run ...`.
 
 ### Tasks
 
-- **`just plan ASSIGNMENT`** — print a human-readable build plan for an assignment
+- **`just plan ASSIGNMENT`** — print the generated Containerfile for an assignment
   (e.g. `just plan ../recipes/examples/pointers.yaml`).
-- **`just plan-containerfile ASSIGNMENT`** — print the generated Containerfile instead.
+- **`just vend [FILTERS...]`** — download and cache recipe ingredients (e.g. the
+  code-server `.deb`) into `recipes/ingredients/`, so builds use vendored assets instead
+  of downloading at build time. Optional filters: `--os/--platform/--toolchain <ID>`.
 - **`just build-base OS_ID IMAGE_TAG`** — build a base OS image from an OS recipe
   (e.g. `just build-base ubuntu-22 pedagog/ubuntu:22`). Run this once per OS recipe,
   or whenever the OS recipe changes.
