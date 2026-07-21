@@ -11,7 +11,7 @@ pub struct Cli {
 
 #[derive(clap::Subcommand)]
 pub enum Command {
-    /// Produce a build plan for an assignment, a platform, or an OS base image.
+    /// Produce a Containerfile for an assignment or an OS base image.
     Plan(PlanArgs),
     /// Download and cache recipe assets into each recipe directory's ingredients/ folder.
     Vend(VendArgs),
@@ -20,22 +20,22 @@ pub enum Command {
 #[derive(clap::Args)]
 #[command(
     group(ArgGroup::new("target").required(true).args(["assignment", "os"])),
-    override_usage = "hammer plan [OPTIONS] (-a <FILE> | -o <OS_ID>)",
+    override_usage = "hammer plan [OPTIONS] (-a <FILE> | --os <OS_ID>)",
     long_about = "Produce a build plan from one of two targets:
 
-  -a <FILE>     Full assignment image plan (all build phases + runtime)
-  -o <OS_ID>    Reusable OS base image plan
+  -a <FILE>       Full assignment image plan (all build phases + runtime)
+  --os <OS_ID>    Reusable OS base image plan
 
 By default an assignment plan builds FROM the pre-built base image. Add
 -b / --show-base to emit a self-contained Containerfile from the upstream image.",
 )]
 pub struct PlanArgs {
-    /// Assignment YAML file (mutually exclusive with -o).
+    /// Assignment YAML file (mutually exclusive with --os).
     #[arg(short = 'a', long, value_name = "FILE", conflicts_with = "os")]
     pub assignment: Option<PathBuf>,
 
     /// OS id — base image plan.
-    #[arg(short = 'o', long, value_name = "OS_ID")]
+    #[arg(long, value_name = "OS_ID")]
     pub os: Option<String>,
 
     /// Additional recipe directory; repeatable, searched after HAMMER_RECIPES.

@@ -12,16 +12,12 @@ PIDS_LIMIT  := "256"
 
 # Build a base OS image (e.g. just build-base ubuntu-22 pedagog/ubuntu:22).
 build-base OS_ID IMAGE_TAG:
-    {{HAMMER}} plan -o {{OS_ID}} -f containerfile \
+    {{HAMMER}} plan --os {{OS_ID}} \
         | podman build --volume "{{RECIPES}}:/pedagog/recipes:ro" -t "{{REGISTRY}}/{{IMAGE_TAG}}" -
 
-# Print a human-readable build plan for an assignment.
+# Print the Containerfile for an assignment (FROM the pre-built base image).
 plan ASSIGNMENT:
     {{HAMMER}} plan -a {{ASSIGNMENT}}
-
-# Print a Containerfile for an assignment.
-plan-containerfile ASSIGNMENT:
-    {{HAMMER}} plan -a {{ASSIGNMENT}} -f containerfile
 
 # Build a container image from an assignment.
 build ASSIGNMENT:
