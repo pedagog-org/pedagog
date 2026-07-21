@@ -17,7 +17,7 @@ use cli::{Cli, Command, Format, PlanArgs, VendArgs};
 use loader::RecipeStore;
 use pedagog_core::recipe::platform::PlatformKind;
 use pedagog_core::recipe::primitives::Id;
-use render::Renderer;
+use render::Render;
 
 fn main() -> Result<()> {
     // Use try_parse so clap errors go through miette's renderer instead of
@@ -106,7 +106,7 @@ fn run_plan(args: PlanArgs) -> Result<()> {
     Ok(())
 }
 
-fn make_renderer(format: &Format, registry: Option<String>) -> Box<dyn Renderer> {
+fn make_renderer(format: &Format, registry: Option<String>) -> Box<dyn Render> {
     match format {
         Format::Describe => Box::new(render::describe::Describe),
         Format::Containerfile => Box::new(render::containerfile::Containerfile { registry }),

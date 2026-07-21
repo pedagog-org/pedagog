@@ -43,6 +43,7 @@ impl std::fmt::Display for Id {
 pub type OsId = Id;
 pub type PlatformId = Id;
 pub type ToolchainId = Id;
+pub type AssignmentId = Id;
 
 // e.g. "gcc-13", "g++", "libssl-dev", "python3.12"
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]

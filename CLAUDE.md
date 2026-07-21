@@ -29,7 +29,7 @@
 ## Testing
 
 - Tests are required for essentially all new logic. Exceptions must be explicitly justified.
-- Tests live in a `tests` submodule.
+- Tests live inline in the same file as the code under test, in a `#[cfg(test)] mod tests` submodule (Rust convention).
 
 ## Code Style
 

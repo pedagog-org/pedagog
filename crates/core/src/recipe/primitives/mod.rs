@@ -1,3 +1,4 @@
+pub mod command;
 pub mod hook;
 pub mod id;
 pub mod ingredient;

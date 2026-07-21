@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use pedagog_core::recipe::os::OsDef;
-use pedagog_core::recipe::platform::{PlatformKind, PlatformRecipe};
-use pedagog_core::recipe::primitives::{OsId, ToolchainId, Version};
-use pedagog_core::recipe::toolchain::ToolchainRecipe;
 use walkdir::WalkDir;
+
+use crate::recipe::os::OsDef;
+use crate::recipe::platform::{PlatformKind, PlatformRecipe};
+use crate::recipe::primitives::{OsId, ToolchainId, Version};
+use crate::recipe::toolchain::ToolchainRecipe;
 
 pub struct RecipeStore {
     os: HashMap<OsId, OsDef>,
@@ -29,13 +30,42 @@ impl RecipeStore {
         let mut errors: Vec<LoadError> = Vec::new();
 
         for dir in dirs {
-            collect_dir(dir, &mut store, &mut errors);
+            Self::collect_dir(dir, &mut store, &mut errors);
         }
 
         if errors.is_empty() {
             Ok(store)
         } else {
             Err(errors)
+        }
+    }
+
+    fn collect_dir(dir: &Path, store: &mut RecipeStore, errors: &mut Vec<LoadError>) {
+        for subdir in ["os", "platforms", "toolchains"] {
+            let base = dir.join(subdir);
+            if !base.exists() {
+                continue;
+            }
+            for entry in WalkDir::new(&base)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map_or(false, |x| x == "yaml"))
+            {
+                let path = entry.path().to_owned();
+                let src = match std::fs::read_to_string(&path) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        errors.push(LoadError { path, message: e.to_string() });
+                        continue;
+                    }
+                };
+                match subdir {
+                    "os" => load_yaml::<OsDef>(&src, path, store, errors),
+                    "platforms" => load_yaml::<PlatformRecipe>(&src, path, store, errors),
+                    "toolchains" => load_yaml::<ToolchainRecipe>(&src, path, store, errors),
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -173,31 +203,3 @@ fn load_yaml<T: Loadable>(src: &str, path: PathBuf, store: &mut RecipeStore, err
     }
 }
 
-fn collect_dir(dir: &Path, store: &mut RecipeStore, errors: &mut Vec<LoadError>) {
-    for subdir in ["os", "platforms", "toolchains"] {
-        let base = dir.join(subdir);
-        if !base.exists() {
-            continue;
-        }
-        for entry in WalkDir::new(&base)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map_or(false, |x| x == "yaml"))
-        {
-            let path = entry.path().to_owned();
-            let src = match std::fs::read_to_string(&path) {
-                Ok(s) => s,
-                Err(e) => {
-                    errors.push(LoadError { path, message: e.to_string() });
-                    continue;
-                }
-            };
-            match subdir {
-                "os" => load_yaml::<OsDef>(&src, path, store, errors),
-                "platforms" => load_yaml::<PlatformRecipe>(&src, path, store, errors),
-                "toolchains" => load_yaml::<ToolchainRecipe>(&src, path, store, errors),
-                _ => {}
-            }
-        }
-    }
-}
