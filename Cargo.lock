@@ -482,6 +482,7 @@ dependencies = [
  "regex",
  "semver",
  "serde",
+ "serde_json",
  "serde_yaml",
  "strum",
  "strum_macros",

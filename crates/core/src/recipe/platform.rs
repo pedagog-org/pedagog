@@ -55,6 +55,8 @@ impl std::fmt::Display for PlatformKind {
 pub struct PlatformHookDefs {
     pub build: ParamHook,
     pub entrypoint: String,
+    #[serde(default)]
+    pub ports: Vec<u16>,
 }
 
 // ---- PlatformSpec -----------------------------------------------------------

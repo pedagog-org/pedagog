@@ -6,12 +6,17 @@ pub mod param;
 pub mod step;
 pub mod version;
 
+pub use command::Command;
 pub use hook::{ArgHook, ParamHook};
-pub use id::{Id, OsId, PkgName, PlatformId, ToolchainId};
+pub use id::{AssignmentId, Id, OsId, PkgName, PlatformId, ToolchainId};
 pub use ingredient::{GithubSource, Ingredient, IngredientSource};
 pub use param::{ParamDef, ParamType, ParamVal};
 pub use step::Step;
 pub use version::{MaybeVersioned, Version, Versioned};
+
+/// Versioned toolchain reference, e.g. `gcc:13`. Alias to keep call sites terse
+/// (`ToolchainRef` rather than `Versioned<ToolchainId>`).
+pub type ToolchainRef = Versioned<ToolchainId>;
 
 use serde::Deserialize;
 
