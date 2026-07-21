@@ -13,19 +13,23 @@ PIDS_LIMIT  := "256"
 # Build a base OS image (e.g. just build-base ubuntu-22 pedagog/ubuntu:22).
 build-base OS_ID IMAGE_TAG:
     {{HAMMER}} plan --os {{OS_ID}} \
-        | podman build --volume "{{RECIPES}}:/pedagog/recipes:ro" -t "{{REGISTRY}}/{{IMAGE_TAG}}" -
+        | podman build --volume "{{RECIPES}}:/pedagog/recipes:ro,z" -t "{{REGISTRY}}/{{IMAGE_TAG}}" -
+
+# Download and cache recipe ingredients (filters: --os/--platform/--toolchain <ID>).
+vend *ARGS:
+    {{HAMMER}} vend {{ARGS}}
 
 # Print the Containerfile for an assignment (FROM the pre-built base image).
 plan ASSIGNMENT:
     {{HAMMER}} plan -a {{ASSIGNMENT}}
 
-# Build a container image from an assignment.
+# Build a container image from an assignment (uses vendored ingredients if present).
 build ASSIGNMENT:
     #!/usr/bin/env bash
     set -euo pipefail
     tag="{{REGISTRY}}/pedagog/$(basename {{ASSIGNMENT}} .yaml)"
-    {{HAMMER}} plan -a {{ASSIGNMENT}} -f containerfile --registry {{REGISTRY}} \
-        | podman build -t "$tag" -
+    {{HAMMER}} plan -a {{ASSIGNMENT}} --registry {{REGISTRY}} \
+        | podman build --volume "{{RECIPES}}/ingredients:/pedagog/ingredients:ro,z" -t "$tag" -
 
 # Squash an assignment image's layers in place to reclaim space from deleted files.
 squash ASSIGNMENT:

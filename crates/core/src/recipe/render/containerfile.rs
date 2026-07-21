@@ -89,6 +89,10 @@ fn render_layer(to: &mut String, layer: &Layer) {
         return;
     }
     let _ = writeln!(to, "\n# ----- {} -----", layer_label(&layer.source));
+    // The `vend` helper resolves ingredient paths from these per-layer vars.
+    let (ptype, pid) = layer_env(&layer.source);
+    let _ = writeln!(to, "ENV PEDAGOG_TYPE={ptype}");
+    let _ = writeln!(to, "ENV PEDAGOG_ID={pid}");
     for step in &layer.steps {
         render_step(to, step);
     }
@@ -161,6 +165,20 @@ fn layer_label(source: &LayerSource) -> String {
         LayerSource::Assignment(id) => format!("Assignment: {id}"),
         LayerSource::OsConfigure(id) => format!("OS Configure: {id}"),
         LayerSource::OsCleanup(id) => format!("OS Cleanup: {id}"),
+    }
+}
+
+/// (PEDAGOG_TYPE, PEDAGOG_ID) for a layer — the `vend` helper joins these into
+/// the ingredient path `/pedagog/ingredients/<type>/<id>/<file>`, matching how
+/// `hammer vend` lays ingredients out on disk.
+fn layer_env(source: &LayerSource) -> (String, String) {
+    match source {
+        LayerSource::Os(id) => ("os".to_owned(), id.to_string()),
+        LayerSource::Platform(kind) => ("platform".to_owned(), kind.to_string()),
+        LayerSource::Toolchain(tc) => ("toolchain".to_owned(), format!("{}/{}", tc.id, tc.version)),
+        LayerSource::Assignment(id) => ("assignment".to_owned(), id.to_string()),
+        LayerSource::OsConfigure(id) => ("os".to_owned(), id.to_string()),
+        LayerSource::OsCleanup(id) => ("os".to_owned(), id.to_string()),
     }
 }
 
@@ -253,6 +271,24 @@ mod tests {
             out.contains(r#"ENTRYPOINT ["code-server","--bind","0.0.0.0:8080"]"#),
             "{out}"
         );
+    }
+
+    #[test]
+    fn layers_emit_pedagog_env_for_vend() {
+        let spec = ImageSpec::Full {
+            upstream: "ubuntu:22.04".to_owned(),
+            base_image: "pedagog/ubuntu:22".to_owned(),
+            plan: full_plan(None),
+            runtime: Runtime {
+                user: "student".to_owned(),
+                entrypoint: Command("code-server".to_owned()),
+                pre_root: vec![],
+            },
+            ports: vec![],
+        };
+        let out = Containerfile::render(&spec, &opts(None, FromSource::PrebuiltBase)).to_string();
+        assert!(out.contains("ENV PEDAGOG_TYPE=platform"), "{out}");
+        assert!(out.contains("ENV PEDAGOG_ID=interactive"), "{out}");
     }
 
     #[test]
