@@ -10,6 +10,11 @@ MEMORY      := "512m"
 CPUS        := "1"
 PIDS_LIMIT  := "256"
 
+# Point git at the tracked hooks in .githooks/ (run once per clone).
+install-hooks:
+    git config core.hooksPath .githooks
+    @echo "git hooks installed (core.hooksPath = .githooks)"
+
 # Build a base OS image (e.g. just build-base ubuntu-22 pedagog/ubuntu:22).
 build-base OS_ID IMAGE_TAG:
     {{HAMMER}} plan --os {{OS_ID}} \

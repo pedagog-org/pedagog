@@ -121,7 +121,7 @@ fn collect_dir_targets(
         for entry in WalkDir::new(&base)
             .into_iter()
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map_or(false, |x| x == "yaml"))
+            .filter(|e| e.path().extension().is_some_and(|x| x == "yaml"))
         {
             let path = entry.path();
             let src = std::fs::read_to_string(path)

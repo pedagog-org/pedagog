@@ -254,7 +254,7 @@ mod tests {
 
     fn recipes_dir() -> Option<PathBuf> {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../recipes");
-        dir.join("os").exists().then(|| dir)
+        dir.join("os").exists().then_some(dir)
     }
 
     fn load_store() -> Option<RecipeStore> {

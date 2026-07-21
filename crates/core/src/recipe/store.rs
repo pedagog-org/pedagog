@@ -49,7 +49,7 @@ impl RecipeStore {
             for entry in WalkDir::new(&base)
                 .into_iter()
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().map_or(false, |x| x == "yaml"))
+                .filter(|e| e.path().extension().is_some_and(|x| x == "yaml"))
             {
                 let path = entry.path().to_owned();
                 let src = match std::fs::read_to_string(&path) {
@@ -146,9 +146,9 @@ fn yaml_error_message(src: &str, err: &serde_yaml::Error) -> String {
 
     let start = line.saturating_sub(2);
     let end = (line + 1).min(lines.len());
-    for i in start..end {
+    for (i, text) in lines.iter().enumerate().take(end).skip(start) {
         let lineno = i + 1;
-        out.push_str(&format!("  {:>4} | {}\n", lineno, lines[i]));
+        out.push_str(&format!("  {:>4} | {}\n", lineno, text));
         if lineno == line {
             out.push_str(&format!("       | {}^\n", " ".repeat(col.saturating_sub(1))));
         }

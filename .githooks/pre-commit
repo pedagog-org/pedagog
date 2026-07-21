@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Reject commits that don't pass clippy cleanly (warnings are errors).
+# Bypass with `git commit --no-verify` when you know what you're doing.
+set -euo pipefail
+
+echo "pre-commit: cargo clippy --workspace --all-targets -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings

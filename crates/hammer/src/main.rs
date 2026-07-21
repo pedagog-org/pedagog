@@ -140,10 +140,10 @@ fn recipe_dirs(extra: &[PathBuf], quiet: bool) -> Result<Vec<PathBuf>> {
 
 fn expand_tilde(path: PathBuf) -> PathBuf {
     let s = path.to_string_lossy();
-    if s.starts_with("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(format!("{}/{}", home, &s[2..]));
-        }
+    if let Some(rest) = s.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return PathBuf::from(format!("{home}/{rest}"));
     }
     path
 }
@@ -165,5 +165,5 @@ fn emit_warning(message: &str, help: &str, quiet: bool) {
     let mut buf = String::new();
     let _ = handler.render_report(&mut buf, report.as_ref());
     // Trailing newline separates consecutive warnings or a warning from an error.
-    eprint!("{buf}\n");
+    eprintln!("{buf}");
 }
