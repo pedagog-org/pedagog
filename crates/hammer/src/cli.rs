@@ -20,35 +20,30 @@ pub enum Command {
 #[derive(clap::Args)]
 #[command(
     group(ArgGroup::new("target").required(true).args(["assignment", "os"])),
-    override_usage = "hammer plan [OPTIONS] (-a <FILE> | -o <OS_ID> | -p <PLATFORM_ID> -o <OS_ID>)",
-    long_about = "Produce a build plan from one of three targets:
+    override_usage = "hammer plan [OPTIONS] (-a <FILE> | -o <OS_ID>)",
+    long_about = "Produce a build plan from one of two targets:
 
-  -a <FILE>                    Full build plan from an assignment YAML (all layers)
-  -p <PLATFORM_ID> -o <OS_ID>  Platform layer plan with default params
-  -o <OS_ID>                   OS base image plan
+  -a <FILE>     Full assignment image plan (all build phases + runtime)
+  -o <OS_ID>    Reusable OS base image plan
 
-Add -b / --show-base to prepend OS init layers to an assignment or platform plan.
-Add -f containerfile to emit a Containerfile instead of the default tree view.",
+By default an assignment plan builds FROM the pre-built base image. Add
+-b / --show-base to emit a self-contained Containerfile from the upstream image.",
 )]
 pub struct PlanArgs {
-    /// Assignment YAML file (mutually exclusive with -o / -p).
-    #[arg(short = 'a', long, value_name = "FILE", conflicts_with_all = ["os", "platform"])]
+    /// Assignment YAML file (mutually exclusive with -o).
+    #[arg(short = 'a', long, value_name = "FILE", conflicts_with = "os")]
     pub assignment: Option<PathBuf>,
 
-    /// OS id — base image plan, or pairs with -p for a platform plan.
+    /// OS id — base image plan.
     #[arg(short = 'o', long, value_name = "OS_ID")]
     pub os: Option<String>,
-
-    /// Platform id — platform layer plan (requires -o).
-    #[arg(short = 'p', long, value_name = "PLATFORM_ID", requires = "os", conflicts_with = "assignment")]
-    pub platform: Option<String>,
 
     /// Additional recipe directory; repeatable, searched after HAMMER_RECIPES.
     #[arg(short = 'r', long, value_name = "DIR", action = clap::ArgAction::Append)]
     pub recipes: Vec<PathBuf>,
 
-    /// Output format: describe (tree view) or containerfile.
-    #[arg(short = 'f', long, value_enum, default_value_t = Format::Describe)]
+    /// Output format: containerfile (describe is not yet implemented).
+    #[arg(short = 'f', long, value_enum, default_value_t = Format::Containerfile)]
     pub format: Format,
 
     /// Write output to a file instead of stdout.
@@ -59,7 +54,8 @@ pub struct PlanArgs {
     #[arg(long, value_name = "REGISTRY")]
     pub registry: Option<String>,
 
-    /// Prepend OS base image layers to an assignment or platform plan.
+    /// Emit a self-contained Containerfile from the upstream image (include OS
+    /// layer) instead of building FROM the pre-built base image.
     #[arg(short = 'b', long)]
     pub show_base: bool,
 
@@ -108,8 +104,8 @@ pub struct VendArgs {
 
 #[derive(ValueEnum, Clone, PartialEq)]
 pub enum Format {
-    /// Tree view showing layers, steps, and commands (default).
-    Describe,
-    /// Containerfile (Dockerfile) syntax.
+    /// Containerfile (Dockerfile) syntax (default).
     Containerfile,
+    /// Tree view (not yet implemented).
+    Describe,
 }

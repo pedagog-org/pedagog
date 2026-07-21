@@ -1,8 +1,4 @@
 mod cli;
-mod loader;
-mod params;
-mod render;
-mod resolve;
 mod vend;
 
 use std::io::Write;
@@ -14,10 +10,12 @@ use miette::{
 };
 
 use cli::{Cli, Command, Format, PlanArgs, VendArgs};
-use loader::RecipeStore;
-use pedagog_core::recipe::platform::PlatformKind;
+use pedagog_core::recipe::assignment::AssignmentYaml;
 use pedagog_core::recipe::primitives::Id;
-use render::Render;
+use pedagog_core::recipe::render::containerfile::Containerfile;
+use pedagog_core::recipe::render::{FromSource, Render, RenderOptions};
+use pedagog_core::recipe::resolve::{resolve, resolve_base};
+use pedagog_core::recipe::store::RecipeStore;
 
 fn main() -> Result<()> {
     // Use try_parse so clap errors go through miette's renderer instead of
@@ -53,44 +51,41 @@ fn run_plan(args: PlanArgs) -> Result<()> {
         miette!("failed to load {} recipe file(s):\n{}", messages.len(), messages.join("\n"))
     })?;
 
-    let renderer = make_renderer(&args.format, args.registry.clone());
-    let text = match (&args.assignment, &args.platform, &args.os) {
-        (Some(path), None, None) => {
-            let path = &expand_tilde(path.clone());
-            let src = std::fs::read_to_string(path)
+    let spec = match (&args.assignment, &args.os) {
+        (Some(path), None) => {
+            let path = expand_tilde(path.clone());
+            let src = std::fs::read_to_string(&path)
                 .map_err(|e| miette!("cannot read {}: {}", path.display(), e))?;
-            let assignment: pedagog_core::recipe::assignment::AssignmentYaml =
+            let assignment: AssignmentYaml =
                 serde_yaml::from_str(&src).map_err(|e| miette!("{}", e))?;
-            let plan =
-                resolve::resolve_build(&assignment, &store).map_err(|e| miette!("{}", e))?;
-
-            if args.show_base {
-                let base = resolve::resolve_base(&assignment.environment.os, &store)
-                    .map_err(|e| miette!("{}", e))?;
-                renderer.render_build_with_base(&base, &plan)
-            } else {
-                renderer.render_build(&plan)
-            }
+            resolve(&assignment, &store).map_err(|e| miette!("{}", e))?
         }
-        (None, Some(platform_str), Some(os_str)) => {
+        (None, Some(os_str)) => {
             let os_id = Id::try_from(os_str.clone()).map_err(|e| miette!("{}", e))?;
-            let kind = PlatformKind::try_from(platform_str.clone()).map_err(|e| miette!("{}", e))?;
-            let plan = resolve::resolve_platform(&kind, &os_id, &store)
-                .map_err(|e| miette!("{}", e))?;
+            resolve_base(&os_id, &store).map_err(|e| miette!("{}", e))?
+        }
+        _ => unreachable!("clap ArgGroup ensures exactly one of -a / -o"),
+    };
 
-            if args.show_base {
-                let base = resolve::resolve_base(&os_id, &store).map_err(|e| miette!("{}", e))?;
-                renderer.render_build_with_base(&base, &plan)
-            } else {
-                renderer.render_build(&plan)
-            }
+    // --show-base emits a self-contained Containerfile from the upstream image;
+    // otherwise we FROM the pre-built base image.
+    let from = if args.show_base {
+        FromSource::Standalone
+    } else {
+        FromSource::PrebuiltBase
+    };
+    let opts = RenderOptions {
+        registry: args.registry.clone(),
+        from,
+    };
+
+    let text = match args.format {
+        Format::Containerfile => Containerfile::render(&spec, &opts).to_string(),
+        Format::Describe => {
+            return Err(miette!(
+                "describe output is not yet implemented; use -f containerfile"
+            ));
         }
-        (None, None, Some(os_str)) => {
-            let os_id = Id::try_from(os_str.clone()).map_err(|e| miette!("{}", e))?;
-            let plan = resolve::resolve_base(&os_id, &store).map_err(|e| miette!("{}", e))?;
-            renderer.render_base(&plan)
-        }
-        _ => unreachable!("clap ArgGroup ensures a valid target combination"),
     };
 
     match &args.output {
@@ -104,13 +99,6 @@ fn run_plan(args: PlanArgs) -> Result<()> {
         None => print!("{text}"),
     }
     Ok(())
-}
-
-fn make_renderer(format: &Format, registry: Option<String>) -> Box<dyn Render> {
-    match format {
-        Format::Describe => Box::new(render::describe::Describe),
-        Format::Containerfile => Box::new(render::containerfile::Containerfile { registry }),
-    }
 }
 
 fn recipe_dirs(extra: &[PathBuf], quiet: bool) -> Result<Vec<PathBuf>> {

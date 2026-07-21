@@ -65,6 +65,9 @@ pub struct BuildPlan {
 
 /// The two kinds of image the resolver produces. `Base` is a reusable OS base
 /// image; `Full` is an assignment image with every build phase and runtime.
+// Constructed once per invocation and passed by reference; the size gap between
+// the variants doesn't matter here.
+#[allow(clippy::large_enum_variant)]
 pub enum ImageSpec {
     Base {
         upstream: String,

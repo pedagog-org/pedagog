@@ -8,9 +8,10 @@ use super::{
 
 pub struct Containerfile(String);
 
-impl ToString for Containerfile {
-    fn to_string(&self) -> String {
-        self.0.clone()
+// Display gives the `ToString` impl the `Render` trait requires, for free.
+impl std::fmt::Display for Containerfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
@@ -98,6 +99,20 @@ fn render_step(to: &mut String, step: &ResolvedStep) {
         let _ = writeln!(to, "# {name}");
     }
     for cmd in &step.commands {
+        render_run(to, &cmd.0);
+    }
+}
+
+fn render_run(to: &mut String, cmd: &str) {
+    // Multi-line commands run as a single heredoc script; the quoted delimiter
+    // prevents Dockerfile-level expansion of the body.
+    if cmd.contains('\n') {
+        let _ = writeln!(to, "RUN <<'EOF'");
+        for line in cmd.lines() {
+            let _ = writeln!(to, "{line}");
+        }
+        let _ = writeln!(to, "EOF");
+    } else {
         let _ = writeln!(to, "RUN {cmd}");
     }
 }
@@ -108,7 +123,7 @@ fn render_from(to: &mut String, from: &str) {
 
 /// Emits `USER student` + exec-form ENTRYPOINT when there is no privileged
 /// startup; otherwise stays root and runs `pre_root` before dropping to the user
-/// with `setpriv` (network.enable needs root, so we cannot switch user first).
+/// with `gosu` (network.enable needs root, so we cannot switch user first).
 fn render_runtime(to: &mut String, rt: &Runtime) {
     let _ = writeln!(to);
     if rt.pre_root.is_empty() {
@@ -117,11 +132,7 @@ fn render_runtime(to: &mut String, rt: &Runtime) {
         let _ = writeln!(to, "ENTRYPOINT {}", exec_array(&words));
     } else {
         let mut chain: Vec<String> = rt.pre_root.iter().map(|c| c.0.clone()).collect();
-        chain.push(format!(
-            "exec setpriv --reuid {u} --regid {u} --init-groups {ep}",
-            u = rt.user,
-            ep = rt.entrypoint.0,
-        ));
+        chain.push(format!("exec gosu {u} {ep}", u = rt.user, ep = rt.entrypoint.0));
         let script = chain.join(" && ");
         let _ = writeln!(
             to,
@@ -245,6 +256,20 @@ mod tests {
     }
 
     #[test]
+    fn multiline_command_renders_as_heredoc() {
+        let spec = ImageSpec::Base {
+            upstream: "ubuntu:22.04".to_owned(),
+            image: "pedagog/ubuntu:22".to_owned(),
+            os: Layer {
+                source: LayerSource::Os(id("ubuntu-22")),
+                steps: vec![step("multi", &["if true; then\n  echo hi\nfi"])],
+            },
+        };
+        let out = Containerfile::render(&spec, &opts(None, FromSource::Standalone)).to_string();
+        assert!(out.contains("RUN <<'EOF'\nif true; then\n  echo hi\nfi\nEOF"), "{out}");
+    }
+
+    #[test]
     fn full_prebuilt_deny_drops_privileges_and_skips_os_layer() {
         let configure = Layer {
             source: LayerSource::OsConfigure(id("ubuntu-22")),
@@ -267,7 +292,7 @@ mod tests {
         assert!(!out.contains("PHASE: BASE"), "os layer baked into base image");
         assert!(out.contains("PHASE: OS CONFIGURE"));
         assert!(!out.contains("USER student"), "stays root to run iptables");
-        assert!(out.contains("setpriv --reuid student"), "{out}");
+        assert!(out.contains("exec gosu student"), "{out}");
         assert!(
             out.contains(r#"ENTRYPOINT ["/bin/sh","-c","iptables-restore"#),
             "{out}"
