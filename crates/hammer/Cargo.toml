@@ -13,11 +13,8 @@ workspace = true
 
 [dependencies]
 clap = { workspace = true }
-console = "0.15"
 miette = { workspace = true }
 pedagog-core = { path = "../core" }
-regex = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 walkdir = { workspace = true }
