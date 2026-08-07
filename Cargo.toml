@@ -11,16 +11,24 @@ publish = false
 # code actually needs them).
 [workspace.dependencies]
 anyhow = "1"
+axum = "0.8"
+blake3 = "1"
 clap = { version = "4", features = ["derive"] }
+k8s-openapi = { version = "0.28", features = ["v1_31"] } # feature tracks k3s minor (see docs/SETUP.md)
+kube = { version = "4", features = ["client", "runtime", "rustls-tls"] }
 miette = { version = "7", features = ["fancy"] }
 regex = "1"
 semver = { version = "1", features = ["serde"] }
-url = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "macros", "migrate"] }
 strum = "0.26"
 strum_macros = "0.26"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = { version = "2", features = ["serde"] }
 walkdir = "2"
 
 
