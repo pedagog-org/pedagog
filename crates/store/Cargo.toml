@@ -1,0 +1,18 @@
+[package]
+name = "pedagog-store"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[features]
+# Postgres access (sqlx). Off by default so WASM consumers can use the model
+# types without pulling sqlx/tokio.
+db = ["dep:sqlx"]
+
+[dependencies]
+strum = { workspace = true }
+strum_macros = { workspace = true }
+sqlx = { workspace = true, optional = true }
+
+[lints]
+workspace = true
