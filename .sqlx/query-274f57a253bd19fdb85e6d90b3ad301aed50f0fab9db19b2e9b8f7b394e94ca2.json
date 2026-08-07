@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO os_builds (os_id, containerfile_hash, image_ref, built_at)\n         VALUES ($1, $2, $3, now())\n         ON CONFLICT (os_id) DO UPDATE\n           SET containerfile_hash = EXCLUDED.containerfile_hash,\n               image_ref          = EXCLUDED.image_ref,\n               built_at           = EXCLUDED.built_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "274f57a253bd19fdb85e6d90b3ad301aed50f0fab9db19b2e9b8f7b394e94ca2"
+}

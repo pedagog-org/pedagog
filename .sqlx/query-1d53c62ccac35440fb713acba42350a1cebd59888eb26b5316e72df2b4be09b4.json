@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, os_id, hash, image_ref\n           FROM build_runs\n          WHERE status = $1\n          ORDER BY started_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "build_runs",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "os_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "build_runs",
+            "name": "os_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "build_runs",
+            "name": "hash"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "image_ref",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "build_runs",
+            "name": "image_ref"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1d53c62ccac35440fb713acba42350a1cebd59888eb26b5316e72df2b4be09b4"
+}

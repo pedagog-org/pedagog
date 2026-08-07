@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT containerfile_hash FROM os_builds WHERE os_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "containerfile_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "os_builds",
+            "name": "containerfile_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c6d690ef929ae9c0f64c1656d8d4b3d26b062dc79a17e81295a24eae041646c7"
+}

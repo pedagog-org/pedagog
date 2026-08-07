@@ -9,6 +9,8 @@ RECIPES  := env_var_or_default("HAMMER_RECIPES", "")
 MEMORY      := "512m"
 CPUS        := "1"
 PIDS_LIMIT  := "256"
+# Dev Postgres connection (mirrors deploy/base/postgres; override to point elsewhere).
+export DATABASE_URL := env_var_or_default("DATABASE_URL", "postgres://pedagog:pedagog@localhost:5432/pedagog")
 
 # Point git at the tracked hooks in .githooks/ (run once per clone).
 install-hooks:
@@ -59,3 +61,25 @@ run ASSIGNMENT *ARGS:
         -v "$(realpath {{WORKDIR}}):/workspace" \
         -p {{PORT}}:{{PORT}} \
         "$tag" {{ARGS}}
+
+# Start a local dev Postgres in podman (mirrors prod: postgres:16-alpine, db/user 'pedagog').
+db-up:
+    podman run -d --replace --name pedagog-db \
+        -e POSTGRES_DB=pedagog -e POSTGRES_USER=pedagog -e POSTGRES_PASSWORD=pedagog \
+        -p 5432:5432 -v pedagog-pgdata:/var/lib/postgresql/data \
+        docker.io/library/postgres:16-alpine
+    @echo "dev Postgres up: {{DATABASE_URL}}"
+
+# Stop and remove the dev Postgres (keeps the named volume; add 'podman volume rm pedagog-pgdata' to wipe).
+db-down:
+    podman rm -f pedagog-db
+
+# Open a psql shell on the dev DB.
+db-shell:
+    podman exec -it pedagog-db psql -U pedagog -d pedagog
+
+# Apply migrations to the dev DB and refresh the committed .sqlx/ offline query cache.
+# --all-features so the feature-gated store::db queries are reached.
+db-prepare:
+    cargo sqlx migrate run --source crates/store/migrations
+    cargo sqlx prepare --workspace -- --all-features
