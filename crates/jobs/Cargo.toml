@@ -5,6 +5,17 @@ version.workspace = true
 publish.workspace = true
 
 [dependencies]
+pedagog-core = { path = "../core" }
+pedagog-store = { path = "../store", features = ["db"] }
+pedagog-k8s = { path = "../k8s" }
+anyhow = { workspace = true }
+axum = { workspace = true }
+blake3 = { workspace = true }
+serde = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true
