@@ -180,14 +180,14 @@ Configured in `assignment.results.visibility`:
 
 Building happens in two stages:
 
-1. **OS base image** — platform-managed. Contains the OS and any platform-level configuration. Built by `hammer build-os <os-id>` and pushed to the cluster registry (e.g. `pedagog/ubuntu:22`). Rebuilt by platform operators on updates.
+1. **OS base image** — platform-managed. Contains the OS and any platform-level configuration. Built in-cluster by the `jobs` service (Kaniko) from the recipes pinned into the installation and pushed to the cluster registry (e.g. `pedagog/ubuntu:22`). Rebuilt when the pinned recipes change (detected at `jobs` startup / via its rebuild endpoint).
 2. **Instructor image** — built when the instructor uploads the assignment archive. Starts FROM the OS base image; installs toolchains, addons, platform components (code-server for interactive), and locked extensions declared in `assignment.yml`. The solution is run against the test suite at this step to validate the assignment. Build-time network policy is applied during this step only.
 
-All builds run in-cluster via **Kaniko** — no Docker daemon required. `hammer` generates the Containerfile from resolved recipes and submits a Kubernetes Job.
+All builds run in-cluster via **Kaniko** — no Docker daemon required. `core` renders the Containerfile from resolved recipes; the `k8s` crate submits it as a Kubernetes Job (`jobs` for OS base images, `api` for instructor images later). Recipes are **pinned to the installation and baked** into the `jobs` image (with `hammer vend` ingredients) — not git-synced in-cluster.
 
 ### `hammer` — Build Tool
 
-`hammer` is a CLI tool (`crates/hammer/`) that resolves recipe YAML into Containerfiles. Recipes live in a separate `recipes` repo, pointed to via `HAMMER_RECIPES`.
+`hammer` is a CLI tool (`crates/hammer/`) — a thin wrapper over `core`'s recipe resolution and Containerfile rendering — for local inspection (`plan`) and ingredient vending (`vend`). Recipe resolution/rendering itself lives in `core`, so the `jobs` service renders in-process rather than shelling out. Recipes live in a separate `recipes` repo, pointed to via `HAMMER_RECIPES`.
 
 **Recipe layout:**
 ```text
@@ -529,16 +529,17 @@ Students and instructors authenticate via email: the platform sends a short word
 
 ```text
 crates/
-  core/     # shared types, DB models, domain error types
+  core/     # shared domain types + recipe resolve/render + env; WASM-shareable (no kube/sqlx)
+  store/    # build-state persistence (sqlx/Postgres) behind a feature-gated `db` module
   api/      # REST API server (axum)
-  jobs/     # long-lived Jobs service
+  jobs/     # long-lived Jobs service (OS base builds; dispatch-and-return executor)
   daemon/   # in-container daemon
-  hammer/   # build tool: recipe resolution, Containerfile generation, Kaniko job submission
+  hammer/   # thin CLI over core: `plan` (inspect) + `vend` (ingredients); build-time only
   web/      # Leptos frontend
-  k8s/      # shared Kubernetes client — wraps k8s API operations used by api and jobs
+  k8s/      # the only crate touching kube/k8s-openapi; `build` (Kaniko) + `run` (later)
 ```
 
-The `k8s` crate exposes platform-specific operations (create pod, apply network policy, watch pod status, delete container) and is used by both `api` (interactive session management) and `jobs` (build and submission containers).
+The `k8s` crate is the sole holder of `kube`/`k8s-openapi`: its `build` submodule owns Kaniko image builds (used by `jobs` for OS images, and `api` for instructor images later), and `run` (later) will own session/submission pods. Persistent build state lives in `store` (feature-gated sqlx), keeping `core` WASM-shareable.
 
 ---
 

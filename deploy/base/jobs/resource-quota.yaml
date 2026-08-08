@@ -1,0 +1,15 @@
+# Governs build concurrency at the namespace (not an app semaphore). With the
+# 1Gi/build default request, requests.memory caps ~3 concurrent OS builds; the
+# extra headroom over 3Gi covers the jobs pod itself, which shares this namespace.
+# Per-course namespaces will each carry their own quota later.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: build-quota
+  namespace: pedagog-builds
+spec:
+  hard:
+    requests.cpu: "2"
+    requests.memory: 4Gi
+    limits.cpu: "8"
+    limits.memory: 14Gi

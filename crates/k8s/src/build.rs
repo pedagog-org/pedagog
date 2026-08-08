@@ -22,7 +22,7 @@ use pedagog_core::env::Env;
 
 use crate::KubeClient;
 
-const KANIKO_IMAGE: &str = "gcr.io/kaniko-project/executor:latest";
+const KANIKO_IMAGE: &str = "gcr.io/kaniko-project/executor:v1.24.0";
 const RECIPES_PATH: &str = "/pedagog/recipes";
 const RECIPES_SRC: &str = "/opt/pedagog/recipes"; // baked path inside the jobs image
 const DOCKERFILE_DIR: &str = "/kaniko/dockerfile";

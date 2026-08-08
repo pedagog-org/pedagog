@@ -1,0 +1,28 @@
+# Multi-stage jobs image. Build context is the repo root:
+#   podman build -f crates/jobs/Containerfile -t <ref> .
+#
+# build   -> compile the jobs + hammer binaries (sqlx offline via committed .sqlx/)
+# vend    -> hammer vend the pinned recipes (fetch ingredients at image-build time)
+# runtime -> slim image with the binary + baked recipes at /opt/pedagog/recipes
+#
+# hammer is a build-time tool only; it is not in the runtime image.
+
+FROM docker.io/library/rust:1-bookworm AS build
+WORKDIR /src
+COPY . .
+ENV SQLX_OFFLINE=true
+RUN cargo build --release -p pedagog-jobs -p hammer
+
+FROM build AS vend
+# Needs network + the recipes' pinned upstream tags. Baked so Kaniko builds are hermetic.
+RUN /src/target/release/hammer vend --recipes /src/recipes --quiet
+
+FROM docker.io/library/debian:stable-slim AS runtime
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/pedagog-jobs /usr/local/bin/pedagog-jobs
+COPY --from=vend  /src/recipes /opt/pedagog/recipes
+ENV PEDAGOG_RECIPES_DIR=/opt/pedagog/recipes
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/pedagog-jobs"]

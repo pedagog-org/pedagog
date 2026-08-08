@@ -7,3 +7,10 @@ resources:
 patches:
   - path: patches/postgres-storage.yaml
   - path: patches/registry-storage.yaml
+  - path: patches/jobs-dev.yaml
+
+# Set to your pushed jobs image (registry ref the node can pull); see docs/SETUP.md.
+images:
+  - name: pedagog-jobs
+    newName: REPLACE-WITH-REGISTRY-IP:5000/pedagog/jobs
+    newTag: dev

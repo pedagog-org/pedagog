@@ -31,6 +31,24 @@
 
 ---
 
+## Local Development
+
+Working on the Rust crates doesn't need the cluster. For the crates that touch
+Postgres (`store`, `jobs`), bring up a local dev database in podman:
+
+```sh
+just db-up       # start postgres:16-alpine (db/user 'pedagog', localhost:5432)
+just db-prepare  # apply migrations + refresh the committed .sqlx/ offline cache
+just db-shell    # psql into it
+just db-down     # stop it (keeps the named volume)
+```
+
+`DATABASE_URL` defaults to `postgres://pedagog:pedagog@localhost:5432/pedagog`.
+CI compiles offline via the committed `.sqlx/` cache (`SQLX_OFFLINE=true`); only
+regenerating that cache needs a live DB.
+
+---
+
 ## Pinned Versions
 
 | Component | Version |
@@ -121,6 +139,12 @@ kubectl create namespace pedagog-data
 kubectl create secret generic postgres-credentials \
   --from-literal=password="$POSTGRES_PW" \
   --namespace=pedagog-data
+
+# jobs service reads its DATABASE_URL from a secret in its own namespace
+kubectl create namespace pedagog-builds
+kubectl create secret generic pedagog-jobs-db \
+  --from-literal=url="postgres://pedagog:${POSTGRES_PW}@postgres-service.pedagog-data.svc:5432/pedagog" \
+  --namespace=pedagog-builds
 ```
 
 ---
@@ -136,6 +160,20 @@ spec:
   acme:
     email: <your-email>   # Let's Encrypt sends expiry notifications here
 ```
+
+Build and push the `jobs` image, then point the overlay at it (substitute your
+registry IP from `kubectl get svc registry-service -n pedagog-data`):
+
+```sh
+podman build -f crates/jobs/Containerfile -t <registry-ip>:5000/pedagog/jobs:dev .
+podman push <registry-ip>:5000/pedagog/jobs:dev
+```
+
+Then edit for your target overlay:
+
+- `deploy/overlays/{dev,prod}/kustomization.yaml` → `images:` `newName` = `<registry-ip>:5000/pedagog/jobs`
+- **dev:** `deploy/overlays/dev/patches/jobs-dev.yaml` → set both host paths to your recipes checkout on the node
+- **prod:** `deploy/overlays/prod/patches/jobs-prod.yaml` → `PEDAGOG_JOBS_IMAGE` = the same pushed ref
 
 ---
 
