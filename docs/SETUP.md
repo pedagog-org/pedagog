@@ -42,7 +42,7 @@
 | Traefik | v3.2.3 |
 | Postgres | 16-alpine |
 | Registry | 2 |
-| `k8s-openapi` feature (crate) | `v1_31` — must track the k3s minor above |
+| `k8s-openapi` feature (crate) | `v1_32` — nearest offered by k8s-openapi 0.28 (kube 4.2); compatible with k3s 1.31 for the stable Job/Pod/ConfigMap APIs |
 
 ---
 
