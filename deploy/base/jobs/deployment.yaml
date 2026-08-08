@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pedagog-jobs
+  namespace: pedagog-builds
+spec:
+  replicas: 1
+  # single-replica: the in-process dispatch mutex + one-running-per-OS index
+  # assume no two dispatch passes run concurrently.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: pedagog-jobs
+  template:
+    metadata:
+      labels:
+        app: pedagog-jobs
+    spec:
+      serviceAccountName: pedagog-jobs
+      containers:
+        - name: jobs
+          image: pedagog-jobs # overridden per overlay via kustomize images
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: pedagog-jobs-db
+                  key: url
+            - name: PEDAGOG_REGISTRY
+              value: registry-service.pedagog-data.svc:5000
+            - name: PEDAGOG_BUILD_NAMESPACE
+              value: pedagog-builds
+            # prod initContainer image (the jobs image); overlay sets the pushed ref.
+            - name: PEDAGOG_JOBS_IMAGE
+              value: pedagog-jobs
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
