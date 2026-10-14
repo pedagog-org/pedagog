@@ -28,11 +28,11 @@ vend *ARGS:
 
 # Print the Containerfile for an assignment (FROM the pre-built base image).
 plan ASSIGNMENT:
-    {{HAMMER}} plan -a {{ASSIGNMENT}}
+    {{HAMMER}} plan -a {{ASSIGNMENT}} --registry {{REGISTRY}}
 
 # Print a human-readable tree of an assignment's build: phases, layers, steps, runtime.
 describe ASSIGNMENT:
-    {{HAMMER}} plan -a {{ASSIGNMENT}} -f describe
+    {{HAMMER}} plan -a {{ASSIGNMENT}} --registry {{REGISTRY}} -f describe
 
 # Build a container image from an assignment (uses vendored ingredients if present).
 build ASSIGNMENT:
