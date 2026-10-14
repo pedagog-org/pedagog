@@ -94,6 +94,46 @@ fn resolve_one(key: &str, decl: &ParamDef, r#override: Option<&ParamVal>) -> Res
 /// - `:json` format: serde_json serialization of any `ParamVal`.
 /// - Missing key or unsupported format returns `Err`.
 pub fn interpolate(cmd: &str, params: &HashMap<String, ParamVal>) -> Result<String, String> {
+    scan(cmd, |inner| {
+        let (path, fmt) = split_format(inner);
+        let val = lookup(params, path, cmd)?;
+        match fmt {
+            None => default_format(&val, path),
+            Some("json") => serde_json::to_string(&val)
+                .map_err(|e| format!("json serialization failed for {path:?}: {e}")),
+            Some(other) => Err(format!("unknown format specifier {other:?} in: {cmd}")),
+        }
+    })
+}
+
+/// Top-level param names referenced by `cmd`'s tokens (`{a.b}` → `a`,
+/// `{a+b:json}` → `a`, `b`), using the same escaping rules as [`interpolate`].
+pub fn token_roots(cmd: &str) -> Result<Vec<String>, String> {
+    let mut roots = Vec::new();
+    scan(cmd, |inner| {
+        let (path, _) = split_format(inner);
+        for p in path.split('+') {
+            let root = p.split('.').next().unwrap_or(p);
+            roots.push(root.to_owned());
+        }
+        Ok(String::new())
+    })?;
+    Ok(roots)
+}
+
+fn split_format(inner: &str) -> (&str, Option<&str>) {
+    match inner.find(':') {
+        Some(colon) => (&inner[..colon], Some(&inner[colon + 1..])),
+        None => (inner, None),
+    }
+}
+
+/// Walks `cmd`, copying literal text and handling `{{`/`}}` escapes and `${shell}`
+/// passthrough; each `{token}`'s inner text is replaced by `on_token`'s result.
+fn scan(
+    cmd: &str,
+    mut on_token: impl FnMut(&str) -> Result<String, String>,
+) -> Result<String, String> {
     let mut out = String::new();
     let mut rest = cmd;
 
@@ -131,38 +171,21 @@ pub fn interpolate(cmd: &str, params: &HashMap<String, ParamVal>) -> Result<Stri
                     continue;
                 }
 
+                let close = rest
+                    .find('}')
+                    .ok_or_else(|| format!("unclosed '{{' in: {cmd}"))?;
+
                 // Shell variable `${...}` — pass through verbatim.
                 if is_shell_var {
-                    let close = rest
-                        .find('}')
-                        .ok_or_else(|| format!("unclosed '{{' in: {cmd}"))?;
                     out.push('{');
                     out.push_str(&rest[..close + 1]);
                     rest = &rest[close + 1..];
                     continue;
                 }
 
-                let close = rest
-                    .find('}')
-                    .ok_or_else(|| format!("unclosed '{{' in: {cmd}"))?;
                 let inner = &rest[..close];
                 rest = &rest[close + 1..];
-
-                let (path, fmt) = match inner.find(':') {
-                    Some(colon) => (&inner[..colon], Some(&inner[colon + 1..])),
-                    None => (inner, None),
-                };
-
-                let val = lookup(params, path, cmd)?;
-
-                let formatted = match fmt {
-                    None => default_format(&val, path)?,
-                    Some("json") => serde_json::to_string(&val)
-                        .map_err(|e| format!("json serialization failed for {path:?}: {e}"))?,
-                    Some(other) => return Err(format!("unknown format specifier {other:?} in: {cmd}")),
-                };
-
-                out.push_str(&formatted);
+                out.push_str(&on_token(inner)?);
             }
         }
     }
@@ -668,5 +691,16 @@ mod tests {
     #[test]
     fn interpolate_args_unknown_param_errors() {
         assert!(args(&["{nope}"]).is_err());
+    }
+
+    #[test]
+    fn token_roots_takes_first_path_segment_and_union_members() {
+        let roots = token_roots("x {a.b} {c+d:json} {e}").unwrap();
+        assert_eq!(roots, ["a", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn token_roots_skips_escapes_and_shell_vars() {
+        assert!(token_roots("{{lit}} ${HOME} $x }}").unwrap().is_empty());
     }
 }

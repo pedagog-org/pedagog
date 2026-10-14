@@ -6,22 +6,43 @@ use crate::recipe::primitives::{command::Command, id::AssignmentId, OsId, Toolch
 
 pub mod containerfile;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Layer {
     pub source: LayerSource,
     pub steps: Vec<ResolvedStep>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LayerSource {
     Os(OsId),
     Platform(PlatformKind),
-    Toolchain(ToolchainRef),
+    /// `origins` records every place the toolchain was requested (deduped).
+    Toolchain {
+        tc: ToolchainRef,
+        origins: Vec<ToolchainOrigin>,
+    },
     Assignment(AssignmentId),
     OsCleanup(OsId),
 }
 
-#[derive(Clone)]
+/// Why a toolchain is in the image: listed directly, or chosen as an addon of
+/// another toolchain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolchainOrigin {
+    TopLevel,
+    AddonOf(ToolchainRef),
+}
+
+impl std::fmt::Display for ToolchainOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ToolchainOrigin::TopLevel => f.write_str("listed directly"),
+            ToolchainOrigin::AddonOf(parent) => write!(f, "addon of {parent}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ResolvedStep {
     pub name: Option<String>,
     pub commands: Vec<Command>,

@@ -12,7 +12,7 @@ static ID_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(ID_PATTERN).expect("
 static PKG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(PKG_PATTERN).expect("valid pkg pattern"));
 
 // e.g. "ubuntu-22", "gcc", "code-server"
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub struct Id(String);
 

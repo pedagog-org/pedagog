@@ -1,12 +1,14 @@
 use serde::Deserialize;
+use strum_macros::IntoStaticStr;
 
 use super::primitives::{ArgHook, Ingredient, OsId, Step};
 
 // ---- Arg enums ---------------------------------------------------------------
 
 /// Valid args for pkg.install and pkg.remove hooks.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
 pub enum PkgArg {
     Packages,
 }
@@ -39,5 +41,7 @@ pub struct BuildHookDefs {
 #[derive(Debug, Deserialize)]
 pub struct PkgHookDefs {
     pub install: ArgHook<PkgArg>,
-    pub remove:  ArgHook<PkgArg>,
+    /// Reserved; not used by the resolver yet.
+    #[serde(default)]
+    pub remove: Option<ArgHook<PkgArg>>,
 }

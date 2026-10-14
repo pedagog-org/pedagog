@@ -16,6 +16,14 @@ warning — bypass with `git commit --no-verify`):
 just install-hooks
 ```
 
+Tests resolve the real recipe corpus in the `recipes/` submodule and fail if it isn't
+checked out. Fetch it once per clone (or set `PEDAGOG_SKIP_RECIPE_CORPUS=1` to skip
+those tests):
+
+```sh
+git submodule update --init recipes
+```
+
 ## Building & Running Assignments (Justfile)
 
 The root [`Justfile`](Justfile) wraps `hammer` (the recipe-resolution CLI) and `podman`
