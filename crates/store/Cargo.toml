@@ -8,11 +8,17 @@ publish.workspace = true
 # Postgres access (sqlx). Off by default so WASM consumers can use the model
 # types without pulling sqlx/tokio.
 db = ["dep:sqlx"]
+# S3-compatible object storage (Garage) via object_store.
+objects = ["dep:object_store"]
 
 [dependencies]
 strum = { workspace = true }
 strum_macros = { workspace = true }
 sqlx = { workspace = true, optional = true }
+object_store = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
 
 [lints]
 workspace = true

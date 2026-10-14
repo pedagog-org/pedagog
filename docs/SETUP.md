@@ -174,6 +174,22 @@ kubectl create namespace pedagog-builds
 kubectl create secret generic pedagog-jobs-db \
   --from-literal=url="postgres://pedagog:${POSTGRES_PW}@postgres-service.pedagog-data.svc:5432/pedagog" \
   --namespace=pedagog-builds
+
+# Garage object store: cluster RPC secret (64 hex chars) and admin API token
+kubectl create secret generic garage-secrets \
+  --from-literal=rpc-secret="$(openssl rand -hex 32)" \
+  --from-literal=admin-token="$(openssl rand -hex 32)" \
+  --namespace=pedagog-data
+
+# The platform's S3 key (Garage format: GK + 24 hex chars, 64-hex secret). The
+# bootstrap Job imports it; jobs reads it from its own namespace.
+GARAGE_KEY_ID="GK$(openssl rand -hex 12)"; GARAGE_KEY_SECRET="$(openssl rand -hex 32)"
+for ns in pedagog-data pedagog-builds; do
+  kubectl create secret generic garage-s3-key \
+    --from-literal=access-key-id="$GARAGE_KEY_ID" \
+    --from-literal=secret-access-key="$GARAGE_KEY_SECRET" \
+    --namespace="$ns"
+done
 ```
 
 ---
@@ -394,3 +410,15 @@ kubectl delete pod registry-test
 ```
 
 Should return `{}`.
+
+### Garage
+
+```sh
+kubectl get pods -n pedagog-data -l app=garage
+kubectl logs -n pedagog-data job/garage-bootstrap
+```
+
+The pod should be `Running` and ready, and the bootstrap log should end with
+`garage bootstrap complete` (it applies the single-node layout, imports the
+`garage-s3-key` key and creates the `pedagog` bucket; re-running it is safe). Garage
+reports unhealthy until that layout exists, so the pod only turns ready after bootstrap.

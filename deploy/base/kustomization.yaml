@@ -16,6 +16,11 @@ resources:
   - registry/service.yaml
   - registry/pvc.yaml
   - registry/network-policy.yaml
+  - garage/configmap.yaml
+  - garage/statefulset.yaml
+  - garage/service.yaml
+  - garage/bootstrap-job.yaml
+  - garage/network-policy.yaml
   - jobs/rbac.yaml
   - jobs/limit-range.yaml
   - jobs/resource-quota.yaml

@@ -1,12 +1,15 @@
-//! Persistent build-state models, and (behind `feature = "db"`) Postgres access.
+//! Persistent build-state models, and (behind features) Postgres access (`db`)
+//! and S3-compatible object storage (`objects`).
 //!
 //! The model types are always available and dependency-light so a WASM consumer
-//! can depend on `store` for them; the `db` feature gates the sqlx/Postgres layer.
+//! can depend on `store` for them; the features gate the sqlx and object_store layers.
 
 use strum_macros::{Display, EnumString};
 
 #[cfg(feature = "db")]
 pub mod db;
+#[cfg(feature = "objects")]
+pub mod objects;
 
 /// State of a single build attempt (`build_runs.status`).
 ///

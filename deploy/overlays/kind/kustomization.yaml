@@ -25,3 +25,19 @@ secretGenerator:
     namespace: pedagog-builds
     literals:
       - url=postgres://pedagog:pedagog@postgres-service.pedagog-data.svc:5432/pedagog
+  # Garage (dev-only values; formats: rpc-secret 64 hex, key id GK + 24 hex).
+  - name: garage-secrets
+    namespace: pedagog-data
+    literals:
+      - rpc-secret=0000000000000000000000000000000000000000000000000000000000000001
+      - admin-token=pedagog-dev-admin-token
+  - name: garage-s3-key
+    namespace: pedagog-data
+    literals:
+      - access-key-id=GK000000000000000000000001
+      - secret-access-key=0000000000000000000000000000000000000000000000000000000000000002
+  - name: garage-s3-key
+    namespace: pedagog-builds
+    literals:
+      - access-key-id=GK000000000000000000000001
+      - secret-access-key=0000000000000000000000000000000000000000000000000000000000000002

@@ -1,0 +1,51 @@
+# Re-runnable: safe to apply again (or delete and recreate) at any time.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: garage-bootstrap
+  namespace: pedagog-data
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: garage-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: docker.io/curlimages/curl:8.11.1
+          command: ["/bin/sh", "/bootstrap/bootstrap.sh"]
+          env:
+            - name: GARAGE_ADMIN_URL
+              value: http://garage-0.garage-headless.pedagog-data.svc:3903
+            - name: GARAGE_CAPACITY_BYTES
+              value: "10000000000"
+            - name: S3_BUCKET
+              value: pedagog
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secrets
+                  key: admin-token
+            - name: S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: garage-s3-key
+                  key: access-key-id
+            - name: S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-s3-key
+                  key: secret-access-key
+          volumeMounts:
+            - name: bootstrap
+              mountPath: /bootstrap
+      volumes:
+        - name: bootstrap
+          configMap:
+            name: garage-config
+            items:
+              - key: bootstrap.sh
+                path: bootstrap.sh

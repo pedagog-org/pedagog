@@ -1,0 +1,31 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: garage
+  namespace: pedagog-data
+spec:
+  podSelector:
+    matchLabels:
+      app: garage
+  policyTypes:
+    - Ingress
+  ingress:
+    # S3 API: platform services, and build/run pods using presigned URLs.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: pedagog-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: pedagog-builds
+      ports:
+        - protocol: TCP
+          port: 3900
+    # Admin API: only the bootstrap Job, in this namespace.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: garage-bootstrap
+      ports:
+        - protocol: TCP
+          port: 3903
