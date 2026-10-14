@@ -9,7 +9,7 @@ use pedagog_core::recipe::render::containerfile::Containerfile;
 use pedagog_core::recipe::render::{FromSource, ImageSpec, Render, RenderOptions};
 use pedagog_core::recipe::resolve::resolve_base;
 use pedagog_core::recipe::store::RecipeStore;
-use pedagog_k8s::build::{JobState, Outcome, Waited};
+use pedagog_k8s::build::{IfBuilt, JobState, Outcome, Waited};
 use pedagog_store::{BuildRun, BuildStatus, db};
 use serde::Serialize;
 use sqlx::PgPool;
@@ -61,11 +61,18 @@ pub async fn dispatch(
     )
     .await?;
 
+    // A forced pass also replaces Jobs that already succeeded for this hash;
+    // otherwise the lingering Job would make `force` a no-op until its TTL.
+    let if_built = if force {
+        IfBuilt::Rebuild
+    } else {
+        IfBuilt::Skip
+    };
     let mut dispatched = Vec::new();
     for p in planned {
         match state
             .builder
-            .ensure(&p.os_id, &p.hash, &p.dest, &p.containerfile)
+            .ensure(&p.os_id, &p.hash, &p.dest, &p.containerfile, if_built)
             .await?
         {
             Outcome::Skipped => {}

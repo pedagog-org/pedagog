@@ -66,7 +66,35 @@ pub enum JobState {
     Gone,
 }
 
+/// What `ensure` does with an existing Job that already succeeded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IfBuilt {
+    /// Leave it: the image for this Containerfile hash is already built.
+    Skip,
+    /// Delete and recreate it (forced rebuild, e.g. after editing files the hash
+    /// doesn't cover).
+    Rebuild,
+}
+
+/// What `ensure` does for a given existing-Job state.
+#[derive(Debug, PartialEq, Eq)]
+enum Action {
+    Create,
+    Skip,
+    Replace,
+}
+
+fn action(existing: Option<Phase>, if_built: IfBuilt) -> Action {
+    match (existing, if_built) {
+        (None, _) => Action::Create,
+        (Some(Phase::Active), _) => Action::Skip,
+        (Some(Phase::Succeeded), IfBuilt::Skip) => Action::Skip,
+        (Some(Phase::Succeeded), IfBuilt::Rebuild) | (Some(Phase::Failed), _) => Action::Replace,
+    }
+}
+
 /// Terminal classification of a Job's status.
+#[derive(Debug, PartialEq, Eq)]
 enum Phase {
     Active,
     Succeeded,
@@ -94,29 +122,31 @@ impl Builder {
         hash: &str,
         dest: &str,
         containerfile: &str,
+        if_built: IfBuilt,
     ) -> kube::Result<Outcome> {
         let name = job_name(os_id, hash);
         let cm = configmap_name(&name);
         self.put_configmap(&cm, containerfile).await?;
 
-        match self.client.jobs().get_opt(&name).await? {
-            None => self.create(&name, dest, &cm).await,
-            Some(job) => match phase(&job) {
-                Phase::Succeeded | Phase::Active => Ok(Outcome::Skipped),
-                Phase::Failed => {
-                    // fallback capture (primary capture is in wait/poll), then retry
+        let existing = self.client.jobs().get_opt(&name).await?;
+        match action(existing.as_ref().map(phase), if_built) {
+            Action::Create => self.create(&name, dest, &cm).await,
+            Action::Skip => Ok(Outcome::Skipped),
+            Action::Replace => {
+                // fallback capture for a failed Job (primary capture is in wait/poll)
+                if existing.as_ref().map(phase) == Some(Phase::Failed) {
                     let _ = self.capture_logs(&name).await;
-                    self.delete(&name).await?;
-                    self.await_gone(&name).await?;
-                    self.create(&name, dest, &cm).await.map(|o| {
-                        if o == Outcome::Created {
-                            Outcome::Retried
-                        } else {
-                            o
-                        }
-                    })
                 }
-            },
+                self.delete(&name).await?;
+                self.await_gone(&name).await?;
+                self.create(&name, dest, &cm).await.map(|o| {
+                    if o == Outcome::Created {
+                        Outcome::Retried
+                    } else {
+                        o
+                    }
+                })
+            }
         }
     }
 
@@ -401,6 +431,16 @@ mod tests {
             jobs_image: "registry/pedagog/jobs:1".into(),
             recipes_hostpath: None,
         }
+    }
+
+    #[test]
+    fn ensure_action_per_existing_job_state() {
+        use IfBuilt::{Rebuild, Skip};
+        assert_eq!(action(None, Skip), Action::Create);
+        assert_eq!(action(Some(Phase::Active), Rebuild), Action::Skip);
+        assert_eq!(action(Some(Phase::Succeeded), Skip), Action::Skip);
+        assert_eq!(action(Some(Phase::Succeeded), Rebuild), Action::Replace);
+        assert_eq!(action(Some(Phase::Failed), Skip), Action::Replace);
     }
 
     #[test]
