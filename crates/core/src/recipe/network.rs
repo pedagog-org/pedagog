@@ -10,9 +10,8 @@ const LABEL: &str = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?";
 const MAX_HOST_LEN: usize = 253;
 
 #[allow(clippy::expect_used)]
-static HOST_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(r"^{LABEL}(\.{LABEL})*$")).expect("valid host pattern")
-});
+static HOST_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!(r"^{LABEL}(\.{LABEL})*$")).expect("valid host pattern"));
 
 /// Egress policy, enforced by the platform at runtime (not baked into the image).
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -20,7 +19,9 @@ static HOST_RE: LazyLock<Regex> = LazyLock::new(|| {
 pub enum NetworkSpec {
     #[default]
     Allow,
-    Deny { allow: Vec<AllowRule> },
+    Deny {
+        allow: Vec<AllowRule>,
+    },
 }
 
 // Serde ignores unknown keys on unit variants of tagged enums, so an `allow:`
@@ -45,9 +46,10 @@ impl TryFrom<RawNetworkSpec> for NetworkSpec {
     fn try_from(raw: RawNetworkSpec) -> Result<Self, Self::Error> {
         match (raw.mode, raw.allow) {
             (Mode::Allow, None) => Ok(NetworkSpec::Allow),
-            (Mode::Allow, Some(_)) => {
-                Err("`allow:` entries only apply to `mode: deny`; `mode: allow` is unrestricted".to_owned())
-            }
+            (Mode::Allow, Some(_)) => Err(
+                "`allow:` entries only apply to `mode: deny`; `mode: allow` is unrestricted"
+                    .to_owned(),
+            ),
             (Mode::Deny, allow) => Ok(NetworkSpec::Deny {
                 allow: allow.unwrap_or_default(),
             }),
@@ -86,10 +88,9 @@ impl TryFrom<RawAllowRule> for AllowRule {
     fn try_from(raw: RawAllowRule) -> Result<Self, Self::Error> {
         let target = match (raw.host, raw.cidr) {
             (Some(host), None) => EgressTarget::Host(HostPattern::try_from(host)?),
-            (None, Some(cidr)) => EgressTarget::Cidr(
-                cidr.parse()
-                    .map_err(|_| format!("invalid cidr {cidr:?}: expected e.g. \"10.0.0.0/8\" or \"2001:db8::/32\""))?,
-            ),
+            (None, Some(cidr)) => EgressTarget::Cidr(cidr.parse().map_err(|_| {
+                format!("invalid cidr {cidr:?}: expected e.g. \"10.0.0.0/8\" or \"2001:db8::/32\"")
+            })?),
             (Some(_), Some(_)) => {
                 return Err("allow entry has both `host` and `cidr`; use one per entry".to_owned());
             }
@@ -201,8 +202,13 @@ mod tests {
             "mode: deny\nallow:\n  - host: Mirror.Internal\n    ports: [80, 443]\n  - cidr: 10.0.0.0/8\n  - cidr: 2001:db8::/32\n",
         );
         assert_eq!(rules.len(), 3);
-        assert!(matches!(&rules[0].target, EgressTarget::Host(h) if h.as_str() == "mirror.internal"));
-        assert_eq!(rules[0].ports.iter().map(|p| p.get()).collect::<Vec<_>>(), [80, 443]);
+        assert!(
+            matches!(&rules[0].target, EgressTarget::Host(h) if h.as_str() == "mirror.internal")
+        );
+        assert_eq!(
+            rules[0].ports.iter().map(|p| p.get()).collect::<Vec<_>>(),
+            [80, 443]
+        );
         assert!(matches!(&rules[1].target, EgressTarget::Cidr(n) if n.to_string() == "10.0.0.0/8"));
         assert!(rules[1].ports.is_empty(), "omitted ports means all ports");
         assert!(matches!(&rules[2].target, EgressTarget::Cidr(IpNet::V6(_))));

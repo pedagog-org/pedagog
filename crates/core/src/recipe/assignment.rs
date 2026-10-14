@@ -53,7 +53,12 @@ impl TryFrom<String> for ToolchainPick {
 
 impl fmt::Display for ToolchainPick {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}", self.tc, if self.allow_coexist { "!" } else { "" })
+        write!(
+            f,
+            "{}{}",
+            self.tc,
+            if self.allow_coexist { "!" } else { "" }
+        )
     }
 }
 
@@ -77,7 +82,9 @@ impl TryFrom<&str> for ToolchainSelection {
             ToolchainPick::try_from(part.to_owned())
         });
         // `split` always yields at least one item.
-        let parent = picks.next().unwrap_or_else(|| Err(format!("empty toolchain {s:?}")))?;
+        let parent = picks
+            .next()
+            .unwrap_or_else(|| Err(format!("empty toolchain {s:?}")))?;
         Ok(ToolchainSelection {
             parent,
             addons: picks.collect::<Result<_, _>>()?,
@@ -106,7 +113,9 @@ impl<'de> Deserialize<'de> for ToolchainSelection {
             type Value = ToolchainSelection;
 
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str(r#"a toolchain like "gcc:13+gdb:14", or a map with id, version, addons"#)
+                f.write_str(
+                    r#"a toolchain like "gcc:13+gdb:14", or a map with id, version, addons"#,
+                )
             }
 
             fn visit_str<E: de::Error>(self, s: &str) -> Result<Self::Value, E> {

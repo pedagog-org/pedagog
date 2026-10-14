@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::Deserialize;
 
-use super::primitives::{deserialize_one_or_many, Ingredient, OsId, ParamVal, Step, ToolchainId, Version};
+use super::primitives::{
+    Ingredient, OsId, ParamVal, Step, ToolchainId, Version, deserialize_one_or_many,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct ToolchainRecipe {

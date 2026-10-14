@@ -34,9 +34,7 @@ pub fn run_vend(args: VendArgs, dirs: Vec<PathBuf>) -> Result<()> {
             continue;
         }
         for ingredient in &target.ingredients {
-            let out_dir = target.recipe_dir
-                .join("ingredients")
-                .join(&target.label);
+            let out_dir = target.recipe_dir.join("ingredients").join(&target.label);
             std::fs::create_dir_all(&out_dir)
                 .map_err(|e| miette!("failed to create {}: {}", out_dir.display(), e))?;
             let out_path = out_dir.join(&ingredient.output);
@@ -64,10 +62,15 @@ fn fetch(ingredient: &Ingredient, out_path: &Path) -> Result<(), String> {
         IngredientSource::Github(gh) => {
             let status = Command::new("gh")
                 .args([
-                    "release", "download", &gh.tag,
-                    "--repo", &gh.repo,
-                    "--pattern", &gh.asset,
-                    "--output", &out_path.to_string_lossy(),
+                    "release",
+                    "download",
+                    &gh.tag,
+                    "--repo",
+                    &gh.repo,
+                    "--pattern",
+                    &gh.asset,
+                    "--output",
+                    &out_path.to_string_lossy(),
                     "--clobber",
                 ])
                 .status()
@@ -136,7 +139,9 @@ fn collect_dir_targets(
                             continue;
                         }
                     };
-                    if !matches_os_filter(args, def.id.as_str()) { continue; }
+                    if !matches_os_filter(args, def.id.as_str()) {
+                        continue;
+                    }
                     targets.push(RecipeTarget {
                         label: format!("os/{}", def.id),
                         ingredients: def.ingredients,
@@ -151,7 +156,9 @@ fn collect_dir_targets(
                             continue;
                         }
                     };
-                    if !matches_platform_filter(args, &recipe.platform.to_string()) { continue; }
+                    if !matches_platform_filter(args, &recipe.platform.to_string()) {
+                        continue;
+                    }
                     targets.push(RecipeTarget {
                         label: format!("platform/{}", recipe.platform),
                         ingredients: recipe.ingredients,
@@ -167,7 +174,9 @@ fn collect_dir_targets(
                         }
                     };
                     let label = format!("toolchain/{}/{}", tc.id, tc.version);
-                    if !matches_toolchain_filter(args, &label) { continue; }
+                    if !matches_toolchain_filter(args, &label) {
+                        continue;
+                    }
                     targets.push(RecipeTarget {
                         label,
                         ingredients: tc.ingredients,
@@ -182,17 +191,23 @@ fn collect_dir_targets(
 }
 
 fn matches_os_filter(args: &VendArgs, id: &str) -> bool {
-    if no_filter(args) { return true; }
+    if no_filter(args) {
+        return true;
+    }
     args.os.as_deref() == Some(id)
 }
 
 fn matches_platform_filter(args: &VendArgs, kind: &str) -> bool {
-    if no_filter(args) { return true; }
+    if no_filter(args) {
+        return true;
+    }
     args.platform.as_deref() == Some(kind)
 }
 
 fn matches_toolchain_filter(args: &VendArgs, label: &str) -> bool {
-    if no_filter(args) { return true; }
+    if no_filter(args) {
+        return true;
+    }
     // label is "toolchain/<id>/<version>"; --toolchain may be "gcc" or "gcc:12"
     if let Some(filter) = &args.toolchain {
         let rest = label.strip_prefix("toolchain/").unwrap_or(label);

@@ -5,9 +5,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use clap::Parser;
-use miette::{
-    GraphicalReportHandler, MietteDiagnostic, Report, Result, Severity, miette,
-};
+use miette::{GraphicalReportHandler, MietteDiagnostic, Report, Result, Severity, miette};
 
 use cli::{Cli, Command, Format, PlanArgs, VendArgs};
 use pedagog_core::recipe::assignment::AssignmentYaml;
@@ -15,7 +13,7 @@ use pedagog_core::recipe::primitives::Id;
 use pedagog_core::recipe::render::containerfile::Containerfile;
 use pedagog_core::recipe::render::describe::Describe;
 use pedagog_core::recipe::render::{FromSource, Render, RenderOptions};
-use pedagog_core::recipe::resolve::{resolve, resolve_base, ResolveError};
+use pedagog_core::recipe::resolve::{ResolveError, resolve, resolve_base};
 use pedagog_core::recipe::store::RecipeStore;
 
 fn main() -> Result<()> {
@@ -38,18 +36,22 @@ fn run_plan(args: PlanArgs) -> Result<()> {
             .map(|e| {
                 // Use only the filename to keep lines short; the full path is rarely needed
                 // for a parse error since the message identifies the problem.
-                let name = e.path.file_name()
+                let name = e
+                    .path
+                    .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| e.path.display().to_string());
                 let mut lines = e.message.lines();
                 let first = lines.next().unwrap_or("");
-                let rest: String = lines
-                    .map(|l| format!("\n         {l}"))
-                    .collect();
+                let rest: String = lines.map(|l| format!("\n         {l}")).collect();
                 format!("  · {name}: {first}{rest}")
             })
             .collect();
-        miette!("failed to load {} recipe file(s):\n{}", messages.len(), messages.join("\n"))
+        miette!(
+            "failed to load {} recipe file(s):\n{}",
+            messages.len(),
+            messages.join("\n")
+        )
     })?;
 
     let spec = match (&args.assignment, &args.os) {

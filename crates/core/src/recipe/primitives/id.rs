@@ -9,7 +9,8 @@ const PKG_PATTERN: &str = r"^[a-z0-9][a-z0-9+.-]*$";
 #[allow(clippy::expect_used)]
 static ID_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(ID_PATTERN).expect("valid ID pattern"));
 #[allow(clippy::expect_used)]
-static PKG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(PKG_PATTERN).expect("valid pkg pattern"));
+static PKG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(PKG_PATTERN).expect("valid pkg pattern"));
 
 // e.g. "ubuntu-22", "gcc", "code-server"
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
@@ -63,7 +64,9 @@ impl TryFrom<String> for PkgName {
         if PKG_RE.is_match(&s) {
             Ok(PkgName(s))
         } else {
-            Err(format!("invalid package name {s:?}: must match {PKG_PATTERN}"))
+            Err(format!(
+                "invalid package name {s:?}: must match {PKG_PATTERN}"
+            ))
         }
     }
 }

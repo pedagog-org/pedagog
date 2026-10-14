@@ -59,7 +59,10 @@ impl RecipeStore {
                 let src = match std::fs::read_to_string(&path) {
                     Ok(s) => s,
                     Err(e) => {
-                        errors.push(LoadError { path, message: e.to_string() });
+                        errors.push(LoadError {
+                            path,
+                            message: e.to_string(),
+                        });
                         continue;
                     }
                 };
@@ -119,11 +122,15 @@ impl RecipeStore {
             .find(|r| r.os.contains(os))
     }
 
-    pub fn toolchain(&self, id: &ToolchainId, version: &Version, os: &OsId) -> Option<&ToolchainRecipe> {
+    pub fn toolchain(
+        &self,
+        id: &ToolchainId,
+        version: &Version,
+        os: &OsId,
+    ) -> Option<&ToolchainRecipe> {
         let tc = self.toolchains.get(&(id.clone(), version.clone()))?;
         tc.os.contains(os).then_some(tc)
     }
-
 }
 
 // Introspection methods — unused now, available for future subcommands.
@@ -173,9 +180,11 @@ impl RecipeStore {
 
 fn yaml_error_message(src: &str, err: &serde_yaml::Error) -> String {
     let msg = err.to_string();
-    let Some(loc) = err.location() else { return msg };
+    let Some(loc) = err.location() else {
+        return msg;
+    };
     let line = loc.line();
-    let col  = loc.column();
+    let col = loc.column();
 
     let lines: Vec<&str> = src.lines().collect();
     let mut out = msg.clone();
@@ -187,7 +196,10 @@ fn yaml_error_message(src: &str, err: &serde_yaml::Error) -> String {
         let lineno = i + 1;
         out.push_str(&format!("  {:>4} | {}\n", lineno, text));
         if lineno == line {
-            out.push_str(&format!("       | {}^\n", " ".repeat(col.saturating_sub(1))));
+            out.push_str(&format!(
+                "       | {}^\n",
+                " ".repeat(col.saturating_sub(1))
+            ));
         }
     }
     out
@@ -221,7 +233,11 @@ impl Loadable for OsDef {
 
 impl Loadable for PlatformRecipe {
     fn register(self, store: &mut RecipeStore, _path: &Path, _errors: &mut Vec<LoadError>) {
-        store.platforms.entry(self.platform.clone()).or_default().push(self);
+        store
+            .platforms
+            .entry(self.platform.clone())
+            .or_default()
+            .push(self);
     }
 }
 
@@ -233,7 +249,8 @@ impl Loadable for ToolchainRecipe {
                 path: path.to_owned(),
                 message: format!(
                     "duplicate toolchain {:?} version {:?}: ignoring this file",
-                    self.id.as_str(), self.version.as_str()
+                    self.id.as_str(),
+                    self.version.as_str()
                 ),
             });
             return;
@@ -252,7 +269,9 @@ where
     let mut problems = Vec::new();
     for step in &hook.steps {
         let Step::Run { run, .. } = step else {
-            problems.push(format!("{hook_name}: arg hook steps may not install packages"));
+            problems.push(format!(
+                "{hook_name}: arg hook steps may not install packages"
+            ));
             continue;
         };
         for cmd in run {
@@ -271,13 +290,20 @@ where
     problems
 }
 
-fn load_yaml<T: Loadable>(src: &str, path: PathBuf, store: &mut RecipeStore, errors: &mut Vec<LoadError>) {
+fn load_yaml<T: Loadable>(
+    src: &str,
+    path: PathBuf,
+    store: &mut RecipeStore,
+    errors: &mut Vec<LoadError>,
+) {
     match serde_yaml::from_str::<T>(src) {
         Ok(r) => r.register(store, &path, errors),
-        Err(e) => errors.push(LoadError { path, message: yaml_error_message(src, &e) }),
+        Err(e) => errors.push(LoadError {
+            path,
+            message: yaml_error_message(src, &e),
+        }),
     }
 }
-
 
 /// Writes recipe files into a fresh temp directory and loads them.
 #[cfg(test)]
@@ -321,7 +347,11 @@ mod tests {
     fn declared_addon_that_exists_on_shared_os_loads() {
         let gcc = toolchain("gcc", "13", "os-a", "addons:\n  gdb: [\"14\"]\n");
         let gdb = toolchain("gdb", "14", "[os-a, os-b]", "");
-        let errs = load_errors(&[("os/a.yaml", OS), ("toolchains/gcc.yaml", &gcc), ("toolchains/gdb.yaml", &gdb)]);
+        let errs = load_errors(&[
+            ("os/a.yaml", OS),
+            ("toolchains/gcc.yaml", &gcc),
+            ("toolchains/gdb.yaml", &gdb),
+        ]);
         assert!(errs.is_empty(), "{errs:?}");
     }
 
@@ -329,7 +359,11 @@ mod tests {
     fn declared_addon_without_recipe_is_a_load_error() {
         let gcc = toolchain("gcc", "13", "os-a", "addons:\n  gdb: [\"14\", \"15\"]\n");
         let gdb = toolchain("gdb", "14", "os-a", "");
-        let errs = load_errors(&[("os/a.yaml", OS), ("toolchains/gcc.yaml", &gcc), ("toolchains/gdb.yaml", &gdb)]);
+        let errs = load_errors(&[
+            ("os/a.yaml", OS),
+            ("toolchains/gcc.yaml", &gcc),
+            ("toolchains/gdb.yaml", &gdb),
+        ]);
         assert_eq!(errs.len(), 1, "{errs:?}");
         assert!(errs[0].contains("gdb:15"), "{errs:?}");
     }
@@ -338,7 +372,11 @@ mod tests {
     fn declared_addon_on_other_os_only_is_a_load_error() {
         let gcc = toolchain("gcc", "13", "os-a", "addons:\n  gdb: [\"14\"]\n");
         let gdb = toolchain("gdb", "14", "os-b", "");
-        let errs = load_errors(&[("os/a.yaml", OS), ("toolchains/gcc.yaml", &gcc), ("toolchains/gdb.yaml", &gdb)]);
+        let errs = load_errors(&[
+            ("os/a.yaml", OS),
+            ("toolchains/gcc.yaml", &gcc),
+            ("toolchains/gdb.yaml", &gdb),
+        ]);
         assert_eq!(errs.len(), 1, "{errs:?}");
         assert!(errs[0].contains("supports none"), "{errs:?}");
     }
@@ -356,7 +394,9 @@ mod tests {
 
     #[test]
     fn arg_hook_with_declared_tokens_passes() {
-        let h = hook("args: [packages]\nsteps:\n  - run: ['apt-get install -y {packages} ${HOME} {{x}}']\n");
+        let h = hook(
+            "args: [packages]\nsteps:\n  - run: ['apt-get install -y {packages} ${HOME} {{x}}']\n",
+        );
         assert!(check_arg_hook("pkg.install", &h).is_empty());
     }
 

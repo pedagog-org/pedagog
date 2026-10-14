@@ -7,13 +7,32 @@ use crate::recipe::render::ToolchainOrigin;
 #[derive(Debug)]
 pub enum ResolveError {
     OsNotFound(OsId),
-    PlatformNotFound { kind: PlatformKind, os: OsId },
-    ToolchainNotFound { tc: ToolchainRef, os: OsId, origin: ToolchainOrigin },
-    AddonNotDeclared { parent: ToolchainRef, addon: ToolchainRef, declared: Vec<Version> },
-    VersionConflict { id: ToolchainId, entries: Vec<ConflictEntry> },
+    PlatformNotFound {
+        kind: PlatformKind,
+        os: OsId,
+    },
+    ToolchainNotFound {
+        tc: ToolchainRef,
+        os: OsId,
+        origin: ToolchainOrigin,
+    },
+    AddonNotDeclared {
+        parent: ToolchainRef,
+        addon: ToolchainRef,
+        declared: Vec<Version>,
+    },
+    VersionConflict {
+        id: ToolchainId,
+        entries: Vec<ConflictEntry>,
+    },
     InvalidParams(String),
-    Interpolation { context: String, message: String },
-    InvalidPort { raw: String },
+    Interpolation {
+        context: String,
+        message: String,
+    },
+    InvalidPort {
+        raw: String,
+    },
 }
 
 /// One version of a toolchain that was selected alongside other versions of it.
@@ -52,12 +71,21 @@ impl fmt::Display for ResolveError {
                 }
                 write!(f, "not found for os {:?}", os.as_str())
             }
-            ResolveError::AddonNotDeclared { parent, addon, declared } => {
+            ResolveError::AddonNotDeclared {
+                parent,
+                addon,
+                declared,
+            } => {
                 write!(f, "{parent} does not declare {addon} as a compatible addon")?;
                 if declared.is_empty() {
                     write!(f, " ({parent} offers no {} addon)", addon.id)
                 } else {
-                    write!(f, " (declared {} versions: {})", addon.id, versions(declared))
+                    write!(
+                        f,
+                        " (declared {} versions: {})",
+                        addon.id,
+                        versions(declared)
+                    )
                 }
             }
             ResolveError::VersionConflict { id, entries } => write_conflict(f, id, entries),
@@ -84,13 +112,20 @@ impl ResolveError {
     }
 }
 
-fn write_conflict(f: &mut fmt::Formatter<'_>, id: &ToolchainId, entries: &[ConflictEntry]) -> fmt::Result {
+fn write_conflict(
+    f: &mut fmt::Formatter<'_>,
+    id: &ToolchainId,
+    entries: &[ConflictEntry],
+) -> fmt::Result {
     write!(
         f,
         "toolchain `{id}` is selected at {} versions, and not all of them allow coexisting:",
         entries.len()
     )?;
-    let labels: Vec<String> = entries.iter().map(|e| format!("{id}:{}", e.version)).collect();
+    let labels: Vec<String> = entries
+        .iter()
+        .map(|e| format!("{id}:{}", e.version))
+        .collect();
     let width = labels.iter().map(String::len).max().unwrap_or(0);
     for (entry, label) in entries.iter().zip(&labels) {
         let via: Vec<String> = entry
@@ -119,8 +154,14 @@ fn write_conflict(f: &mut fmt::Formatter<'_>, id: &ToolchainId, entries: &[Confl
         )?;
     }
     match common_versions(entries) {
-        Some(common) if common.is_empty() => write!(f, "\n  versions allowed by every parent: none"),
-        Some(common) => write!(f, "\n  versions allowed by every parent: {}", versions(&common)),
+        Some(common) if common.is_empty() => {
+            write!(f, "\n  versions allowed by every parent: none")
+        }
+        Some(common) => write!(
+            f,
+            "\n  versions allowed by every parent: {}",
+            versions(&common)
+        ),
         None => Ok(()),
     }
 }
@@ -140,22 +181,34 @@ fn conflict_help(id: &ToolchainId, entries: &[ConflictEntry]) -> String {
     match common_versions(entries) {
         None => format!("pick one {id} version, or {coexist_fix}"),
         Some(common) => match common.as_slice() {
-            [] => format!("no single {id} version fits every parent; change a parent toolchain, or {coexist_fix}"),
+            [] => format!(
+                "no single {id} version fits every parent; change a parent toolchain, or {coexist_fix}"
+            ),
             [only] => format!("use {id}:{only} everywhere, or {coexist_fix}"),
-            many => format!("use one of {id} {} everywhere, or {coexist_fix}", versions(many)),
+            many => format!(
+                "use one of {id} {} everywhere, or {coexist_fix}",
+                versions(many)
+            ),
         },
     }
 }
 
 /// Versions every addon parent allows; `None` when no entry came from a parent.
 fn common_versions(entries: &[ConflictEntry]) -> Option<Vec<Version>> {
-    let mut sets = entries.iter().flat_map(|e| e.allowed_by_parent.iter().map(|(_, v)| v));
+    let mut sets = entries
+        .iter()
+        .flat_map(|e| e.allowed_by_parent.iter().map(|(_, v)| v));
     let first = sets.next()?.clone();
-    Some(sets.fold(first, |acc, set| acc.into_iter().filter(|v| set.contains(v)).collect()))
+    Some(sets.fold(first, |acc, set| {
+        acc.into_iter().filter(|v| set.contains(v)).collect()
+    }))
 }
 
 fn versions(vs: &[Version]) -> String {
-    vs.iter().map(Version::as_str).collect::<Vec<_>>().join(", ")
+    vs.iter()
+        .map(Version::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -168,7 +221,9 @@ mod tests {
     }
 
     fn vs(list: &[&str]) -> Vec<Version> {
-        list.iter().map(|v| Version::try_from((*v).to_owned()).unwrap()).collect()
+        list.iter()
+            .map(|v| Version::try_from((*v).to_owned()).unwrap())
+            .collect()
     }
 
     fn os() -> OsId {
@@ -192,7 +247,10 @@ mod tests {
             os: os(),
             origin: ToolchainOrigin::TopLevel,
         };
-        assert_eq!(err.to_string(), r#"toolchain gcc:13 not found for os "ubuntu-22""#);
+        assert_eq!(
+            err.to_string(),
+            r#"toolchain gcc:13 not found for os "ubuntu-22""#
+        );
     }
 
     #[test]
@@ -253,7 +311,10 @@ mod tests {
             ],
         };
         let text = err.to_string();
-        assert!(text.ends_with("versions allowed by every parent: 14"), "{text}");
+        assert!(
+            text.ends_with("versions allowed by every parent: 14"),
+            "{text}"
+        );
         assert_eq!(
             err.help().unwrap(),
             "use gdb:14 everywhere, or set `coexist: true` in the gdb:15, gdb:13 recipe(s), or allow it in the assignment by marking every such entry: gdb:15!, gdb:13!"
@@ -274,7 +335,10 @@ mod tests {
             entries: vec![entry("3.11"), entry("3.12")],
         };
         let text = err.to_string();
-        assert!(text.contains("  python:3.11  listed directly  coexist: recipe=no assignment=no\n"), "{text}");
+        assert!(
+            text.contains("  python:3.11  listed directly  coexist: recipe=no assignment=no\n"),
+            "{text}"
+        );
         assert!(!text.contains("every parent"), "{text}");
         assert_eq!(
             err.help().unwrap(),

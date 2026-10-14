@@ -1,6 +1,9 @@
 use anstyle::{AnsiColor, Style};
 
-use super::{BuildPhase, BuildPlan, FromSource, ImageSpec, Layer, LayerSource, Render, RenderOptions, Runtime};
+use super::{
+    BuildPhase, BuildPlan, FromSource, ImageSpec, Layer, LayerSource, Render, RenderOptions,
+    Runtime,
+};
 use crate::recipe::network::NetworkSpec;
 use crate::recipe::primitives::ToolchainRef;
 
@@ -24,8 +27,15 @@ const NOTE: Style = AnsiColor::Yellow.on_default();
 impl Render for Describe {
     fn render(spec: &ImageSpec, opts: &RenderOptions) -> Self {
         let root = match spec {
-            ImageSpec::Base { upstream, image, os } => {
-                let mut root = Node::new(paint(HEADER, &format!("Base image {}", opts.prefixed(image))));
+            ImageSpec::Base {
+                upstream,
+                image,
+                os,
+            } => {
+                let mut root = Node::new(paint(
+                    HEADER,
+                    &format!("Base image {}", opts.prefixed(image)),
+                ));
                 root.push(Node::new(paint(FROM, &format!("FROM {upstream}"))));
                 root.push(layer_node(os));
                 root
@@ -122,7 +132,11 @@ fn notes_node(plan: &BuildPlan) -> Option<Node> {
             .map(|t| t.version.to_string())
             .collect();
         if versions.len() > 1 {
-            notes.push(format!("{} is installed at versions {}", tc.id, versions.join(", ")));
+            notes.push(format!(
+                "{} is installed at versions {}",
+                tc.id,
+                versions.join(", ")
+            ));
         }
     }
     if notes.is_empty() {
@@ -188,7 +202,11 @@ fn render_tree(root: &Node) -> String {
 fn write_children(buf: &mut String, children: &[Node], prefix: &str) {
     for (i, child) in children.iter().enumerate() {
         let last = i + 1 == children.len();
-        let (connector, cont) = if last { ("└── ", "    ") } else { ("├── ", "│   ") };
+        let (connector, cont) = if last {
+            ("└── ", "    ")
+        } else {
+            ("├── ", "│   ")
+        };
         buf.push_str(&format!("{prefix}{connector}{}\n", child.label));
         write_children(buf, &child.children, &format!("{prefix}{cont}"));
     }
@@ -204,7 +222,10 @@ mod tests {
     use crate::recipe::render::{ResolvedStep, ToolchainOrigin};
 
     fn plain(d: Describe) -> String {
-        Regex::new("\x1b\\[[0-9;]*m").unwrap().replace_all(&d.to_string(), "").into_owned()
+        Regex::new("\x1b\\[[0-9;]*m")
+            .unwrap()
+            .replace_all(&d.to_string(), "")
+            .into_owned()
     }
 
     fn id(s: &str) -> Id {
@@ -229,7 +250,10 @@ mod tests {
     }
 
     fn toolchain(r: &str, origins: Vec<ToolchainOrigin>) -> Layer {
-        layer(LayerSource::Toolchain { tc: tc(r), origins }, &[Some("Install")])
+        layer(
+            LayerSource::Toolchain { tc: tc(r), origins },
+            &[Some("Install")],
+        )
     }
 
     fn full(toolchain: Vec<Layer>, network: NetworkSpec) -> ImageSpec {
@@ -238,7 +262,10 @@ mod tests {
             base_image: "pedagog/ubuntu:22".to_owned(),
             plan: BuildPlan {
                 os: layer(LayerSource::Os(id("ubuntu-22")), &[Some("init")]),
-                platform: layer(LayerSource::Platform(PlatformKind::Interactive), &[Some("Install code-server"), None]),
+                platform: layer(
+                    LayerSource::Platform(PlatformKind::Interactive),
+                    &[Some("Install code-server"), None],
+                ),
                 toolchain,
                 assignment: layer(LayerSource::Assignment(id("hw1")), &[]),
                 os_cleanup: layer(LayerSource::OsCleanup(id("ubuntu-22")), &[Some("clean")]),
@@ -268,7 +295,10 @@ mod tests {
             ],
             NetworkSpec::Allow,
         );
-        let out = plain(Describe::render(&spec, &opts(Some("localhost"), FromSource::PrebuiltBase)));
+        let out = plain(Describe::render(
+            &spec,
+            &opts(Some("localhost"), FromSource::PrebuiltBase),
+        ));
         assert_eq!(
             out,
             "\
@@ -312,7 +342,10 @@ Assignment: hw1
             image: "pedagog/ubuntu:22".to_owned(),
             os: layer(LayerSource::Os(id("ubuntu-22")), &[Some("init")]),
         };
-        let out = plain(Describe::render(&spec, &opts(Some("localhost"), FromSource::Standalone)));
+        let out = plain(Describe::render(
+            &spec,
+            &opts(Some("localhost"), FromSource::Standalone),
+        ));
         assert_eq!(
             out,
             "Base image localhost/pedagog/ubuntu:22\n├── FROM ubuntu:22.04\n└── OS: ubuntu-22\n    └── init\n"
@@ -330,15 +363,27 @@ Assignment: hw1
             ],
             network,
         );
-        let out = plain(Describe::render(&spec, &opts(None, FromSource::PrebuiltBase)));
-        assert!(out.contains("network: deny by default; allow 10.0.0.0/8 (all ports)"), "{out}");
-        assert!(out.ends_with("└── NOTES\n    └── gdb is installed at versions 15, 13\n"), "{out}");
+        let out = plain(Describe::render(
+            &spec,
+            &opts(None, FromSource::PrebuiltBase),
+        ));
+        assert!(
+            out.contains("network: deny by default; allow 10.0.0.0/8 (all ports)"),
+            "{out}"
+        );
+        assert!(
+            out.ends_with("└── NOTES\n    └── gdb is installed at versions 15, 13\n"),
+            "{out}"
+        );
     }
 
     #[test]
     fn output_is_styled() {
-        let out = Describe::render(&full(vec![], NetworkSpec::Allow), &opts(None, FromSource::PrebuiltBase))
-            .to_string();
+        let out = Describe::render(
+            &full(vec![], NetworkSpec::Allow),
+            &opts(None, FromSource::PrebuiltBase),
+        )
+        .to_string();
         assert!(out.contains('\x1b'), "expected ANSI styling");
     }
 }

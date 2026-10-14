@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Reject commits that don't pass clippy cleanly (warnings are errors).
+# Reject commits that aren't rustfmt-clean or don't pass clippy cleanly
+# (warnings are errors). CI runs the same checks.
 # Bypass with `git commit --no-verify` when you know what you're doing.
 set -euo pipefail
+
+echo "pre-commit: cargo fmt --check"
+cargo fmt --check
 
 echo "pre-commit: cargo clippy --workspace --all-targets -D warnings"
 cargo clippy --workspace --all-targets -- -D warnings

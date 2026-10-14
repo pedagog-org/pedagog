@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use clap::{ArgGroup, Parser, ValueEnum};
 
 #[derive(Parser)]
-#[command(name = "hammer", about = "Compile Pedagog recipes into container build plans")]
+#[command(
+    name = "hammer",
+    about = "Compile Pedagog recipes into container build plans"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -75,7 +78,7 @@ With filter flags, only matching recipes are processed.
 
   --os <ID>               Vendor ingredients for a specific OS recipe
   --platform <ID>         Vendor ingredients for a specific platform recipe
-  --toolchain <ID[:VER]>  Vendor ingredients for a specific toolchain recipe",
+  --toolchain <ID[:VER]>  Vendor ingredients for a specific toolchain recipe"
 )]
 pub struct VendArgs {
     /// Filter: vend only assets for a specific OS recipe.

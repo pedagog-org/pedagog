@@ -40,13 +40,35 @@ impl ParamVal {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ParamDef {
-    Bool { default: Option<bool>,          #[serde(default)] info: Option<String> },
-    Int  { default: Option<i64>,           #[serde(default)] info: Option<String> },
-    Str  { default: Option<String>,        #[serde(default)] info: Option<String>, #[serde(default)] regex: Option<String> },
-    List { default: Option<Vec<ParamVal>>, #[serde(default)] info: Option<String> },
+    Bool {
+        default: Option<bool>,
+        #[serde(default)]
+        info: Option<String>,
+    },
+    Int {
+        default: Option<i64>,
+        #[serde(default)]
+        info: Option<String>,
+    },
+    Str {
+        default: Option<String>,
+        #[serde(default)]
+        info: Option<String>,
+        #[serde(default)]
+        regex: Option<String>,
+    },
+    List {
+        default: Option<Vec<ParamVal>>,
+        #[serde(default)]
+        info: Option<String>,
+    },
     /// Map params carry recursive typed sub-property declarations.
     /// Their effective default is derived from sub-properties' defaults.
-    Map  { properties: HashMap<String, ParamDef>, #[serde(default)] info: Option<String> },
+    Map {
+        properties: HashMap<String, ParamDef>,
+        #[serde(default)]
+        info: Option<String>,
+    },
 }
 
 #[cfg(test)]
@@ -66,7 +88,13 @@ mod tests {
     fn paramdef_bool() {
         let yaml = "type: bool\ndefault: true\n";
         let def: ParamDef = serde_yaml::from_str(yaml).unwrap();
-        assert!(matches!(def, ParamDef::Bool { default: Some(true), .. }));
+        assert!(matches!(
+            def,
+            ParamDef::Bool {
+                default: Some(true),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -80,7 +108,13 @@ mod tests {
     fn paramdef_int() {
         let yaml = "type: int\ndefault: 42\n";
         let def: ParamDef = serde_yaml::from_str(yaml).unwrap();
-        assert!(matches!(def, ParamDef::Int { default: Some(42), .. }));
+        assert!(matches!(
+            def,
+            ParamDef::Int {
+                default: Some(42),
+                ..
+            }
+        ));
     }
 
     #[test]
