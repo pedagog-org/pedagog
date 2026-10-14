@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pedagog-jobs
+  namespace: pedagog-builds
+spec:
+  selector:
+    app: pedagog-jobs
+  ports:
+    - port: 8080
+      targetPort: 8080

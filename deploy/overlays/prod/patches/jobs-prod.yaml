@@ -1,0 +1,16 @@
+# Prod: startup builds pinned recipes baked into the image; the Kaniko
+# initContainer stages them from PEDAGOG_JOBS_IMAGE. Set it to the same pushed
+# ref as the images: override below.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pedagog-jobs
+  namespace: pedagog-builds
+spec:
+  template:
+    spec:
+      containers:
+        - name: jobs
+          env:
+            - name: PEDAGOG_JOBS_IMAGE
+              value: REPLACE-WITH-REGISTRY-IP:5000/pedagog/jobs:prod

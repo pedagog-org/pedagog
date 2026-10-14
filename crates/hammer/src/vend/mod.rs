@@ -11,6 +11,8 @@ use pedagog_core::recipe::toolchain::ToolchainRecipe;
 
 use crate::cli::VendArgs;
 
+mod github;
+
 struct RecipeTarget {
     /// Relative path used in output, e.g. "platform/interactive"
     label: String,
@@ -59,29 +61,7 @@ pub fn run_vend(args: VendArgs, dirs: Vec<PathBuf>) -> Result<()> {
 
 fn fetch(ingredient: &Ingredient, out_path: &Path) -> Result<(), String> {
     match &ingredient.source {
-        IngredientSource::Github(gh) => {
-            let status = Command::new("gh")
-                .args([
-                    "release",
-                    "download",
-                    &gh.tag,
-                    "--repo",
-                    &gh.repo,
-                    "--pattern",
-                    &gh.asset,
-                    "--output",
-                    &out_path.to_string_lossy(),
-                    "--clobber",
-                ])
-                .status()
-                .map_err(|e| format!("failed to run gh: {e}"))?;
-            if !status.success() {
-                return Err(format!(
-                    "gh release download failed for {}/{} tag {}",
-                    gh.repo, gh.asset, gh.tag
-                ));
-            }
-        }
+        IngredientSource::Github(gh) => github::download(gh, out_path)?,
         IngredientSource::Url(url) => {
             let status = Command::new("curl")
                 .args(["-fsSL", url.as_str(), "-o", &out_path.to_string_lossy()])

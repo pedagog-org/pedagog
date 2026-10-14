@@ -1,0 +1,16 @@
+# Default requests/limits for build pods (Kaniko + the stage-recipes initContainer),
+# so the ResourceQuota can bound concurrency without every pod declaring resources.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: build-defaults
+  namespace: pedagog-builds
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 500m
+        memory: 1Gi
+      default:
+        cpu: "2"
+        memory: 4Gi

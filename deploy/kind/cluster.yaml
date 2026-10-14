@@ -1,0 +1,12 @@
+# Local kind cluster for end-to-end tests (`just kind-up`). The recipes checkout is
+# mounted into the node so dev-mode jobs and Kaniko pods can use it as a hostPath;
+# `just kind-up` substitutes the absolute path for @RECIPES@ (kind needs one).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: pedagog
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: "@RECIPES@"
+        containerPath: /srv/pedagog/recipes
+        readOnly: true

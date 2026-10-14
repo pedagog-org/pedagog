@@ -1,0 +1,27 @@
+# Local kind cluster (`just kind-deploy`): the full base on kind's local-path
+# storage, dev-mode jobs reading the recipes mounted into the node, and the jobs
+# image loaded straight into the node (`just kind-load-jobs`). Dev-only secrets.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - storage-class.yaml
+patches:
+  - path: patches/jobs-kind.yaml
+
+images:
+  - name: pedagog-jobs
+    newName: localhost/pedagog/jobs
+    newTag: dev
+
+generatorOptions:
+  disableNameSuffixHash: true
+secretGenerator:
+  - name: postgres-credentials
+    namespace: pedagog-data
+    literals:
+      - password=pedagog
+  - name: pedagog-jobs-db
+    namespace: pedagog-builds
+    literals:
+      - url=postgres://pedagog:pedagog@postgres-service.pedagog-data.svc:5432/pedagog

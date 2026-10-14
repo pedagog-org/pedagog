@@ -31,6 +31,53 @@
 
 ---
 
+## Local Development
+
+Working on the Rust crates doesn't need the cluster. For the crates that touch
+Postgres (`store`, `jobs`), bring up a local dev database in podman:
+
+```sh
+just db-up       # start postgres:16-alpine (db/user 'pedagog', localhost:5432)
+just db-prepare  # apply migrations + refresh the committed .sqlx/ offline cache
+just db-shell    # psql into it
+just db-down     # stop it (keeps the named volume)
+```
+
+`DATABASE_URL` defaults to `postgres://pedagog:pedagog@localhost:5432/pedagog`.
+CI compiles offline via the committed `.sqlx/` cache (`SQLX_OFFLINE=true`); only
+regenerating that cache needs a live DB.
+
+### Local cluster (kind)
+
+To exercise in-cluster builds without the Pi cluster, run the platform on a local
+[kind](https://kind.sigs.k8s.io/) cluster inside the podman machine. This is not k3s
+(different Kubernetes version and storage), so the real cluster still needs its own run.
+
+One-time setup (macOS):
+
+```sh
+brew install kind kubectl
+podman machine stop && podman machine set --rootful && podman machine start
+```
+
+Rootful mode switches podman to a separate container store; containers created before
+the switch are still reachable with `podman --connection podman-machine-default …`.
+
+```sh
+just kind-up           # (re)create the cluster, recipes/ mounted into the node
+just kind-load-jobs    # build the jobs image with podman, load it into the node
+just kind-deploy       # apply deploy/overlays/kind (local-path storage, dev-mode jobs)
+just kind-rebuild      # POST /internal/recipes/rebuild; `just kind-rebuild force=true`
+just kind-down         # delete the cluster
+```
+
+The kind overlay generates dev-only secrets (password `pedagog`) and runs `jobs` in dev
+mode: no build at startup, Kaniko reads the recipes mounted into the node, and
+`kind-rebuild` is the trigger. Results land in the in-cluster registry
+(`registry-service.pedagog-data.svc:5000`) and in the `os_builds` / `build_runs` tables.
+
+---
+
 ## Pinned Versions
 
 | Component | Version |
@@ -42,6 +89,7 @@
 | Traefik | v3.2.3 |
 | Postgres | 16-alpine |
 | Registry | 2 |
+| `k8s-openapi` feature (crate) | `v1_32` — nearest offered by k8s-openapi 0.28 (kube 4.2); compatible with k3s 1.31 for the stable Job/Pod/ConfigMap APIs |
 
 ---
 
@@ -120,6 +168,12 @@ kubectl create namespace pedagog-data
 kubectl create secret generic postgres-credentials \
   --from-literal=password="$POSTGRES_PW" \
   --namespace=pedagog-data
+
+# jobs service reads its DATABASE_URL from a secret in its own namespace
+kubectl create namespace pedagog-builds
+kubectl create secret generic pedagog-jobs-db \
+  --from-literal=url="postgres://pedagog:${POSTGRES_PW}@postgres-service.pedagog-data.svc:5432/pedagog" \
+  --namespace=pedagog-builds
 ```
 
 ---
@@ -135,6 +189,20 @@ spec:
   acme:
     email: <your-email>   # Let's Encrypt sends expiry notifications here
 ```
+
+Build and push the `jobs` image, then point the overlay at it (substitute your
+registry IP from `kubectl get svc registry-service -n pedagog-data`):
+
+```sh
+podman build -f crates/jobs/Containerfile -t <registry-ip>:5000/pedagog/jobs:dev .
+podman push <registry-ip>:5000/pedagog/jobs:dev
+```
+
+Then edit for your target overlay:
+
+- `deploy/overlays/{dev,prod}/kustomization.yaml` → `images:` `newName` = `<registry-ip>:5000/pedagog/jobs`
+- **dev:** `deploy/overlays/dev/patches/jobs-dev.yaml` → set both host paths to your recipes checkout on the node
+- **prod:** `deploy/overlays/prod/patches/jobs-prod.yaml` → `PEDAGOG_JOBS_IMAGE` = the same pushed ref
 
 ---
 

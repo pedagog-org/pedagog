@@ -1,0 +1,6 @@
+# Build context for `podman build -f crates/jobs/Containerfile .` (repo root).
+target/
+.git/
+# The jobs image vends ingredients itself, from the pinned recipes.
+recipes/ingredients/
+**/.DS_Store

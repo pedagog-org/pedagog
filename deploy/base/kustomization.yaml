@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - namespaces/pedagog-system.yaml
   - namespaces/pedagog-data.yaml
+  - namespaces/pedagog-builds.yaml
   - cert-manager/
   - traefik/rbac.yaml
   - traefik/deployment.yaml
@@ -15,3 +16,8 @@ resources:
   - registry/service.yaml
   - registry/pvc.yaml
   - registry/network-policy.yaml
+  - jobs/rbac.yaml
+  - jobs/limit-range.yaml
+  - jobs/resource-quota.yaml
+  - jobs/deployment.yaml
+  - jobs/service.yaml

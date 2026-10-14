@@ -11,10 +11,27 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # sqlx::query! type-checks against the committed .sqlx/ cache, not a live DB.
+  SQLX_OFFLINE: "true"
+  DATABASE_URL: postgres://pedagog:pedagog@localhost:5432/pedagog
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      # For #[sqlx::test] and the .sqlx cache check; matches `just db-up`.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: pedagog
+          POSTGRES_USER: pedagog
+          POSTGRES_PASSWORD: pedagog
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pedagog"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,6 +43,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: sqlx-cli@0.9.0
+
       - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      # --locked: fail if Cargo.lock is out of date instead of silently updating it.
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+
+      # Fails if a query changed without regenerating .sqlx/ (`just db-prepare`).
+      - name: Check sqlx offline cache
+        env:
+          SQLX_OFFLINE: "false"
+        run: |
+          cargo sqlx migrate run --source crates/store/migrations
+          cargo sqlx prepare --workspace --check -- --all-features --locked
