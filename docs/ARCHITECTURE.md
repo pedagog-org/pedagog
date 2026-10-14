@@ -350,6 +350,7 @@ re-implement it.
 | Requirement | Details |
 | --- | --- |
 | **`student` user** | Created via `useradd -m -s /bin/bash student`. Home at `/home/student`. Shell may be replaced later by the platform (e.g. `/usr/sbin/nologin` when `terminal: false`). |
+| **`grader` and `runner` users** | System users without a login shell, fixed uids: `grader` (900) owns the baked hidden tests and solution (`/pedagog/{tests,solution}`, mode 0700) and runs the test harness; `runner` (901) executes student code under process isolation and can't read grader files. |
 | **Workspace directory** | `/home/student/workspace` exists and is owned `student:student`. |
 | **Home ownership** | Full `chown -R student:student /home/student` applied after directory creation. |
 | **`ca-certificates`** | Installed. Required for TLS in package downloads and API calls. |
