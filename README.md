@@ -55,6 +55,8 @@ Override any of these on the command line, e.g. `just PORT=3000 run ...`.
 
 - **`just plan ASSIGNMENT`** — print the generated Containerfile for an assignment
   (e.g. `just plan ../recipes/examples/pointers.yaml`).
+- **`just describe ASSIGNMENT`** — print a human-readable tree of what the assignment
+  builds: phases, layers, step names, runtime and network policy.
 - **`just vend [FILTERS...]`** — download and cache recipe ingredients (e.g. the
   code-server `.deb`) into `recipes/ingredients/`, so builds use vendored assets instead
   of downloading at build time. Optional filters: `--os/--platform/--toolchain <ID>`.

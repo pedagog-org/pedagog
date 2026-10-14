@@ -28,6 +28,10 @@ vend *ARGS:
 plan ASSIGNMENT:
     {{HAMMER}} plan -a {{ASSIGNMENT}}
 
+# Print a human-readable tree of an assignment's build: phases, layers, steps, runtime.
+describe ASSIGNMENT:
+    {{HAMMER}} plan -a {{ASSIGNMENT}} -f describe
+
 # Build a container image from an assignment (uses vendored ingredients if present).
 build ASSIGNMENT:
     #!/usr/bin/env bash
