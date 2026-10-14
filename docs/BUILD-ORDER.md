@@ -50,7 +50,7 @@ the lockfile.
 
 ```yaml
 toolchains:
-  - gcc:13+gdb:14+valgrind:3      # shorthand: parent, then its addons
+  - gcc:13+gdb:12+valgrind:3      # shorthand: parent, then its addons
   - id: python                    # object form, same meaning
     version: "3.12"
     addons: [pytest:8]
@@ -61,7 +61,7 @@ toolchains:
   ```yaml
   # toolchains/ubuntu-22/gcc/13.yaml
   addons:
-    gdb: ["14"]
+    gdb: ["12"]
     valgrind: ["3"]
   ```
 
@@ -125,7 +125,7 @@ Assignment: pointers-and-memory
 │   ├── Toolchain: gcc:13
 │   │   ├── Install gcc 13
 │   │   └── Set as default compiler
-│   ├── Toolchain: gdb:14 (addon of gcc:13)
+│   ├── Toolchain: gdb:12 (addon of gcc:13)
 │   │   └── Install gdb
 │   └── Toolchain: valgrind:3 (addon of gcc:13)
 │       └── Install valgrind
