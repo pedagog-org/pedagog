@@ -8,7 +8,10 @@
 
 ## Read-only extensions directory
 
-Today the interactive platform installs extensions into
+**Done** (recipes#2): extensions now live in a root-owned, read-only
+`/var/lib/code-server/extensions`. The rest of this section is the original rationale.
+
+Before, the interactive platform installed extensions into
 `/home/student/.local/share/code-server/extensions`, owned by `student`, so a student can add
 or delete extension files directly on disk. The prototype installed into a root-owned
 directory and made it read-only:
