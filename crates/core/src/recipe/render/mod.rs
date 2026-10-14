@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use strum_macros::Display;
 
+use crate::recipe::assignment::Testing;
 use crate::recipe::network::NetworkSpec;
 use crate::recipe::platform::PlatformKind;
 use crate::recipe::primitives::{OsId, ToolchainRef, command::Command, id::AssignmentId};
@@ -87,7 +88,33 @@ pub enum BuildPhase {
     Assignment,
     #[strum(serialize = "OS CLEANUP")]
     OsCleanup,
+    #[strum(serialize = "ASSIGNMENT FILES")]
+    AssignmentFiles,
 }
+
+/// Which of the archive's directories are baked into the image (the build
+/// context is the unpacked archive). All false for environment-only renders.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AssignmentFiles {
+    /// `starter/` → `/pedagog/starter` (root, read-only)
+    pub starter: bool,
+    /// `tests/` → `/pedagog/tests` (grader only)
+    pub tests: bool,
+    /// `solution/` → `/pedagog/solution` (grader only)
+    pub solution: bool,
+}
+
+impl AssignmentFiles {
+    pub fn is_empty(&self) -> bool {
+        !(self.starter || self.tests || self.solution)
+    }
+}
+
+pub const STARTER_DIR: &str = "/pedagog/starter";
+pub const TESTS_DIR: &str = "/pedagog/tests";
+pub const SOLUTION_DIR: &str = "/pedagog/solution";
+/// Owns the baked tests and solution; see the OS init contract.
+pub const GRADER_USER: &str = "grader";
 
 /// Runtime metadata for the final image: the user the entrypoint runs as and the
 /// entrypoint command.
@@ -125,6 +152,8 @@ pub enum ImageSpec {
         ports: Vec<u16>,
         /// Egress policy for the platform to enforce; does not affect the image.
         network: NetworkSpec,
+        testing: Option<Testing>,
+        files: AssignmentFiles,
     },
 }
 
@@ -140,6 +169,16 @@ pub enum FromSource {
 pub struct RenderOptions {
     pub registry: Option<String>,
     pub from: FromSource,
+}
+
+impl ImageSpec {
+    /// Sets which archive directories to bake in; no-op for base images.
+    pub fn with_files(mut self, baked: AssignmentFiles) -> Self {
+        if let ImageSpec::Full { files, .. } = &mut self {
+            *files = baked;
+        }
+        self
+    }
 }
 
 impl RenderOptions {

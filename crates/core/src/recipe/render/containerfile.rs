@@ -1,8 +1,8 @@
 use std::fmt::Write;
 
 use super::{
-    BuildPhase, BuildPlan, FromSource, ImageSpec, Layer, LayerSource, Render, RenderOptions,
-    ResolvedStep, Runtime,
+    AssignmentFiles, BuildPhase, BuildPlan, FromSource, GRADER_USER, ImageSpec, Layer, LayerSource,
+    Render, RenderOptions, ResolvedStep, Runtime, SOLUTION_DIR, STARTER_DIR, TESTS_DIR,
 };
 
 pub struct Containerfile(String);
@@ -20,7 +20,9 @@ impl Render for Containerfile {
     //   2. platform     — platform build steps (e.g. install code-server)
     //   3. toolchain    — each requested toolchain, in listed order
     //   4. assignment   — the assignment's own build steps
-    //   5. os_cleanup   — OS build cleanup; runs last
+    //   5. os_cleanup   — OS build cleanup
+    //   6. files        — archive starter/tests/solution; last, so editing tests
+    //                     only rebuilds this layer
     // Then runtime metadata: EXPOSE ports, then USER + ENTRYPOINT (see render_runtime).
     fn render(spec: &ImageSpec, opts: &RenderOptions) -> Self {
         let mut to = String::new();
@@ -35,10 +37,12 @@ impl Render for Containerfile {
                 plan,
                 runtime,
                 ports,
+                files,
                 ..
             } => {
                 render_from(&mut to, &opts.full_from(upstream, base_image));
                 render_phases(&mut to, plan, opts.from);
+                render_files(&mut to, files);
 
                 for port in ports {
                     let _ = writeln!(to, "EXPOSE {port}");
@@ -64,6 +68,38 @@ fn render_phases(to: &mut String, plan: &BuildPlan, from: FromSource) {
     );
     render_phase(to, BuildPhase::Assignment, &[&plan.assignment]);
     render_phase(to, BuildPhase::OsCleanup, &[&plan.os_cleanup]);
+}
+
+/// COPY the archive's directories from the build context. Tests and solution go
+/// to grader-owned 0700 dirs (no one else can traverse them); starter is
+/// root-owned and read-only.
+fn render_files(to: &mut String, files: &AssignmentFiles) {
+    if files.is_empty() {
+        return;
+    }
+    let _ = writeln!(to, "\n# ===== PHASE: {} =====", BuildPhase::AssignmentFiles);
+    let mut fixups = Vec::new();
+    if files.starter {
+        let _ = writeln!(to, "COPY starter/ {STARTER_DIR}/");
+        fixups.push(format!("chmod -R go-w {STARTER_DIR}"));
+    }
+    let mut private = Vec::new();
+    for (present, src, dest) in [
+        (files.tests, "tests", TESTS_DIR),
+        (files.solution, "solution", SOLUTION_DIR),
+    ] {
+        if present {
+            let _ = writeln!(
+                to,
+                "COPY --chown={GRADER_USER}:{GRADER_USER} {src}/ {dest}/"
+            );
+            private.push(dest);
+        }
+    }
+    if !private.is_empty() {
+        fixups.push(format!("chmod 0700 {}", private.join(" ")));
+    }
+    render_run(to, &fixups.join(" && "));
 }
 
 fn render_phase(to: &mut String, phase: BuildPhase, layers: &[&Layer]) {
@@ -197,6 +233,8 @@ mod tests {
             },
             ports,
             network,
+            testing: None,
+            files: AssignmentFiles::default(),
         }
     }
 
@@ -325,5 +363,47 @@ mod tests {
             out.contains("RUN <<'EOF'\nif true; then\n  echo hi\nfi\nEOF"),
             "{out}"
         );
+    }
+
+    fn render_with(files: AssignmentFiles) -> String {
+        let spec = full_spec(&["code-server"], vec![], NetworkSpec::Allow).with_files(files);
+        Containerfile::render(&spec, &opts(None, FromSource::PrebuiltBase)).to_string()
+    }
+
+    #[test]
+    fn assignment_files_phase_bakes_archive_dirs_before_runtime() {
+        let out = render_with(AssignmentFiles {
+            starter: true,
+            tests: true,
+            solution: true,
+        });
+        assert!(
+            out.contains(
+                "# ===== PHASE: ASSIGNMENT FILES =====\n\
+                 COPY starter/ /pedagog/starter/\n\
+                 COPY --chown=grader:grader tests/ /pedagog/tests/\n\
+                 COPY --chown=grader:grader solution/ /pedagog/solution/\n\
+                 RUN chmod -R go-w /pedagog/starter && chmod 0700 /pedagog/tests /pedagog/solution\n"
+            ),
+            "{out}"
+        );
+        let files_at = out.find("ASSIGNMENT FILES").unwrap();
+        assert!(files_at < out.find("USER student").unwrap(), "{out}");
+    }
+
+    #[test]
+    fn only_present_dirs_are_copied() {
+        let out = render_with(AssignmentFiles {
+            tests: true,
+            ..Default::default()
+        });
+        assert!(!out.contains("COPY starter/"), "{out}");
+        assert!(!out.contains("solution/"), "{out}");
+        assert!(out.contains("RUN chmod 0700 /pedagog/tests\n"), "{out}");
+    }
+
+    #[test]
+    fn no_files_means_no_phase() {
+        assert!(!render_with(AssignmentFiles::default()).contains("ASSIGNMENT FILES"));
     }
 }

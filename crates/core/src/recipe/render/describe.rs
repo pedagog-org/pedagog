@@ -1,9 +1,10 @@
 use anstyle::{AnsiColor, Style};
 
 use super::{
-    BuildPhase, BuildPlan, FromSource, ImageSpec, Layer, LayerSource, Render, RenderOptions,
-    Runtime,
+    AssignmentFiles, BuildPhase, BuildPlan, FromSource, ImageSpec, Layer, LayerSource, Render,
+    RenderOptions, Runtime, SOLUTION_DIR, STARTER_DIR, TESTS_DIR,
 };
+use crate::recipe::assignment::Testing;
 use crate::recipe::network::NetworkSpec;
 use crate::recipe::primitives::ToolchainRef;
 
@@ -47,6 +48,8 @@ impl Render for Describe {
                 runtime,
                 ports,
                 network,
+                testing,
+                files,
             } => {
                 let mut root = Node::new(paint(HEADER, &plan.assignment.source.label()));
                 root.push(Node::new(paint(
@@ -63,7 +66,10 @@ impl Render for Describe {
                     }
                     root.push(node);
                 }
-                root.push(runtime_node(runtime, ports, network));
+                if let Some(node) = files_node(files) {
+                    root.push(node);
+                }
+                root.push(runtime_node(runtime, ports, network, testing.as_ref()));
                 if let Some(notes) = notes_node(plan) {
                     root.push(notes);
                 }
@@ -99,7 +105,32 @@ fn layer_node(layer: &Layer) -> Node {
     node
 }
 
-fn runtime_node(runtime: &Runtime, ports: &[u16], network: &NetworkSpec) -> Node {
+fn files_node(files: &AssignmentFiles) -> Option<Node> {
+    if files.is_empty() {
+        return None;
+    }
+    let mut node = Node::new(paint(HEADER, &BuildPhase::AssignmentFiles.to_string()));
+    for (present, src, dest, note) in [
+        (files.starter, "starter/", STARTER_DIR, "read-only"),
+        (files.tests, "tests/", TESTS_DIR, "grader only"),
+        (files.solution, "solution/", SOLUTION_DIR, "grader only"),
+    ] {
+        if present {
+            node.push(Node::new(format!(
+                "{src} → {dest} {}",
+                paint(DIM, &format!("({note})"))
+            )));
+        }
+    }
+    Some(node)
+}
+
+fn runtime_node(
+    runtime: &Runtime,
+    ports: &[u16],
+    network: &NetworkSpec,
+    testing: Option<&Testing>,
+) -> Node {
     let mut node = Node::new(paint(HEADER, "RUNTIME"));
     node.push(field("user", &runtime.user));
     node.push(field("entrypoint", &shell_words(&runtime.entrypoint)));
@@ -108,6 +139,12 @@ fn runtime_node(runtime: &Runtime, ports: &[u16], network: &NetworkSpec) -> Node
         node.push(field("ports", &ports.join(", ")));
     }
     node.push(field("network", &network.to_string()));
+    if let Some(t) = testing {
+        node.push(field(
+            "testing",
+            &format!("{} (isolation: {})", t.framework, t.isolation),
+        ));
+    }
     node
 }
 
@@ -276,6 +313,8 @@ mod tests {
             },
             ports: vec![8080],
             network,
+            testing: None,
+            files: AssignmentFiles::default(),
         }
     }
 
@@ -385,5 +424,31 @@ Assignment: hw1
         )
         .to_string();
         assert!(out.contains('\x1b'), "expected ANSI styling");
+    }
+
+    #[test]
+    fn shows_assignment_files_and_testing() {
+        let mut spec = full(vec![], NetworkSpec::Allow).with_files(AssignmentFiles {
+            starter: true,
+            tests: true,
+            solution: false,
+        });
+        if let ImageSpec::Full { testing, .. } = &mut spec {
+            *testing = Some(serde_yaml::from_str("framework: pytest:1\n").unwrap());
+        }
+        let out = plain(Describe::render(
+            &spec,
+            &opts(None, FromSource::PrebuiltBase),
+        ));
+        assert!(
+            out.contains(
+                "├── ASSIGNMENT FILES\n│   ├── starter/ → /pedagog/starter (read-only)\n│   └── tests/ → /pedagog/tests (grader only)\n"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains("testing: pytest:1 (isolation: process)"),
+            "{out}"
+        );
     }
 }
