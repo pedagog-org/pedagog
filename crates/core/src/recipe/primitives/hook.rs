@@ -30,9 +30,9 @@ mod tests {
 
     #[test]
     fn arghook_no_args_field_defaults_to_empty() {
-        use crate::recipe::os::NoArg;
+        use crate::recipe::os::PkgArg;
         let yaml = "steps:\n  - run: ['echo hi']\n";
-        let hook: ArgHook<NoArg> = serde_yaml::from_str(yaml).unwrap();
+        let hook: ArgHook<PkgArg> = serde_yaml::from_str(yaml).unwrap();
         assert!(hook.args.is_empty());
     }
 
