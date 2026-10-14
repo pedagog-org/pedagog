@@ -14,6 +14,10 @@ env:
   # sqlx::query! type-checks against the committed .sqlx/ cache, not a live DB.
   SQLX_OFFLINE: "true"
   DATABASE_URL: postgres://pedagog:pedagog@localhost:5432/pedagog
+  PEDAGOG_S3_ENDPOINT: http://localhost:3900
+  PEDAGOG_S3_BUCKET: pedagog
+  PEDAGOG_S3_ACCESS_KEY_ID: GK000000000000000000000001
+  PEDAGOG_S3_SECRET_ACCESS_KEY: "0000000000000000000000000000000000000000000000000000000000000002"
 
 jobs:
   check:
@@ -47,10 +51,29 @@ jobs:
         with:
           tool: sqlx-cli@0.9.0
 
+      # Garage for the object-store tests, configured and bootstrapped from the
+      # same ConfigMap the cluster uses (dev-only key; see deploy/overlays/kind).
+      - name: Start Garage
+        env:
+          GARAGE_ADMIN_URL: http://localhost:3903
+          GARAGE_ADMIN_TOKEN: ci-admin-token
+          GARAGE_CAPACITY_BYTES: "1000000000"
+          S3_BUCKET: pedagog
+          S3_ACCESS_KEY_ID: GK000000000000000000000001
+          S3_SECRET_ACCESS_KEY: "0000000000000000000000000000000000000000000000000000000000000002"
+        run: |
+          yq '.data["garage.toml"]' deploy/base/garage/configmap.yaml > "$RUNNER_TEMP/garage.toml"
+          yq '.data["bootstrap.sh"]' deploy/base/garage/configmap.yaml > "$RUNNER_TEMP/bootstrap.sh"
+          docker run -d --name garage -p 3900:3900 -p 3903:3903 \
+            -v "$RUNNER_TEMP/garage.toml:/etc/garage.toml:ro" \
+            -e GARAGE_RPC_SECRET="$(openssl rand -hex 32)" -e GARAGE_ADMIN_TOKEN \
+            docker.io/dxflrs/garage:v2.4.1
+          sh "$RUNNER_TEMP/bootstrap.sh"
+
       - run: cargo fmt --check
       # --locked: fail if Cargo.lock is out of date instead of silently updating it.
-      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - run: cargo test --locked --workspace
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
 
       # Fails if a query changed without regenerating .sqlx/ (`just db-prepare`).
       - name: Check sqlx offline cache
