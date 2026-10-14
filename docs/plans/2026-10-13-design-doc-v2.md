@@ -151,21 +151,27 @@ pub struct ToolchainRecipe {
 **Assignment selection** (replaces `Environment.toolchains: Vec<ToolchainRef>`):
 
 ```rust
+pub struct ToolchainPick {
+    pub tc: ToolchainRef,     // version required
+    pub allow_coexist: bool,  // trailing `!`: "gdb:15!"
+}
+
 pub struct ToolchainSelection {
-    pub id: ToolchainId,
-    pub version: Version,          // required
-    pub addons: Vec<ToolchainRef>, // "gdb:14" — version required
+    pub parent: ToolchainPick,
+    pub addons: Vec<ToolchainPick>,
 }
 ```
 
 Two accepted forms, both parsing to `ToolchainSelection`:
 
 - **Shorthand string:** `gcc:13+gdb:14+valgrind:3.22` — split on `+`; the first item is the
-  parent, the rest are its addons, each `id:version`. `+` can't appear in an id
-  (`[a-z][a-z0-9-]*`) or version (numeric dot segments), so this is unambiguous. `+` is
-  used instead of `,` because a comma splits items inside YAML flow lists (`[...]`).
-- **Object form:** `{id, version, addons}` with unknown keys rejected — leaves room for
-  per-toolchain fields later.
+  parent, the rest are its addons, each `id:version`, optionally with a trailing `!`
+  (`gcc:13+gdb:15!`). `+` and `!` can't appear in an id (`[a-z][a-z0-9-]*`) or version
+  (numeric dot segments), so this is unambiguous. `+` is used instead of `,` because a
+  comma splits items inside YAML flow lists (`[...]`); `!` is trailing because a leading
+  `!` is a YAML tag.
+- **Object form:** `{id, version, allow_coexist, addons}` with unknown keys rejected;
+  `addons` takes the same `gdb:15!` strings.
 
 Implemented as a hand-written `Deserialize` with `visit_str` + `visit_map` (not
 `#[serde(untagged)]`, which swallows the specific parse error into "did not match any
@@ -181,9 +187,13 @@ variant").
    `ToolchainNotFound` (with its origin).
 4. **Dedupe** exact `(id, version)` duplicates — including a toolchain listed both
    top-level and as an addon — keeping the first position and merging origins into it.
-5. **Conflicts:** if one id remains at more than one version, every involved version's
-   recipe must set `coexist: true`; then all are installed in order. Otherwise
-   `ResolveError::VersionConflict`.
+5. **Conflicts:** if one id remains at more than one version, each involved version must
+   either set `coexist: true` in its recipe, or be marked `!` / `allow_coexist` on
+   **every** assignment entry for it (a deduped version's mark is ANDed across its
+   occurrences). Then all are installed in order, silently. Otherwise
+   `ResolveError::VersionConflict`. The recipe flag means "this installs side by side";
+   the assignment mark means "the instructor accepts the risk for a recipe that doesn't
+   say so".
 6. One level only: an addon's own `addons` are not selectable.
 
 Which coexisting version is the default on `PATH` is the recipe's responsibility (e.g.
@@ -220,23 +230,27 @@ pub struct ConflictEntry {
     pub version: Version,
     pub origins: Vec<ToolchainOrigin>,
     pub allowed_by_parent: Vec<(ToolchainRef, Vec<Version>)>, // each addon parent's declared set
-    pub coexist: bool,
+    pub coexist: bool,       // recipe declares it
+    pub allow_coexist: bool, // every assignment entry marked
 }
 ```
 
 `VersionConflict`'s `Display` must include: every entry with its origin chain, each
-parent's declared set, the overlap of those sets, which recipes lack `coexist`, and a
-suggested fix. Target shape:
+parent's declared set, both coexist flags, and the overlap of those sets. The suggested
+fix comes from `ResolveError::help()` (shown by hammer as miette help), naming exactly
+the entries that still need a recipe flag or an assignment mark. Shape:
 
 ```
 toolchain `gdb` is selected at 2 versions, and not all of them allow coexisting:
-  gdb:15  via gcc:13    (gcc:13 allows gdb 14, 15)    coexist: no
-  gdb:13  via clang:17  (clang:17 allows gdb 12, 13)  coexist: yes
+  gdb:15  addon of gcc:13 (allows 14, 15)  coexist: recipe=no assignment=no
+  gdb:13  addon of clang:17 (allows 12, 13)  coexist: recipe=yes assignment=no
   versions allowed by every parent: none
-help: pick one version allowed by every parent, or set `coexist: true` in every listed gdb recipe
+help: no single gdb version fits every parent; change a parent toolchain, or set
+      `coexist: true` in the gdb:15 recipe(s), or allow it in the assignment by
+      marking every such entry: gdb:15!
 ```
 
-When the overlap is non-empty, the help line names it (`use gdb:14 everywhere`).
+When the overlap is non-empty, the help names it (`use gdb:14 everywhere, or …`).
 
 ### 6. Load-time validation
 
@@ -387,8 +401,10 @@ environment:
   pinned.
 - **Semver-range addon declarations** — rejected; new versions would become compatible
   untested. Explicit grouped lists codify compatibility.
-- **Warn + assignment-level `allow_multiple` flag** for version conflicts — rejected;
-  whether two versions can coexist is a property of the recipe, not the assignment.
+- **Warn + assignment-level `allow_multiple` flag only** for version conflicts —
+  rejected; whether two versions can coexist is primarily a property of the recipe. The
+  assignment `!` mark exists only as an explicit override for recipes that don't declare
+  `coexist`, and must be on every conflicting entry.
 - **Hard dependencies (`requires:`)** — out of scope; addons stay opt-in.
 - **`thiserror` / miette in core / String errors** — rejected in favor of a typed enum
   with hand-written `Display` (no new dependency, structured data for describe/hammer).
@@ -403,11 +419,10 @@ environment:
 
 ## Open questions
 
-- **Student user creation** — which recipe creates `student` today is unverified (the
-  `recipes/` submodule wasn't inspected). Confirm during the recipes-repo PR; if nothing
-  creates it, the OS recipe's `build.init` should.
-- **`network.transcribe` usage** — confirm nothing else in the recipes repo depends on the
-  network hooks before removing them.
+- ~~**Student user creation**~~ — resolved: the OS recipe's `build.init` runs
+  `useradd -m -s /bin/bash student`.
+- ~~**`network.transcribe` usage**~~ — resolved: only `os/ubuntu-22.yaml` used the network
+  hooks (plus `gosu`/`iptables` installed for them); all removed in recipes PR 0.
 - **FQDN enforcement backend** — standard NetworkPolicy matches CIDRs/ports only;
   `host:` entries need an FQDN-aware plugin (e.g. Cilium) or an egress proxy. Platform-side
   decision.
