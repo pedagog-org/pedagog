@@ -52,7 +52,7 @@ platform: interactive      # interactive | submission
 
 environment:
   toolchains:               # every version pinned; see "Toolchains and Addons"
-    - gcc:13+gdb:14+valgrind:3   # shorthand: parent, then its addons
+    - gcc:13+gdb:12+valgrind:3   # shorthand: parent, then its addons
     - id: python                 # object form
       version: "3.12"
       addons: [pytest:8]
@@ -256,12 +256,12 @@ Assignments pin every toolchain version; the assignment file is the lockfile. A 
 ```yaml
 # toolchains/ubuntu-22/gcc/13.yaml
 addons:
-  gdb: ["14", "15"]
+  gdb: ["12"]
   valgrind: ["3"]
 coexist: false           # true if this version installs side by side with other versions
 ```
 
-An assignment selects addons per toolchain, as `gcc:13+gdb:14` or `{id, version, allow_coexist, addons}`. Resolution:
+An assignment selects addons per toolchain, as `gcc:13+gdb:12` or `{id, version, allow_coexist, addons}`. Resolution:
 
 - Each addon must be a version its parent declares; it is layered right after its parent.
 - Exact duplicates (same id and version, top-level or addon) are installed once, at the first occurrence.
