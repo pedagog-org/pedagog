@@ -8,12 +8,21 @@ See [docs/SETUP.md](docs/SETUP.md) for infrastructure setup instructions.
 
 ## Development
 
-Run once per clone to enable the git hooks (a pre-commit hook runs
-`cargo clippy --workspace --all-targets -- -D warnings`, rejecting commits with any
-warning — bypass with `git commit --no-verify`):
+Run once per clone to enable the git hooks (a pre-commit hook runs `cargo fmt --check`
+and `cargo clippy --workspace --all-targets -- -D warnings`, rejecting unformatted code
+or any warning — bypass with `git commit --no-verify`):
 
 ```sh
 just install-hooks
+```
+
+CI (`.github/workflows/ci.yml`) runs the same checks plus `cargo test --workspace` on
+every pull request and push to `main`. The toolchain is pinned in `rust-toolchain.toml`.
+
+To keep `git blame` from attributing lines to bulk-formatting commits:
+
+```sh
+git config blame.ignoreRevsFile .git-blame-ignore-revs
 ```
 
 Tests resolve the real recipe corpus in the `recipes/` submodule and fail if it isn't
