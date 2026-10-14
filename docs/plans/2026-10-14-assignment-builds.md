@@ -67,6 +67,15 @@ A configured directory that doesn't exist is an error; a missing default one sim
 isn't baked. Tests students should see and run are ordinary starter files; everything
 from the tests source is hidden.
 
+**Required vs optional:**
+
+- **Starter and solution are optional.**
+- **Tests are required whenever `testing:` is set.** Resolve and upload fail with a clear
+  message otherwise.
+- **Without a solution there's nothing to validate against.** The build succeeds and
+  records validation as `skipped`, distinct from passed and failed, and the instructor
+  sees "not validated: no reference solution".
+
 - `hammer upload <dir>` validates the directory locally (`assignment.yml` parses and
   resolves), packs it, and POSTs it to `jobs` `POST /internal/assignments` (body: the tgz).
 - `jobs` stores it in Garage as `assignments/<assignment-id>/<sha256>.tgz` (every upload is
@@ -157,6 +166,8 @@ A Kubernetes Job from the built image, in `pedagog-builds`:
 4. **Pass:** every test passes, except tests the helper marked as expected to fail with the
    reference solution (`@solution_expect("fail")`), which must fail. Anything else fails the
    build, and the results are kept so the instructor sees which tests disagree.
+5. **No solution in the archive:** no validation run; the build's validation status is
+   `skipped`.
 
 ## Test helpers
 
