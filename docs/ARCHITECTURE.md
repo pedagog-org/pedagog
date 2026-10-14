@@ -51,24 +51,25 @@ name: pointers-and-memory
 platform: interactive      # interactive | submission
 
 environment:
-  toolchains:
-    - id: gcc
-      version: "13"
-      options:
-        std: "17"
-      addons: [gdb:14, valgrind:3]
+  toolchains:               # every version pinned; see "Toolchains and Addons"
+    - gcc:13+gdb:14+valgrind:3   # shorthand: parent, then its addons
+    - id: python                 # object form
+      version: "3.12"
+      addons: [pytest:8]
   editor:                  # interactive mode only
     terminal: true         # default true; false sets student shell to /usr/sbin/nologin
     extensions:
       install: [cpptools]        # pre-installed at image build time; always in allowlist
       allow: [vim]               # in allowlist only; student may install from marketplace
-  network:                 # build-time only — runtime policy is managed in the platform
-    egress: deny
+  network:                 # runtime egress policy; enforced by the platform, not the image
+    mode: deny             # allow (default, unrestricted) | deny
     allow:
       - host: mirror.internal
-        port: 80
-      - cidr: 10.0.0.0/8
-      - host: "2001:db8::1"    # IPv6
+        ports: [80]
+      - host: "*.github.com"   # one leading "*." wildcard label allowed
+        ports: [443]
+      - cidr: 10.0.0.0/8       # omitted ports = all ports
+      - cidr: 2001:db8::1/128  # IPv6; IP addresses always go under cidr
   sources:
     student: ./starter/
     solution: ./solution/
@@ -157,9 +158,11 @@ The `assignment:` block is treated as a **suggestion**. When an instructor publi
 
 ### Network: Build-Time and Runtime
 
-- `environment.network` serves as the **default** for both build time and runtime.
-- At build time: applied when the builder runs the solution validation step.
+- `environment.network` serves as the **default** for both build time and runtime. It never changes the image: no firewall rules are baked in, and containers never need `NET_ADMIN`.
+- At build time: intended to apply when the builder runs the solution validation step (deferred until the builder exists; image build steps currently have network access).
 - At runtime: the YAML value is the starting point, but the platform UI can override it independently. The current runtime policy is fetched from the platform and applied as a Kubernetes network policy just before handing off the container to the student. It can be updated without a rebuild.
+- Schema: `mode: allow | deny`. Under `deny`, each `allow` entry is exactly one of `host` (RFC 1123 hostname, optionally with a single leading `*.`) or `cidr` (IPv4/IPv6), plus optional `ports` (TCP; omitted = all ports). `hammer` validates the policy and shows it in `describe`.
+- Open: standard NetworkPolicy matches CIDRs and ports only. `host` entries need an FQDN-aware CNI (e.g. Cilium) or an egress proxy, and the cluster's CNI must actually enforce NetworkPolicy.
 
 ### Assignment Updates
 
@@ -180,7 +183,7 @@ Configured in `assignment.results.visibility`:
 
 Building happens in two stages:
 
-1. **OS base image** — platform-managed. Contains the OS and any platform-level configuration. Built by `hammer build-os <os-id>` and pushed to the cluster registry (e.g. `pedagog/ubuntu:22`). Rebuilt by platform operators on updates.
+1. **OS base image** — platform-managed. Contains the OS and any platform-level configuration. Built from `hammer plan --os <os-id>` and pushed to the cluster registry (e.g. `pedagog/ubuntu:22`). Rebuilt by platform operators on updates.
 2. **Instructor image** — built when the instructor uploads the assignment archive. Starts FROM the OS base image; installs toolchains, addons, platform components (code-server for interactive), and locked extensions declared in `assignment.yml`. The solution is run against the test suite at this step to validate the assignment. Build-time network policy is applied during this step only.
 
 All builds run in-cluster via **Kaniko** — no Docker daemon required. `hammer` generates the Containerfile from resolved recipes and submits a Kubernetes Job.
@@ -219,13 +222,50 @@ $HAMMER_RECIPES/
 
 | Command | Description |
 | --- | --- |
-| `hammer plan --assignment FILE` | Resolve recipes and print the build plan (default: human-readable) |
-| `hammer plan --os ID` | Print the base OS image plan |
-| `hammer plan --format containerfile` | Emit a Containerfile instead of the describe view |
+| `hammer plan --assignment FILE` | Resolve recipes and print a Containerfile for the assignment image (`FROM` the pre-built base) |
+| `hammer plan --os ID` | Print the base OS image Containerfile |
+| `hammer plan --format describe` | Print a human-readable tree of phases, layers, steps and runtime instead |
+| `hammer plan --show-base` | Self-contained assignment build `FROM` upstream, including the OS layer |
+| `hammer plan --registry REG` | Prefix the pre-built base image (`REG/pedagog/ubuntu:22`); upstream images are never prefixed |
 | `hammer vend` | Download `ingredients:` assets declared in recipes into `$HAMMER_RECIPES/ingredients/` |
 | `hammer vend --platform ID` | Vend a specific platform's assets only |
 
 Both `plan` and `vend` accept `--recipes DIR` (repeatable) to add recipe directories beyond `HAMMER_RECIPES`.
+
+**Build phase order:** BASE (OS init) → PLATFORM → TOOLCHAIN (each followed by its addons) → ASSIGNMENT (`environment.steps`) → OS CLEANUP → runtime (`EXPOSE`, `USER student`, exec-form `ENTRYPOINT`). See [BUILD-ORDER.md](BUILD-ORDER.md) for what each phase runs and why.
+
+Recipes are validated when loaded: OS arg hooks (`pkg.install`, optional `pkg.remove`) may only reference their declared `args`, and every declared toolchain addon must be a real recipe sharing an OS with its parent.
+
+### Platform Runtime
+
+The platform recipe's `entrypoint` is a YAML list rendered as an exec-form `ENTRYPOINT`; each item is interpolated with the platform params, and an item that is exactly one list-valued `{param}` expands into one argument per element. `ports` entries are interpolated the same way and become `EXPOSE` lines, so a single `port` param drives both:
+
+```yaml
+hooks:
+  build:
+    params:
+      port: { type: int, default: 8080 }
+  entrypoint: [/usr/bin/code-server, --bind-addr, "0.0.0.0:{port}"]
+  ports: ["{port}"]
+```
+
+### Toolchains and Addons
+
+Assignments pin every toolchain version; the assignment file is the lockfile. A toolchain recipe declares optional addons with the versions known to work with it:
+
+```yaml
+# toolchains/ubuntu-22/gcc/13.yaml
+addons:
+  gdb: ["14", "15"]
+  valgrind: ["3"]
+coexist: false           # true if this version installs side by side with other versions
+```
+
+An assignment selects addons per toolchain, as `gcc:13+gdb:14` or `{id, version, allow_coexist, addons}`. Resolution:
+
+- Each addon must be a version its parent declares; it is layered right after its parent.
+- Exact duplicates (same id and version, top-level or addon) are installed once, at the first occurrence.
+- One toolchain at several versions is refused unless each version sets `coexist: true` in its recipe, or is marked with a trailing `!` (`gdb:15!`, or `allow_coexist: true`) on every assignment entry for it. The error lists each version's origins, its parents' declared versions and their overlap, both coexist flags, and a suggested fix.
 
 ### Building and Running a Container Locally
 
@@ -312,7 +352,6 @@ re-implement it.
 | **`student` user** | Created via `useradd -m -s /bin/bash student`. Home at `/home/student`. Shell may be replaced later by the platform (e.g. `/usr/sbin/nologin` when `terminal: false`). |
 | **Workspace directory** | `/home/student/workspace` exists and is owned `student:student`. |
 | **Home ownership** | Full `chown -R student:student /home/student` applied after directory creation. |
-| **`gosu`** | Installed. Used to drop privileges in entrypoint scripts. |
 | **`ca-certificates`** | Installed. Required for TLS in package downloads and API calls. |
 | **`curl`** | Installed. Used in platform build steps. |
 | **`vend` function** | `install -m755 /pedagog/recipes/lib/vend /usr/local/bin/vend` — makes `vend` available in all subsequent recipe steps. |
