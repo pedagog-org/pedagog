@@ -11,7 +11,7 @@ FROM docker.io/library/rust:1.97.1-bookworm AS build
 WORKDIR /src
 COPY . .
 ENV SQLX_OFFLINE=true
-RUN cargo build --release -p pedagog-jobs -p hammer
+RUN cargo build --release --locked -p pedagog-jobs -p hammer
 
 FROM build AS vend
 # Needs network + the recipes' pinned upstream tags. Baked so Kaniko builds are hermetic.
