@@ -5,13 +5,61 @@ use serde::{Deserialize, Deserializer};
 
 use super::network::NetworkSpec;
 use super::platform::PlatformSpec;
-use super::primitives::{AssignmentId, OsId, Step, ToolchainId, ToolchainRef, Version};
+use super::primitives::{
+    AssignmentId, Id, OsId, Step, ToolchainId, ToolchainRef, Version, Versioned,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct AssignmentYaml {
     pub id: AssignmentId,
     pub name: String,
     pub environment: Environment,
+    #[serde(default)]
+    pub testing: Option<Testing>,
+}
+
+/// How the assignment's tests run. The framework names a pedagog test helper
+/// (`pytest:1` → the `pedagog-pytest:1` toolchain), which resolve adds as an
+/// addon of the selected toolchain that declares it compatible.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Testing {
+    pub framework: Versioned,
+    #[serde(default)]
+    pub isolation: Isolation,
+}
+
+impl Testing {
+    /// The helper toolchain implementing this framework.
+    pub fn helper(&self) -> Result<ToolchainRef, String> {
+        Ok(ToolchainRef {
+            id: Id::try_from(format!("{HELPER_PREFIX}{}", self.framework.id))?,
+            version: self.framework.version.clone(),
+        })
+    }
+}
+
+/// Helper toolchain ids are the framework id with this prefix.
+pub const HELPER_PREFIX: &str = "pedagog-";
+
+/// Whether student code shares the test harness's process.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Isolation {
+    /// Student code runs as `runner` in its own process; tests can't be read from it.
+    #[default]
+    Process,
+    /// Student code runs inside the harness process (faster; can read the tests).
+    InProcess,
+}
+
+impl fmt::Display for Isolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Isolation::Process => "process",
+            Isolation::InProcess => "in-process",
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,6 +202,42 @@ impl fmt::Display for ToolchainSelection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assignment(extra: &str) -> Result<AssignmentYaml, String> {
+        let yaml = format!(
+            "id: t\nname: T\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: interactive\n{extra}"
+        );
+        serde_yaml::from_str(&yaml).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn testing_is_optional() {
+        assert!(assignment("").unwrap().testing.is_none());
+    }
+
+    #[test]
+    fn testing_defaults_to_process_isolation_and_maps_to_helper() {
+        let t = assignment("testing:\n  framework: pytest:1\n")
+            .unwrap()
+            .testing
+            .unwrap();
+        assert_eq!(t.isolation, Isolation::Process);
+        assert_eq!(t.helper().unwrap().to_string(), "pedagog-pytest:1");
+    }
+
+    #[test]
+    fn testing_accepts_in_process_and_rejects_unknown_keys() {
+        let t = assignment("testing:\n  framework: pytest:1\n  isolation: in-process\n")
+            .unwrap()
+            .testing
+            .unwrap();
+        assert_eq!(t.isolation, Isolation::InProcess);
+        assert!(assignment("testing:\n  framework: pytest:1\n  isolate: process\n").is_err());
+        assert!(
+            assignment("testing:\n  framework: pytest\n").is_err(),
+            "version required"
+        );
+    }
 
     fn selections(yaml: &str) -> Result<Vec<ToolchainSelection>, String> {
         serde_yaml::from_str(yaml).map_err(|e| e.to_string())
