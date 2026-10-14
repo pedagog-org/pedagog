@@ -14,7 +14,7 @@ use pedagog_core::recipe::assignment::AssignmentYaml;
 use pedagog_core::recipe::primitives::Id;
 use pedagog_core::recipe::render::containerfile::Containerfile;
 use pedagog_core::recipe::render::{FromSource, Render, RenderOptions};
-use pedagog_core::recipe::resolve::{resolve, resolve_base};
+use pedagog_core::recipe::resolve::{resolve, resolve_base, ResolveError};
 use pedagog_core::recipe::store::RecipeStore;
 
 fn main() -> Result<()> {
@@ -58,11 +58,11 @@ fn run_plan(args: PlanArgs) -> Result<()> {
                 .map_err(|e| miette!("cannot read {}: {}", path.display(), e))?;
             let assignment: AssignmentYaml =
                 serde_yaml::from_str(&src).map_err(|e| miette!("{}", e))?;
-            resolve(&assignment, &store).map_err(|e| miette!("{}", e))?
+            resolve(&assignment, &store).map_err(resolve_report)?
         }
         (None, Some(os_str)) => {
             let os_id = Id::try_from(os_str.clone()).map_err(|e| miette!("{}", e))?;
-            resolve_base(&os_id, &store).map_err(|e| miette!("{}", e))?
+            resolve_base(&os_id, &store).map_err(resolve_report)?
         }
         _ => unreachable!("clap ArgGroup ensures exactly one of -a / -o"),
     };
@@ -99,6 +99,14 @@ fn run_plan(args: PlanArgs) -> Result<()> {
         None => print!("{text}"),
     }
     Ok(())
+}
+
+fn resolve_report(err: ResolveError) -> Report {
+    let mut diag = MietteDiagnostic::new(err.to_string());
+    if let Some(help) = err.help() {
+        diag = diag.with_help(help);
+    }
+    Report::from(diag)
 }
 
 fn recipe_dirs(extra: &[PathBuf], quiet: bool) -> Result<Vec<PathBuf>> {

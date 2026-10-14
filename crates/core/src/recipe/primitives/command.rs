@@ -1,7 +1,7 @@
 use core::fmt;
 use std::fmt::Display;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Command(pub String);
 
 impl Display for Command {

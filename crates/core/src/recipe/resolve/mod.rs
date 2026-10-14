@@ -1,16 +1,25 @@
+// ResolveError is large, but it's built at most once per invocation on the
+// error path; boxing would only add noise.
+#![allow(clippy::result_large_err)]
+
 use std::collections::HashMap;
 use std::num::NonZeroU16;
 
-use crate::recipe::assignment::AssignmentYaml;
+use crate::recipe::assignment::{AssignmentYaml, ToolchainPick, ToolchainSelection};
 use crate::recipe::os::PkgArg;
 use crate::recipe::platform::PlatformSpec;
-use crate::recipe::primitives::{ArgHook, Command, OsId, ParamVal, PkgName, Step, ToolchainRef};
-use crate::recipe::render::{BuildPlan, ImageSpec, Layer, LayerSource, ResolvedStep, Runtime};
+use crate::recipe::primitives::{
+    ArgHook, Command, OsId, ParamVal, PkgName, Step, ToolchainId, ToolchainRef,
+};
+use crate::recipe::render::{
+    BuildPlan, ImageSpec, Layer, LayerSource, ResolvedStep, Runtime, ToolchainOrigin,
+};
 use crate::recipe::store::RecipeStore;
+use crate::recipe::toolchain::ToolchainRecipe;
 
 mod error;
 pub(crate) mod params;
-pub use error::ResolveError;
+pub use error::{ConflictEntry, ResolveError};
 use params::{interpolate, interpolate_args, resolve_params};
 
 const STUDENT_USER: &str = "student";
@@ -127,25 +136,142 @@ fn platform_artifact(
 }
 
 fn toolchain_layers(
-    selections: &[ToolchainRef],
+    selections: &[ToolchainSelection],
     os: &OsArtifact,
     store: &RecipeStore,
 ) -> Result<Vec<Layer>, ResolveError> {
-    selections
-        .iter()
-        .map(|tc_ref| {
-            let tc = store
-                .toolchain(&tc_ref.id, &tc_ref.version, os.id)
-                .ok_or_else(|| ResolveError::ToolchainNotFound {
-                    tc: tc_ref.clone(),
-                    os: os.id.clone(),
-                })?;
+    let picked = pick_toolchains(selections, os.id, store)?;
+    check_versions(&picked)?;
+    picked
+        .into_iter()
+        .map(|p| {
             Ok(Layer {
-                source: LayerSource::Toolchain(tc_ref.clone()),
-                steps: resolve_steps(&tc.steps, os.pkg_install, &tc.params)?,
+                steps: resolve_steps(&p.recipe.steps, os.pkg_install, &p.recipe.params)?,
+                source: LayerSource::Toolchain {
+                    tc: p.tc,
+                    origins: p.origins,
+                },
             })
         })
         .collect()
+}
+
+struct Picked<'a> {
+    tc: ToolchainRef,
+    recipe: &'a ToolchainRecipe,
+    origins: Vec<ToolchainOrigin>,
+    /// True only if every assignment entry for this toolchain is marked `!`.
+    allow_coexist: bool,
+}
+
+/// Expands selections into install order (each toolchain followed by its
+/// addons), merging exact id+version repeats into the first occurrence.
+fn pick_toolchains<'a>(
+    selections: &[ToolchainSelection],
+    os: &OsId,
+    store: &'a RecipeStore,
+) -> Result<Vec<Picked<'a>>, ResolveError> {
+    let mut picked: Vec<Picked> = Vec::new();
+    for sel in selections {
+        let parent_ref = sel.parent.tc.clone();
+        let parent = find_toolchain(&parent_ref, ToolchainOrigin::TopLevel, os, store)?;
+        add_picked(&mut picked, &sel.parent, parent, ToolchainOrigin::TopLevel);
+        for pick in &sel.addons {
+            let addon = &pick.tc;
+            let declared = parent.addons.get(&addon.id).cloned().unwrap_or_default();
+            if !declared.contains(&addon.version) {
+                return Err(ResolveError::AddonNotDeclared {
+                    parent: parent_ref,
+                    addon: addon.clone(),
+                    declared,
+                });
+            }
+            let origin = ToolchainOrigin::AddonOf(parent_ref.clone());
+            let recipe = find_toolchain(addon, origin.clone(), os, store)?;
+            add_picked(&mut picked, pick, recipe, origin);
+        }
+    }
+    Ok(picked)
+}
+
+fn find_toolchain<'a>(
+    tc: &ToolchainRef,
+    origin: ToolchainOrigin,
+    os: &OsId,
+    store: &'a RecipeStore,
+) -> Result<&'a ToolchainRecipe, ResolveError> {
+    store
+        .toolchain(&tc.id, &tc.version, os)
+        .ok_or_else(|| ResolveError::ToolchainNotFound {
+            tc: tc.clone(),
+            os: os.clone(),
+            origin,
+        })
+}
+
+fn add_picked<'a>(
+    picked: &mut Vec<Picked<'a>>,
+    pick: &ToolchainPick,
+    recipe: &'a ToolchainRecipe,
+    origin: ToolchainOrigin,
+) {
+    match picked.iter_mut().find(|p| p.tc == pick.tc) {
+        Some(p) => {
+            p.allow_coexist &= pick.allow_coexist;
+            if !p.origins.contains(&origin) {
+                p.origins.push(origin);
+            }
+        }
+        None => picked.push(Picked {
+            tc: pick.tc.clone(),
+            recipe,
+            origins: vec![origin],
+            allow_coexist: pick.allow_coexist,
+        }),
+    }
+}
+
+/// One toolchain id at several versions is allowed only when each of those
+/// versions either sets `coexist` in its recipe or is marked `!` on every
+/// assignment entry for it.
+fn check_versions(picked: &[Picked]) -> Result<(), ResolveError> {
+    let mut checked: Vec<&ToolchainId> = Vec::new();
+    for p in picked {
+        if checked.contains(&&p.tc.id) {
+            continue;
+        }
+        checked.push(&p.tc.id);
+        let group: Vec<&Picked> = picked.iter().filter(|q| q.tc.id == p.tc.id).collect();
+        if group.len() < 2 || group.iter().all(|q| q.recipe.coexist || q.allow_coexist) {
+            continue;
+        }
+        let entries = group
+            .iter()
+            .map(|q| ConflictEntry {
+                version: q.tc.version.clone(),
+                origins: q.origins.clone(),
+                allowed_by_parent: q
+                    .origins
+                    .iter()
+                    .filter_map(|origin| match origin {
+                        ToolchainOrigin::AddonOf(parent) => {
+                            let recipe = picked.iter().find(|r| &r.tc == parent)?.recipe;
+                            let allowed = recipe.addons.get(&p.tc.id).cloned().unwrap_or_default();
+                            Some((parent.clone(), allowed))
+                        }
+                        ToolchainOrigin::TopLevel => None,
+                    })
+                    .collect(),
+                coexist: q.recipe.coexist,
+                allow_coexist: q.allow_coexist,
+            })
+            .collect();
+        return Err(ResolveError::VersionConflict {
+            id: p.tc.id.clone(),
+            entries,
+        });
+    }
+    Ok(())
 }
 
 // ---- Steps -------------------------------------------------------------------
@@ -290,6 +416,176 @@ mod tests {
         for bad in ["0", "65536", "-1", "http", ""] {
             assert!(parse_port(bad).is_err(), "{bad:?} should be rejected");
         }
+    }
+
+    // ---- Toolchain/addon resolution (fixture stores) ------------------------
+
+    const FIX_OS: &str = "id: os-a\nupstream: base:1\nimage: pedagog/a:1\nhooks:\n  build:\n    init: []\n  pkg:\n    install:\n      args: [packages]\n      steps: []\n";
+    const FIX_OS_B: &str = "id: os-b\nupstream: base:2\nimage: pedagog/b:1\nhooks:\n  build:\n    init: []\n  pkg:\n    install:\n      args: [packages]\n      steps: []\n";
+    const FIX_PLATFORM: &str = "platform: interactive\nos: [os-a, os-b]\nhooks:\n  build:\n    steps: []\n  entrypoint: [run]\n";
+
+    fn fix_tc(id: &str, version: &str, os: &str, extra: &str) -> (String, String) {
+        (
+            format!("toolchains/{id}-{version}.yaml"),
+            format!("id: {id}\nversion: \"{version}\"\nos: {os}\nsteps:\n  - run: ['install {id} {version}']\n{extra}"),
+        )
+    }
+
+    /// gcc:13 offers gdb 14/15 + valgrind 3; clang:17 offers gdb 13/14; tcc:1
+    /// offers gdb 13. gdb:14 exists only on os-b-capable recipes as noted.
+    fn fix_store(gdb_coexist: bool) -> RecipeStore {
+        let coexist = if gdb_coexist { "coexist: true\n" } else { "" };
+        let tcs = [
+            fix_tc("gcc", "13", "[os-a, os-b]", "addons:\n  gdb: [\"14\", \"15\"]\n  valgrind: [\"3\"]\n"),
+            fix_tc("clang", "17", "os-a", "addons:\n  gdb: [\"13\", \"14\"]\n"),
+            fix_tc("tcc", "1", "os-a", "addons:\n  gdb: [\"13\"]\n"),
+            fix_tc("gdb", "13", "os-a", coexist),
+            fix_tc("gdb", "14", "[os-a, os-b]", coexist),
+            fix_tc("gdb", "15", "os-a", coexist),
+            fix_tc("valgrind", "3", "os-a", ""),
+        ];
+        let mut files: Vec<(&str, &str)> = vec![
+            ("os/a.yaml", FIX_OS),
+            ("os/b.yaml", FIX_OS_B),
+            ("platforms/interactive.yaml", FIX_PLATFORM),
+        ];
+        files.extend(tcs.iter().map(|(p, s)| (p.as_str(), s.as_str())));
+        crate::recipe::store::fixture_store(&files).unwrap()
+    }
+
+    fn resolve_toolchains(store: &RecipeStore, os: &str, toolchains: &str) -> Result<Vec<Layer>, ResolveError> {
+        let yaml = format!(
+            "id: t\nname: T\nenvironment:\n  os: {os}\n  platform:\n    kind: interactive\n  toolchains: {toolchains}\n"
+        );
+        let a: AssignmentYaml = serde_yaml::from_str(&yaml).unwrap();
+        match resolve(&a, store)? {
+            ImageSpec::Full { plan, .. } => Ok(plan.toolchain),
+            ImageSpec::Base { .. } => panic!("expected Full"),
+        }
+    }
+
+    fn layer_refs(layers: &[Layer]) -> Vec<String> {
+        layers
+            .iter()
+            .map(|l| match &l.source {
+                LayerSource::Toolchain { tc, .. } => tc.to_string(),
+                _ => panic!("expected toolchain layer"),
+            })
+            .collect()
+    }
+
+    fn origins(layer: &Layer) -> Vec<String> {
+        match &layer.source {
+            LayerSource::Toolchain { origins, .. } => origins.iter().map(ToString::to_string).collect(),
+            _ => panic!("expected toolchain layer"),
+        }
+    }
+
+    #[test]
+    fn addons_are_layered_right_after_their_parent() {
+        let store = fix_store(false);
+        let layers =
+            resolve_toolchains(&store, "os-a", "[gcc:13+valgrind:3+gdb:14, clang:17]").unwrap();
+        assert_eq!(layer_refs(&layers), ["gcc:13", "valgrind:3", "gdb:14", "clang:17"]);
+        assert_eq!(origins(&layers[2]), ["addon of gcc:13"]);
+        assert_eq!(layers[2].steps[0].commands[0].0, "install gdb 14");
+    }
+
+    #[test]
+    fn undeclared_addon_version_is_rejected() {
+        let store = fix_store(false);
+        let err = resolve_toolchains(&store, "os-a", "[gcc:13+gdb:13]").unwrap_err();
+        assert!(matches!(err, ResolveError::AddonNotDeclared { .. }), "{err}");
+        assert!(err.to_string().contains("14, 15"), "{err}");
+    }
+
+    #[test]
+    fn addon_not_offered_by_parent_is_rejected() {
+        let store = fix_store(false);
+        let err = resolve_toolchains(&store, "os-a", "[clang:17+valgrind:3]").unwrap_err();
+        assert!(err.to_string().contains("offers no valgrind addon"), "{err}");
+    }
+
+    #[test]
+    fn addon_missing_for_assignment_os_names_its_parent() {
+        let store = fix_store(false);
+        let err = resolve_toolchains(&store, "os-b", "[gcc:13+gdb:15]").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            r#"toolchain gdb:15 (addon of gcc:13) not found for os "os-b""#
+        );
+    }
+
+    #[test]
+    fn exact_duplicates_collapse_into_first_occurrence() {
+        let store = fix_store(false);
+        let layers =
+            resolve_toolchains(&store, "os-a", "[gcc:13+gdb:14, clang:17+gdb:14, gdb:14]").unwrap();
+        assert_eq!(layer_refs(&layers), ["gcc:13", "gdb:14", "clang:17"]);
+        assert_eq!(
+            origins(&layers[1]),
+            ["addon of gcc:13", "addon of clang:17", "listed directly"]
+        );
+    }
+
+    #[test]
+    fn differing_versions_without_coexist_conflict() {
+        let store = fix_store(false);
+        let err = resolve_toolchains(&store, "os-a", "[gcc:13+gdb:15, clang:17+gdb:13]").unwrap_err();
+        let text = err.to_string();
+        assert!(matches!(err, ResolveError::VersionConflict { .. }), "{text}");
+        assert!(
+            text.contains("gdb:15  addon of gcc:13 (allows 14, 15)  coexist: recipe=no assignment=no"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gdb:13  addon of clang:17 (allows 13, 14)  coexist: recipe=no assignment=no"),
+            "{text}"
+        );
+        assert!(err.help().unwrap().starts_with("use gdb:14 everywhere"), "{err:?}");
+    }
+
+    #[test]
+    fn conflict_with_no_common_version_says_so() {
+        let store = fix_store(false);
+        let err = resolve_toolchains(&store, "os-a", "[gcc:13+gdb:15, tcc:1+gdb:13]").unwrap_err();
+        assert!(err.to_string().contains("versions allowed by every parent: none"), "{err}");
+    }
+
+    #[test]
+    fn marking_every_conflicting_entry_allows_both() {
+        let store = fix_store(false);
+        let layers =
+            resolve_toolchains(&store, "os-a", "[gcc:13+gdb:15!, clang:17+gdb:13!]").unwrap();
+        assert_eq!(layer_refs(&layers), ["gcc:13", "gdb:15", "clang:17", "gdb:13"]);
+    }
+
+    #[test]
+    fn marking_only_some_entries_still_conflicts() {
+        let store = fix_store(false);
+        let err = resolve_toolchains(&store, "os-a", "[gcc:13+gdb:15!, clang:17+gdb:13]").unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("gdb:15  addon of gcc:13 (allows 14, 15)  coexist: recipe=no assignment=yes"), "{text}");
+        assert!(err.help().unwrap().ends_with("marking every such entry: gdb:13!"), "{err:?}");
+    }
+
+    #[test]
+    fn deduped_entry_needs_mark_on_every_occurrence() {
+        let store = fix_store(false);
+        let err = resolve_toolchains(
+            &store,
+            "os-a",
+            "[gcc:13+gdb:14!, clang:17+gdb:14, tcc:1+gdb:13!]",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("gdb:14  addon of gcc:13 (allows 14, 15); addon of clang:17 (allows 13, 14)  coexist: recipe=no assignment=no"), "{err}");
+    }
+
+    #[test]
+    fn differing_versions_all_coexisting_install_both() {
+        let store = fix_store(true);
+        let layers = resolve_toolchains(&store, "os-a", "[gcc:13+gdb:15, clang:17+gdb:13]").unwrap();
+        assert_eq!(layer_refs(&layers), ["gcc:13", "gdb:15", "clang:17", "gdb:13"]);
     }
 
     // ---- Store-backed tests (real recipes submodule) ------------------------

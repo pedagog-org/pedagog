@@ -96,7 +96,7 @@ where
 }
 
 // e.g. "gdb:14", "python:3.12" — version required
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Versioned<T = Id> {
     pub id: T,
     pub version: Version,

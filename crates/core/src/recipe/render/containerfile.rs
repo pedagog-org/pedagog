@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use super::{
     BuildPhase, BuildPlan, FromSource, ImageSpec, Layer, LayerSource, Render, RenderOptions,
-    ResolvedStep, Runtime,
+    ResolvedStep, Runtime, ToolchainOrigin,
 };
 
 pub struct Containerfile(String);
@@ -145,7 +145,18 @@ fn layer_label(source: &LayerSource) -> String {
     match source {
         LayerSource::Os(id) => format!("OS: {id}"),
         LayerSource::Platform(kind) => format!("Platform: {kind}"),
-        LayerSource::Toolchain(tc) => format!("Toolchain: {tc}"),
+        LayerSource::Toolchain { tc, origins } => {
+            let addon_of: Vec<String> = origins
+                .iter()
+                .filter(|o| matches!(o, ToolchainOrigin::AddonOf(_)))
+                .map(ToString::to_string)
+                .collect();
+            if addon_of.is_empty() {
+                format!("Toolchain: {tc}")
+            } else {
+                format!("Toolchain: {tc} ({})", addon_of.join(", "))
+            }
+        }
         LayerSource::Assignment(id) => format!("Assignment: {id}"),
         LayerSource::OsCleanup(id) => format!("OS Cleanup: {id}"),
     }
@@ -158,7 +169,9 @@ fn layer_env(source: &LayerSource) -> (String, String) {
     match source {
         LayerSource::Os(id) => ("os".to_owned(), id.to_string()),
         LayerSource::Platform(kind) => ("platform".to_owned(), kind.to_string()),
-        LayerSource::Toolchain(tc) => ("toolchain".to_owned(), format!("{}/{}", tc.id, tc.version)),
+        LayerSource::Toolchain { tc, .. } => {
+            ("toolchain".to_owned(), format!("{}/{}", tc.id, tc.version))
+        }
         LayerSource::Assignment(id) => ("assignment".to_owned(), id.to_string()),
         LayerSource::OsCleanup(id) => ("os".to_owned(), id.to_string()),
     }
