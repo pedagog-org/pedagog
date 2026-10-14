@@ -3,124 +3,158 @@ use std::num::NonZeroU16;
 
 use crate::recipe::assignment::AssignmentYaml;
 use crate::recipe::os::PkgArg;
-use crate::recipe::primitives::{ArgHook, Command, OsId, ParamVal, PkgName, Step};
+use crate::recipe::platform::PlatformSpec;
+use crate::recipe::primitives::{ArgHook, Command, OsId, ParamVal, PkgName, Step, ToolchainRef};
 use crate::recipe::render::{BuildPlan, ImageSpec, Layer, LayerSource, ResolvedStep, Runtime};
 use crate::recipe::store::RecipeStore;
 
+mod error;
 mod params;
+pub use error::ResolveError;
 use params::{interpolate, interpolate_args, resolve_params};
 
 const STUDENT_USER: &str = "student";
 
+type Params = HashMap<String, ParamVal>;
+
 /// Resolve a reusable OS base image (no assignment context).
-pub fn resolve_base(os_id: &OsId, store: &RecipeStore) -> Result<ImageSpec, String> {
-    let os = store
-        .os(os_id)
-        .ok_or_else(|| format!("os {:?} not found", os_id.as_str()))?;
-
-    let empty = HashMap::new();
-    let os_layer = Layer {
-        source: LayerSource::Os(os_id.clone()),
-        steps: resolve_steps(&os.hooks.build.init, &os.hooks.pkg.install, &empty)?,
-    };
-
+pub fn resolve_base(os_id: &OsId, store: &RecipeStore) -> Result<ImageSpec, ResolveError> {
+    let os = os_artifact(os_id, store)?;
     Ok(ImageSpec::Base {
-        upstream: os.upstream.clone(),
-        image: os.image.clone(),
-        os: os_layer,
+        upstream: os.upstream.to_owned(),
+        image: os.image.to_owned(),
+        os: os.init,
     })
 }
 
 /// Resolve a full assignment image: every build phase plus runtime.
-pub fn resolve(assignment: &AssignmentYaml, store: &RecipeStore) -> Result<ImageSpec, String> {
+pub fn resolve(assignment: &AssignmentYaml, store: &RecipeStore) -> Result<ImageSpec, ResolveError> {
     let env = &assignment.environment;
-    let os_id = &env.os;
-    let os = store
-        .os(os_id)
-        .ok_or_else(|| format!("os {:?} not found", os_id.as_str()))?;
-    let pkg_install = &os.hooks.pkg.install;
-    let empty = HashMap::new();
-
-    let os_layer = Layer {
-        source: LayerSource::Os(os_id.clone()),
-        steps: resolve_steps(&os.hooks.build.init, pkg_install, &empty)?,
-    };
-
-    let platform_kind = env.platform.kind.clone();
-    let platform = store.platform(platform_kind.clone(), os_id).ok_or_else(|| {
-        format!(
-            "no {:?} platform recipe found for os {:?}",
-            platform_kind.as_str(),
-            os_id.as_str()
-        )
-    })?;
-    let params = resolve_params(&platform.hooks.build.params, &env.platform.params)?;
-    let platform_layer = Layer {
-        source: LayerSource::Platform(platform_kind.clone()),
-        steps: resolve_steps(&platform.hooks.build.steps, pkg_install, &params)?,
-    };
-
-    let mut toolchain_layers = Vec::new();
-    for tc_ref in &env.toolchains {
-        let tc = store
-            .toolchain(&tc_ref.id, &tc_ref.version, os_id)
-            .ok_or_else(|| {
-                format!(
-                    "toolchain {:?} version {:?} not found for os {:?}",
-                    tc_ref.id.as_str(),
-                    tc_ref.version.as_str(),
-                    os_id.as_str()
-                )
-            })?;
-        toolchain_layers.push(Layer {
-            source: LayerSource::Toolchain(tc_ref.clone()),
-            steps: resolve_steps(&tc.steps, pkg_install, &tc.params)?,
-        });
-    }
-
+    let os = os_artifact(&env.os, store)?;
+    let platform = platform_artifact(&env.platform, &os, store)?;
+    let toolchain = toolchain_layers(&env.toolchains, &os, store)?;
     let assignment_layer = Layer {
         source: LayerSource::Assignment(assignment.id.clone()),
-        steps: resolve_steps(&env.steps, pkg_install, &empty)?,
-    };
-
-    let os_cleanup = Layer {
-        source: LayerSource::OsCleanup(os_id.clone()),
-        steps: resolve_steps(&os.hooks.build.cleanup, pkg_install, &empty)?,
-    };
-
-    let entrypoint = interpolate_args(&platform.hooks.entrypoint, &params)
-        .map_err(|e| format!("entrypoint interpolation failed: {e}"))?;
-    let ports = interpolate_args(&platform.hooks.ports, &params)
-        .map_err(|e| format!("ports interpolation failed: {e}"))?
-        .iter()
-        .map(|p| parse_port(p))
-        .collect::<Result<Vec<_>, _>>()?;
-    let runtime = Runtime {
-        user: STUDENT_USER.to_owned(),
-        entrypoint,
+        steps: resolve_steps(&env.steps, os.pkg_install, &Params::new())?,
     };
 
     Ok(ImageSpec::Full {
-        upstream: os.upstream.clone(),
-        base_image: os.image.clone(),
+        upstream: os.upstream.to_owned(),
+        base_image: os.image.to_owned(),
         plan: BuildPlan {
-            os: os_layer,
-            platform: platform_layer,
-            toolchain: toolchain_layers,
+            os: os.init,
+            platform: platform.layer,
+            toolchain,
             assignment: assignment_layer,
-            os_cleanup,
+            os_cleanup: os.cleanup,
         },
-        runtime,
-        ports,
+        runtime: Runtime {
+            user: STUDENT_USER.to_owned(),
+            entrypoint: platform.entrypoint,
+        },
+        ports: platform.ports,
         network: env.network.clone(),
     })
 }
 
+// ---- Per-recipe artifacts ----------------------------------------------------
+
+struct OsArtifact<'a> {
+    id: &'a OsId,
+    upstream: &'a str,
+    image: &'a str,
+    pkg_install: &'a ArgHook<PkgArg>,
+    init: Layer,
+    cleanup: Layer,
+}
+
+fn os_artifact<'a>(os_id: &OsId, store: &'a RecipeStore) -> Result<OsArtifact<'a>, ResolveError> {
+    let os = store
+        .os(os_id)
+        .ok_or_else(|| ResolveError::OsNotFound(os_id.clone()))?;
+    let pkg_install = &os.hooks.pkg.install;
+    let empty = Params::new();
+    Ok(OsArtifact {
+        id: &os.id,
+        upstream: &os.upstream,
+        image: &os.image,
+        pkg_install,
+        init: Layer {
+            source: LayerSource::Os(os.id.clone()),
+            steps: resolve_steps(&os.hooks.build.init, pkg_install, &empty)?,
+        },
+        cleanup: Layer {
+            source: LayerSource::OsCleanup(os.id.clone()),
+            steps: resolve_steps(&os.hooks.build.cleanup, pkg_install, &empty)?,
+        },
+    })
+}
+
+struct PlatformArtifact {
+    layer: Layer,
+    entrypoint: Vec<String>,
+    ports: Vec<u16>,
+}
+
+fn platform_artifact(
+    spec: &PlatformSpec,
+    os: &OsArtifact,
+    store: &RecipeStore,
+) -> Result<PlatformArtifact, ResolveError> {
+    let platform = store.platform(spec.kind.clone(), os.id).ok_or_else(|| {
+        ResolveError::PlatformNotFound {
+            kind: spec.kind.clone(),
+            os: os.id.clone(),
+        }
+    })?;
+    let params = resolve_params(&platform.hooks.build.params, &spec.params)
+        .map_err(ResolveError::InvalidParams)?;
+    let entrypoint = interpolate_args(&platform.hooks.entrypoint, &params)
+        .map_err(|message| interp_error("platform entrypoint", message))?;
+    let ports = interpolate_args(&platform.hooks.ports, &params)
+        .map_err(|message| interp_error("platform ports", message))?
+        .iter()
+        .map(|p| parse_port(p))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(PlatformArtifact {
+        layer: Layer {
+            source: LayerSource::Platform(spec.kind.clone()),
+            steps: resolve_steps(&platform.hooks.build.steps, os.pkg_install, &params)?,
+        },
+        entrypoint,
+        ports,
+    })
+}
+
+fn toolchain_layers(
+    selections: &[ToolchainRef],
+    os: &OsArtifact,
+    store: &RecipeStore,
+) -> Result<Vec<Layer>, ResolveError> {
+    selections
+        .iter()
+        .map(|tc_ref| {
+            let tc = store
+                .toolchain(&tc_ref.id, &tc_ref.version, os.id)
+                .ok_or_else(|| ResolveError::ToolchainNotFound {
+                    tc: tc_ref.clone(),
+                    os: os.id.clone(),
+                })?;
+            Ok(Layer {
+                source: LayerSource::Toolchain(tc_ref.clone()),
+                steps: resolve_steps(&tc.steps, os.pkg_install, &tc.params)?,
+            })
+        })
+        .collect()
+}
+
+// ---- Steps -------------------------------------------------------------------
+
 fn resolve_steps(
     steps: &[Step],
     pkg_install: &ArgHook<PkgArg>,
-    params: &HashMap<String, ParamVal>,
-) -> Result<Vec<ResolvedStep>, String> {
+    params: &Params,
+) -> Result<Vec<ResolvedStep>, ResolveError> {
     steps
         .iter()
         .map(|s| resolve_step(s, pkg_install, params))
@@ -130,8 +164,8 @@ fn resolve_steps(
 fn resolve_step(
     step: &Step,
     pkg_install: &ArgHook<PkgArg>,
-    params: &HashMap<String, ParamVal>,
-) -> Result<ResolvedStep, String> {
+    params: &Params,
+) -> Result<ResolvedStep, ResolveError> {
     match step {
         Step::Run { name, run } => {
             let commands = run
@@ -139,18 +173,19 @@ fn resolve_step(
                 .map(|s| {
                     interpolate(s, params)
                         .map(Command)
-                        .map_err(|e| format!("interpolation error in step {name:?}: {e}"))
+                        .map_err(|message| interp_error(&format!("step {name:?}"), message))
                 })
-                .collect::<Result<Vec<_>, String>>()?;
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(ResolvedStep {
                 name: name.clone(),
                 commands,
             })
         }
         Step::Install { name, packages } => {
-            let mut args = HashMap::new();
+            let mut args = Params::new();
             args.insert("packages".to_owned(), pkg_names(packages));
-            let commands = expand_arg_hook(pkg_install, &args)?;
+            let commands = expand_arg_hook(pkg_install, &args)
+                .map_err(|message| interp_error("pkg.install hook", message))?;
             Ok(ResolvedStep {
                 name: name.clone(),
                 commands,
@@ -160,11 +195,8 @@ fn resolve_step(
 }
 
 /// Expand an OS arg-hook's steps by interpolating each command with `args`
-/// (keyed by the hook's declared arg names, e.g. `packages`, `cidrs`).
-fn expand_arg_hook<A: Ord>(
-    hook: &ArgHook<A>,
-    args: &HashMap<String, ParamVal>,
-) -> Result<Vec<Command>, String> {
+/// (keyed by the hook's declared arg names, e.g. `packages`).
+fn expand_arg_hook<A: Ord>(hook: &ArgHook<A>, args: &Params) -> Result<Vec<Command>, String> {
     let mut out = Vec::new();
     for step in &hook.steps {
         match step {
@@ -181,10 +213,19 @@ fn expand_arg_hook<A: Ord>(
     Ok(out)
 }
 
-fn parse_port(raw: &str) -> Result<u16, String> {
+fn interp_error(context: &str, message: String) -> ResolveError {
+    ResolveError::Interpolation {
+        context: context.to_owned(),
+        message,
+    }
+}
+
+fn parse_port(raw: &str) -> Result<u16, ResolveError> {
     raw.parse::<NonZeroU16>()
         .map(NonZeroU16::get)
-        .map_err(|_| format!("invalid port {raw:?}: expected a number from 1 to 65535"))
+        .map_err(|_| ResolveError::InvalidPort {
+            raw: raw.to_owned(),
+        })
 }
 
 fn pkg_names(packages: &[PkgName]) -> ParamVal {
