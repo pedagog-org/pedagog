@@ -5,7 +5,8 @@ use walkdir::WalkDir;
 
 use crate::recipe::os::OsDef;
 use crate::recipe::platform::{PlatformKind, PlatformRecipe};
-use crate::recipe::primitives::{OsId, ToolchainId, Version};
+use crate::recipe::primitives::{ArgHook, OsId, Step, ToolchainId, Version};
+use crate::recipe::resolve::params::token_roots;
 use crate::recipe::toolchain::ToolchainRecipe;
 
 pub struct RecipeStore {
@@ -162,6 +163,15 @@ trait Loadable: serde::de::DeserializeOwned {
 
 impl Loadable for OsDef {
     fn register(self, store: &mut RecipeStore, path: &Path, errors: &mut Vec<LoadError>) {
+        let pkg = &self.hooks.pkg;
+        let mut problems = check_arg_hook("pkg.install", &pkg.install);
+        if let Some(remove) = &pkg.remove {
+            problems.extend(check_arg_hook("pkg.remove", remove));
+        }
+        errors.extend(problems.into_iter().map(|message| LoadError {
+            path: path.to_owned(),
+            message,
+        }));
         if store.os.contains_key(&self.id) {
             errors.push(LoadError {
                 path: path.to_owned(),
@@ -196,6 +206,34 @@ impl Loadable for ToolchainRecipe {
     }
 }
 
+/// An arg hook may only run commands, and may only reference its declared args.
+fn check_arg_hook<A: Ord>(hook_name: &str, hook: &ArgHook<A>) -> Vec<String>
+where
+    for<'x> &'x A: Into<&'static str>,
+{
+    let declared: Vec<&'static str> = hook.args.iter().map(Into::into).collect();
+    let mut problems = Vec::new();
+    for step in &hook.steps {
+        let Step::Run { run, .. } = step else {
+            problems.push(format!("{hook_name}: arg hook steps may not install packages"));
+            continue;
+        };
+        for cmd in run {
+            match token_roots(cmd) {
+                Ok(roots) => {
+                    for root in roots.iter().filter(|r| !declared.contains(&r.as_str())) {
+                        problems.push(format!(
+                            "{hook_name}: {{{root}}} is not a declared arg (declared: {declared:?})"
+                        ));
+                    }
+                }
+                Err(e) => problems.push(format!("{hook_name}: {e}")),
+            }
+        }
+    }
+    problems
+}
+
 fn load_yaml<T: Loadable>(src: &str, path: PathBuf, store: &mut RecipeStore, errors: &mut Vec<LoadError>) {
     match serde_yaml::from_str::<T>(src) {
         Ok(r) => r.register(store, &path, errors),
@@ -203,3 +241,40 @@ fn load_yaml<T: Loadable>(src: &str, path: PathBuf, store: &mut RecipeStore, err
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recipe::os::PkgArg;
+
+    fn hook(yaml: &str) -> ArgHook<PkgArg> {
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn arg_hook_with_declared_tokens_passes() {
+        let h = hook("args: [packages]\nsteps:\n  - run: ['apt-get install -y {packages} ${HOME} {{x}}']\n");
+        assert!(check_arg_hook("pkg.install", &h).is_empty());
+    }
+
+    #[test]
+    fn arg_hook_undeclared_token_is_reported() {
+        let h = hook("args: [packages]\nsteps:\n  - run: ['apt-get install -y {pacakges}']\n");
+        let problems = check_arg_hook("pkg.install", &h);
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("{pacakges}"), "{problems:?}");
+    }
+
+    #[test]
+    fn arg_hook_token_without_any_declared_args_is_reported() {
+        let h = hook("steps:\n  - run: ['apt-get install -y {packages}']\n");
+        assert_eq!(check_arg_hook("pkg.install", &h).len(), 1);
+    }
+
+    #[test]
+    fn arg_hook_install_step_is_reported() {
+        let h = hook("args: [packages]\nsteps:\n  - packages: [gcc]\n");
+        let problems = check_arg_hook("pkg.install", &h);
+        assert!(problems[0].contains("may not install"), "{problems:?}");
+    }
+}

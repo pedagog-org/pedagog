@@ -9,7 +9,7 @@ use crate::recipe::render::{BuildPlan, ImageSpec, Layer, LayerSource, ResolvedSt
 use crate::recipe::store::RecipeStore;
 
 mod error;
-mod params;
+pub(crate) mod params;
 pub use error::ResolveError;
 use params::{interpolate, interpolate_args, resolve_params};
 
@@ -294,14 +294,27 @@ mod tests {
 
     // ---- Store-backed tests (real recipes submodule) ------------------------
 
+    const SKIP_CORPUS_ENV: &str = "PEDAGOG_SKIP_RECIPE_CORPUS";
+
+    /// The real recipes corpus. Missing submodule fails the test unless
+    /// `PEDAGOG_SKIP_RECIPE_CORPUS` is set, so corpus coverage can't silently vanish.
     fn recipes_dir() -> Option<PathBuf> {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../recipes");
-        dir.join("os").exists().then_some(dir)
+        if dir.join("os").exists() {
+            return Some(dir);
+        }
+        if std::env::var_os(SKIP_CORPUS_ENV).is_some() {
+            return None;
+        }
+        panic!(
+            "recipes/ submodule is not checked out: run `git submodule update --init recipes`, \
+             or set {SKIP_CORPUS_ENV}=1 to skip corpus tests"
+        );
     }
 
     fn load_store() -> Option<RecipeStore> {
         let dir = recipes_dir()?;
-        RecipeStore::load(&[dir]).ok()
+        Some(RecipeStore::load(&[dir]).unwrap_or_else(|errs| panic!("recipes failed to load: {errs:#?}")))
     }
 
     fn assignment(network_block: &str) -> AssignmentYaml {
