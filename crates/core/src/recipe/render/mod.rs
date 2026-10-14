@@ -4,7 +4,7 @@ use strum_macros::Display;
 
 use crate::recipe::network::NetworkSpec;
 use crate::recipe::platform::PlatformKind;
-use crate::recipe::primitives::{command::Command, id::AssignmentId, OsId, ToolchainRef};
+use crate::recipe::primitives::{OsId, ToolchainRef, command::Command, id::AssignmentId};
 
 pub mod containerfile;
 pub mod describe;

@@ -142,7 +142,6 @@ fn layer_env(source: &LayerSource) -> (String, String) {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,7 +224,12 @@ mod tests {
     #[test]
     fn full_standalone_has_user_and_exec_entrypoint() {
         let spec = full_spec(
-            &["code-server", "--bind", "0.0.0.0:8080", "/home/student/my work"],
+            &[
+                "code-server",
+                "--bind",
+                "0.0.0.0:8080",
+                "/home/student/my work",
+            ],
             vec![8080],
             NetworkSpec::Allow,
         );
@@ -233,7 +237,10 @@ mod tests {
         assert!(out.contains("FROM ubuntu:22.04"));
         assert!(out.contains("PHASE: BASE"));
         assert!(out.contains("PHASE: PLATFORM"));
-        assert!(!out.contains("PHASE: OS CLEANUP"), "empty phase must be skipped");
+        assert!(
+            !out.contains("PHASE: OS CLEANUP"),
+            "empty phase must be skipped"
+        );
         assert!(out.contains("EXPOSE 8080"));
         assert!(out.contains("USER student"));
         assert!(
@@ -250,7 +257,10 @@ mod tests {
         let out = Containerfile::render(&spec, &opts(Some("localhost"), FromSource::PrebuiltBase))
             .to_string();
         assert!(out.contains("FROM localhost/pedagog/ubuntu:22"), "{out}");
-        assert!(!out.contains("PHASE: BASE"), "os layer baked into base image");
+        assert!(
+            !out.contains("PHASE: BASE"),
+            "os layer baked into base image"
+        );
     }
 
     #[test]
@@ -311,6 +321,9 @@ mod tests {
             },
         };
         let out = Containerfile::render(&spec, &opts(None, FromSource::Standalone)).to_string();
-        assert!(out.contains("RUN <<'EOF'\nif true; then\n  echo hi\nfi\nEOF"), "{out}");
+        assert!(
+            out.contains("RUN <<'EOF'\nif true; then\n  echo hi\nfi\nEOF"),
+            "{out}"
+        );
     }
 }

@@ -27,7 +27,8 @@ mod tests {
 
     #[test]
     fn ingredient_github_source() {
-        let yaml = "output: code-server.deb\ngithub:\n  repo: org/repo\n  asset: '*.deb'\n  tag: v1.0.0\n";
+        let yaml =
+            "output: code-server.deb\ngithub:\n  repo: org/repo\n  asset: '*.deb'\n  tag: v1.0.0\n";
         let i: Ingredient = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(i.output, "code-server.deb");
         assert!(matches!(i.source, IngredientSource::Github(ref g) if g.tag == "v1.0.0"));

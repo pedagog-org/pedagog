@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use super::primitives::{deserialize_one_or_many, Ingredient, OsId, ParamHook, ParamVal};
+use super::primitives::{Ingredient, OsId, ParamHook, ParamVal, deserialize_one_or_many};
 
 #[derive(Debug, Deserialize)]
 pub struct PlatformRecipe {

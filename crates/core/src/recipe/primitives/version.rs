@@ -62,12 +62,14 @@ impl TryFrom<String> for Version {
             1 => format!("{}.0.0", segments[0]),
             2 => format!("{}.{}.0", segments[0], segments[1]),
             3 => s.clone(),
-            _ => return Err(format!(
-                "invalid version {s:?}: must have 1-3 numeric segments"
-            )),
+            _ => {
+                return Err(format!(
+                    "invalid version {s:?}: must have 1-3 numeric segments"
+                ));
+            }
         };
-        let semver = semver::Version::parse(&padded)
-            .map_err(|e| format!("invalid version {s:?}: {e}"))?;
+        let semver =
+            semver::Version::parse(&padded).map_err(|e| format!("invalid version {s:?}: {e}"))?;
         Ok(Version { raw: s, semver })
     }
 }
@@ -155,7 +157,8 @@ where
     T: TryFrom<String, Error = String>,
 {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        MaybeVersioned::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+        MaybeVersioned::try_from(String::deserialize(deserializer)?)
+            .map_err(serde::de::Error::custom)
     }
 }
 

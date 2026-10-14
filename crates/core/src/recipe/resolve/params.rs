@@ -25,30 +25,41 @@ pub fn resolve_params(
     Ok(out)
 }
 
-fn resolve_one(key: &str, decl: &ParamDef, r#override: Option<&ParamVal>) -> Result<ParamVal, String> {
+fn resolve_one(
+    key: &str,
+    decl: &ParamDef,
+    r#override: Option<&ParamVal>,
+) -> Result<ParamVal, String> {
     match decl {
-        ParamDef::Bool { default, .. } => {
-            match r#override {
-                Some(ParamVal::Bool(b)) => Ok(ParamVal::Bool(*b)),
-                Some(other) => Err(format!("param {key:?}: expected bool, got {:?}", other.param_type())),
-                None => default
-                    .map(ParamVal::Bool)
-                    .ok_or_else(|| format!("param {key:?} is required")),
-            }
-        }
-        ParamDef::Int { default, .. } => {
-            match r#override {
-                Some(ParamVal::Int(i)) => Ok(ParamVal::Int(*i)),
-                Some(other) => Err(format!("param {key:?}: expected int, got {:?}", other.param_type())),
-                None => default
-                    .map(ParamVal::Int)
-                    .ok_or_else(|| format!("param {key:?} is required")),
-            }
-        }
+        ParamDef::Bool { default, .. } => match r#override {
+            Some(ParamVal::Bool(b)) => Ok(ParamVal::Bool(*b)),
+            Some(other) => Err(format!(
+                "param {key:?}: expected bool, got {:?}",
+                other.param_type()
+            )),
+            None => default
+                .map(ParamVal::Bool)
+                .ok_or_else(|| format!("param {key:?} is required")),
+        },
+        ParamDef::Int { default, .. } => match r#override {
+            Some(ParamVal::Int(i)) => Ok(ParamVal::Int(*i)),
+            Some(other) => Err(format!(
+                "param {key:?}: expected int, got {:?}",
+                other.param_type()
+            )),
+            None => default
+                .map(ParamVal::Int)
+                .ok_or_else(|| format!("param {key:?} is required")),
+        },
         ParamDef::Str { default, regex, .. } => {
             let val = match r#override {
                 Some(ParamVal::Str(s)) => ParamVal::Str(s.clone()),
-                Some(other) => return Err(format!("param {key:?}: expected str, got {:?}", other.param_type())),
+                Some(other) => {
+                    return Err(format!(
+                        "param {key:?}: expected str, got {:?}",
+                        other.param_type()
+                    ));
+                }
                 None => default
                     .clone()
                     .map(ParamVal::Str)
@@ -65,20 +76,26 @@ fn resolve_one(key: &str, decl: &ParamDef, r#override: Option<&ParamVal>) -> Res
             }
             Ok(val)
         }
-        ParamDef::List { default, .. } => {
-            match r#override {
-                Some(ParamVal::List(v)) => Ok(ParamVal::List(v.clone())),
-                Some(other) => Err(format!("param {key:?}: expected list, got {:?}", other.param_type())),
-                None => default
-                    .clone()
-                    .map(ParamVal::List)
-                    .ok_or_else(|| format!("param {key:?} is required")),
-            }
-        }
+        ParamDef::List { default, .. } => match r#override {
+            Some(ParamVal::List(v)) => Ok(ParamVal::List(v.clone())),
+            Some(other) => Err(format!(
+                "param {key:?}: expected list, got {:?}",
+                other.param_type()
+            )),
+            None => default
+                .clone()
+                .map(ParamVal::List)
+                .ok_or_else(|| format!("param {key:?} is required")),
+        },
         ParamDef::Map { properties, .. } => {
             let inner_overrides = match r#override {
                 Some(ParamVal::Map(m)) => m.clone(),
-                Some(other) => return Err(format!("param {key:?}: expected map, got {:?}", other.param_type())),
+                Some(other) => {
+                    return Err(format!(
+                        "param {key:?}: expected map, got {:?}",
+                        other.param_type()
+                    ));
+                }
                 None => HashMap::new(),
             };
             let resolved = resolve_params(properties, &inner_overrides)
@@ -148,8 +165,8 @@ fn scan(
                 break;
             }
             (Some(o), Some(c)) if c < o => Err(c), // `}}` wins
-            (None, Some(c)) => Err(c),              // only `}}`
-            (Some(o), _) => Ok(o),                  // `{` wins (or no `}}`)
+            (None, Some(c)) => Err(c),             // only `}}`
+            (Some(o), _) => Ok(o),                 // `{` wins (or no `}}`)
         };
 
         match advance_to {
@@ -287,19 +304,32 @@ mod tests {
     use super::*;
 
     fn bool_decl(default: Option<bool>) -> ParamDef {
-        ParamDef::Bool { default, info: None }
+        ParamDef::Bool {
+            default,
+            info: None,
+        }
     }
 
     fn str_decl(default: Option<&str>) -> ParamDef {
-        ParamDef::Str { default: default.map(|s| s.to_owned()), info: None, regex: None }
+        ParamDef::Str {
+            default: default.map(|s| s.to_owned()),
+            info: None,
+            regex: None,
+        }
     }
 
     fn list_decl(default: Option<Vec<ParamVal>>) -> ParamDef {
-        ParamDef::List { default, info: None }
+        ParamDef::List {
+            default,
+            info: None,
+        }
     }
 
     fn map_decl(properties: HashMap<String, ParamDef>) -> ParamDef {
-        ParamDef::Map { properties, info: None }
+        ParamDef::Map {
+            properties,
+            info: None,
+        }
     }
 
     // ---- resolve_params -----------------------------------------------------
@@ -399,7 +429,10 @@ mod tests {
     // ---- interpolate --------------------------------------------------------
 
     fn params_from(pairs: &[(&str, ParamVal)]) -> HashMap<String, ParamVal> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]
@@ -429,22 +462,34 @@ mod tests {
                 ParamVal::Str("make".to_owned()),
             ]),
         )]);
-        assert_eq!(interpolate("apt install {pkgs}", &params).unwrap(), "apt install gcc make");
+        assert_eq!(
+            interpolate("apt install {pkgs}", &params).unwrap(),
+            "apt install gcc make"
+        );
     }
 
     #[test]
     fn interpolate_empty_list() {
         let params = params_from(&[("pkgs", ParamVal::List(vec![]))]);
-        assert_eq!(interpolate("install {pkgs} done", &params).unwrap(), "install  done");
+        assert_eq!(
+            interpolate("install {pkgs} done", &params).unwrap(),
+            "install  done"
+        );
     }
 
     #[test]
     fn interpolate_json_list() {
         let params = params_from(&[(
             "ids",
-            ParamVal::List(vec![ParamVal::Str("a.b".to_owned()), ParamVal::Str("c.d".to_owned())]),
+            ParamVal::List(vec![
+                ParamVal::Str("a.b".to_owned()),
+                ParamVal::Str("c.d".to_owned()),
+            ]),
         )]);
-        assert_eq!(interpolate("{ids:json}", &params).unwrap(), r#"["a.b","c.d"]"#);
+        assert_eq!(
+            interpolate("{ids:json}", &params).unwrap(),
+            r#"["a.b","c.d"]"#
+        );
     }
 
     #[test]
@@ -497,16 +542,25 @@ mod tests {
     #[test]
     fn interpolate_no_tokens_passthrough() {
         let params = HashMap::new();
-        assert_eq!(interpolate("apt-get install -y curl", &params).unwrap(), "apt-get install -y curl");
+        assert_eq!(
+            interpolate("apt-get install -y curl", &params).unwrap(),
+            "apt-get install -y curl"
+        );
     }
 
     #[test]
     fn interpolate_list_union_json() {
         let params = params_from(&[
-            ("a", ParamVal::List(vec![ParamVal::Str("x".into()), ParamVal::Str("y".into())])),
+            (
+                "a",
+                ParamVal::List(vec![ParamVal::Str("x".into()), ParamVal::Str("y".into())]),
+            ),
             ("b", ParamVal::List(vec![ParamVal::Str("z".into())])),
         ]);
-        assert_eq!(interpolate("{a+b:json}", &params).unwrap(), r#"["x","y","z"]"#);
+        assert_eq!(
+            interpolate("{a+b:json}", &params).unwrap(),
+            r#"["x","y","z"]"#
+        );
     }
 
     #[test]
@@ -520,10 +574,7 @@ mod tests {
 
     #[test]
     fn interpolate_list_union_non_list_errors() {
-        let params = params_from(&[
-            ("a", ParamVal::List(vec![])),
-            ("b", ParamVal::Bool(true)),
-        ]);
+        let params = params_from(&[("a", ParamVal::List(vec![])), ("b", ParamVal::Bool(true))]);
         assert!(interpolate("{a+b:json}", &params).is_err());
     }
 
@@ -541,7 +592,10 @@ mod tests {
         let params = params_from(&[
             ("a", ParamVal::List(vec![ParamVal::Str("x".into())])),
             ("b", ParamVal::List(vec![ParamVal::Str("y".into())])),
-            ("c", ParamVal::List(vec![ParamVal::Str("z".into()), ParamVal::Str("w".into())])),
+            (
+                "c",
+                ParamVal::List(vec![ParamVal::Str("z".into()), ParamVal::Str("w".into())]),
+            ),
         ]);
         assert_eq!(
             interpolate("{a+b+c:json}", &params).unwrap(),
@@ -553,17 +607,17 @@ mod tests {
     fn interpolate_double_brace_escape() {
         let params = HashMap::new();
         // {{...}} → {...}
-        assert_eq!(interpolate("{{\"key\": true}}", &params).unwrap(), "{\"key\": true}");
+        assert_eq!(
+            interpolate("{{\"key\": true}}", &params).unwrap(),
+            "{\"key\": true}"
+        );
     }
 
     #[test]
     fn interpolate_double_brace_with_param() {
         let params = params_from(&[("terminal", ParamVal::Bool(false))]);
         // mix of escape and real token
-        assert_eq!(
-            interpolate("{{{terminal}}}", &params).unwrap(),
-            "{false}"
-        );
+        assert_eq!(interpolate("{{{terminal}}}", &params).unwrap(), "{false}");
     }
 
     #[test]
@@ -616,7 +670,10 @@ mod tests {
     #[test]
     fn resolve_str_regex_accepts_matching_default() {
         let mut decls = HashMap::new();
-        decls.insert("label".to_owned(), str_decl_with_regex(Some("abc"), r"^[a-z]+$"));
+        decls.insert(
+            "label".to_owned(),
+            str_decl_with_regex(Some("abc"), r"^[a-z]+$"),
+        );
         let result = resolve_params(&decls, &HashMap::new()).unwrap();
         assert!(matches!(&result["label"], ParamVal::Str(s) if s == "abc"));
     }
@@ -640,7 +697,10 @@ mod tests {
                 ParamVal::Str("--b".to_owned()),
             ]),
         );
-        m.insert("more".to_owned(), ParamVal::List(vec![ParamVal::Str("--c".to_owned())]));
+        m.insert(
+            "more".to_owned(),
+            ParamVal::List(vec![ParamVal::Str("--c".to_owned())]),
+        );
         m
     }
 
@@ -651,7 +711,10 @@ mod tests {
 
     #[test]
     fn interpolate_args_splats_whole_item_list() {
-        assert_eq!(args(&["cs", "{flags}", "x"]).unwrap(), ["cs", "--a", "--b", "x"]);
+        assert_eq!(
+            args(&["cs", "{flags}", "x"]).unwrap(),
+            ["cs", "--a", "--b", "x"]
+        );
     }
 
     #[test]
@@ -666,11 +729,10 @@ mod tests {
 
     #[test]
     fn interpolate_args_keeps_spaces_within_an_item() {
-        assert_eq!(args(&["--bind-addr", "0.0.0.0:{port}", "a b"]).unwrap(), [
-            "--bind-addr",
-            "0.0.0.0:8080",
-            "a b"
-        ]);
+        assert_eq!(
+            args(&["--bind-addr", "0.0.0.0:{port}", "a b"]).unwrap(),
+            ["--bind-addr", "0.0.0.0:8080", "a b"]
+        );
     }
 
     #[test]

@@ -37,7 +37,10 @@ pub fn resolve_base(os_id: &OsId, store: &RecipeStore) -> Result<ImageSpec, Reso
 }
 
 /// Resolve a full assignment image: every build phase plus runtime.
-pub fn resolve(assignment: &AssignmentYaml, store: &RecipeStore) -> Result<ImageSpec, ResolveError> {
+pub fn resolve(
+    assignment: &AssignmentYaml,
+    store: &RecipeStore,
+) -> Result<ImageSpec, ResolveError> {
     let env = &assignment.environment;
     let os = os_artifact(&env.os, store)?;
     let platform = platform_artifact(&env.platform, &os, store)?;
@@ -110,12 +113,13 @@ fn platform_artifact(
     os: &OsArtifact,
     store: &RecipeStore,
 ) -> Result<PlatformArtifact, ResolveError> {
-    let platform = store.platform(spec.kind.clone(), os.id).ok_or_else(|| {
-        ResolveError::PlatformNotFound {
-            kind: spec.kind.clone(),
-            os: os.id.clone(),
-        }
-    })?;
+    let platform =
+        store
+            .platform(spec.kind.clone(), os.id)
+            .ok_or_else(|| ResolveError::PlatformNotFound {
+                kind: spec.kind.clone(),
+                os: os.id.clone(),
+            })?;
     let params = resolve_params(&platform.hooks.build.params, &spec.params)
         .map_err(ResolveError::InvalidParams)?;
     let entrypoint = interpolate_args(&platform.hooks.entrypoint, &params)
@@ -376,7 +380,8 @@ mod tests {
 
     #[test]
     fn expand_arg_hook_substitutes_packages() {
-        let hook = arg_hook("args: [packages]\nsteps:\n  - run: ['apt-get install -y {packages}']\n");
+        let hook =
+            arg_hook("args: [packages]\nsteps:\n  - run: ['apt-get install -y {packages}']\n");
         let mut args = HashMap::new();
         args.insert(
             "packages".to_owned(),
@@ -427,7 +432,9 @@ mod tests {
     fn fix_tc(id: &str, version: &str, os: &str, extra: &str) -> (String, String) {
         (
             format!("toolchains/{id}-{version}.yaml"),
-            format!("id: {id}\nversion: \"{version}\"\nos: {os}\nsteps:\n  - run: ['install {id} {version}']\n{extra}"),
+            format!(
+                "id: {id}\nversion: \"{version}\"\nos: {os}\nsteps:\n  - run: ['install {id} {version}']\n{extra}"
+            ),
         )
     }
 
@@ -436,7 +443,12 @@ mod tests {
     fn fix_store(gdb_coexist: bool) -> RecipeStore {
         let coexist = if gdb_coexist { "coexist: true\n" } else { "" };
         let tcs = [
-            fix_tc("gcc", "13", "[os-a, os-b]", "addons:\n  gdb: [\"14\", \"15\"]\n  valgrind: [\"3\"]\n"),
+            fix_tc(
+                "gcc",
+                "13",
+                "[os-a, os-b]",
+                "addons:\n  gdb: [\"14\", \"15\"]\n  valgrind: [\"3\"]\n",
+            ),
             fix_tc("clang", "17", "os-a", "addons:\n  gdb: [\"13\", \"14\"]\n"),
             fix_tc("tcc", "1", "os-a", "addons:\n  gdb: [\"13\"]\n"),
             fix_tc("gdb", "13", "os-a", coexist),
@@ -453,7 +465,11 @@ mod tests {
         crate::recipe::store::fixture_store(&files).unwrap()
     }
 
-    fn resolve_toolchains(store: &RecipeStore, os: &str, toolchains: &str) -> Result<Vec<Layer>, ResolveError> {
+    fn resolve_toolchains(
+        store: &RecipeStore,
+        os: &str,
+        toolchains: &str,
+    ) -> Result<Vec<Layer>, ResolveError> {
         let yaml = format!(
             "id: t\nname: T\nenvironment:\n  os: {os}\n  platform:\n    kind: interactive\n  toolchains: {toolchains}\n"
         );
@@ -476,7 +492,9 @@ mod tests {
 
     fn origins(layer: &Layer) -> Vec<String> {
         match &layer.source {
-            LayerSource::Toolchain { origins, .. } => origins.iter().map(ToString::to_string).collect(),
+            LayerSource::Toolchain { origins, .. } => {
+                origins.iter().map(ToString::to_string).collect()
+            }
             _ => panic!("expected toolchain layer"),
         }
     }
@@ -486,7 +504,10 @@ mod tests {
         let store = fix_store(false);
         let layers =
             resolve_toolchains(&store, "os-a", "[gcc:13+valgrind:3+gdb:14, clang:17]").unwrap();
-        assert_eq!(layer_refs(&layers), ["gcc:13", "valgrind:3", "gdb:14", "clang:17"]);
+        assert_eq!(
+            layer_refs(&layers),
+            ["gcc:13", "valgrind:3", "gdb:14", "clang:17"]
+        );
         assert_eq!(origins(&layers[2]), ["addon of gcc:13"]);
         assert_eq!(layers[2].steps[0].commands[0].0, "install gdb 14");
     }
@@ -495,7 +516,10 @@ mod tests {
     fn undeclared_addon_version_is_rejected() {
         let store = fix_store(false);
         let err = resolve_toolchains(&store, "os-a", "[gcc:13+gdb:13]").unwrap_err();
-        assert!(matches!(err, ResolveError::AddonNotDeclared { .. }), "{err}");
+        assert!(
+            matches!(err, ResolveError::AddonNotDeclared { .. }),
+            "{err}"
+        );
         assert!(err.to_string().contains("14, 15"), "{err}");
     }
 
@@ -503,7 +527,10 @@ mod tests {
     fn addon_not_offered_by_parent_is_rejected() {
         let store = fix_store(false);
         let err = resolve_toolchains(&store, "os-a", "[clang:17+valgrind:3]").unwrap_err();
-        assert!(err.to_string().contains("offers no valgrind addon"), "{err}");
+        assert!(
+            err.to_string().contains("offers no valgrind addon"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -531,25 +558,40 @@ mod tests {
     #[test]
     fn differing_versions_without_coexist_conflict() {
         let store = fix_store(false);
-        let err = resolve_toolchains(&store, "os-a", "[gcc:13+gdb:15, clang:17+gdb:13]").unwrap_err();
+        let err =
+            resolve_toolchains(&store, "os-a", "[gcc:13+gdb:15, clang:17+gdb:13]").unwrap_err();
         let text = err.to_string();
-        assert!(matches!(err, ResolveError::VersionConflict { .. }), "{text}");
         assert!(
-            text.contains("gdb:15  addon of gcc:13 (allows 14, 15)  coexist: recipe=no assignment=no"),
+            matches!(err, ResolveError::VersionConflict { .. }),
             "{text}"
         );
         assert!(
-            text.contains("gdb:13  addon of clang:17 (allows 13, 14)  coexist: recipe=no assignment=no"),
+            text.contains(
+                "gdb:15  addon of gcc:13 (allows 14, 15)  coexist: recipe=no assignment=no"
+            ),
             "{text}"
         );
-        assert!(err.help().unwrap().starts_with("use gdb:14 everywhere"), "{err:?}");
+        assert!(
+            text.contains(
+                "gdb:13  addon of clang:17 (allows 13, 14)  coexist: recipe=no assignment=no"
+            ),
+            "{text}"
+        );
+        assert!(
+            err.help().unwrap().starts_with("use gdb:14 everywhere"),
+            "{err:?}"
+        );
     }
 
     #[test]
     fn conflict_with_no_common_version_says_so() {
         let store = fix_store(false);
         let err = resolve_toolchains(&store, "os-a", "[gcc:13+gdb:15, tcc:1+gdb:13]").unwrap_err();
-        assert!(err.to_string().contains("versions allowed by every parent: none"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("versions allowed by every parent: none"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -557,16 +599,30 @@ mod tests {
         let store = fix_store(false);
         let layers =
             resolve_toolchains(&store, "os-a", "[gcc:13+gdb:15!, clang:17+gdb:13!]").unwrap();
-        assert_eq!(layer_refs(&layers), ["gcc:13", "gdb:15", "clang:17", "gdb:13"]);
+        assert_eq!(
+            layer_refs(&layers),
+            ["gcc:13", "gdb:15", "clang:17", "gdb:13"]
+        );
     }
 
     #[test]
     fn marking_only_some_entries_still_conflicts() {
         let store = fix_store(false);
-        let err = resolve_toolchains(&store, "os-a", "[gcc:13+gdb:15!, clang:17+gdb:13]").unwrap_err();
+        let err =
+            resolve_toolchains(&store, "os-a", "[gcc:13+gdb:15!, clang:17+gdb:13]").unwrap_err();
         let text = err.to_string();
-        assert!(text.contains("gdb:15  addon of gcc:13 (allows 14, 15)  coexist: recipe=no assignment=yes"), "{text}");
-        assert!(err.help().unwrap().ends_with("marking every such entry: gdb:13!"), "{err:?}");
+        assert!(
+            text.contains(
+                "gdb:15  addon of gcc:13 (allows 14, 15)  coexist: recipe=no assignment=yes"
+            ),
+            "{text}"
+        );
+        assert!(
+            err.help()
+                .unwrap()
+                .ends_with("marking every such entry: gdb:13!"),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -584,8 +640,12 @@ mod tests {
     #[test]
     fn differing_versions_all_coexisting_install_both() {
         let store = fix_store(true);
-        let layers = resolve_toolchains(&store, "os-a", "[gcc:13+gdb:15, clang:17+gdb:13]").unwrap();
-        assert_eq!(layer_refs(&layers), ["gcc:13", "gdb:15", "clang:17", "gdb:13"]);
+        let layers =
+            resolve_toolchains(&store, "os-a", "[gcc:13+gdb:15, clang:17+gdb:13]").unwrap();
+        assert_eq!(
+            layer_refs(&layers),
+            ["gcc:13", "gdb:15", "clang:17", "gdb:13"]
+        );
     }
 
     // ---- Store-backed tests (real recipes submodule) ------------------------
@@ -610,7 +670,10 @@ mod tests {
 
     fn load_store() -> Option<RecipeStore> {
         let dir = recipes_dir()?;
-        Some(RecipeStore::load(&[dir]).unwrap_or_else(|errs| panic!("recipes failed to load: {errs:#?}")))
+        Some(
+            RecipeStore::load(&[dir])
+                .unwrap_or_else(|errs| panic!("recipes failed to load: {errs:#?}")),
+        )
     }
 
     fn assignment(network_block: &str) -> AssignmentYaml {
