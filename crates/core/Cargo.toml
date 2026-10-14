@@ -5,6 +5,7 @@ version.workspace = true
 publish.workspace = true
 
 [dependencies]
+anstyle = { workspace = true }
 ipnet = { workspace = true }
 regex = { workspace = true }
 semver = { workspace = true }

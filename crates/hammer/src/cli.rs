@@ -42,7 +42,7 @@ pub struct PlanArgs {
     #[arg(short = 'r', long, value_name = "DIR", action = clap::ArgAction::Append)]
     pub recipes: Vec<PathBuf>,
 
-    /// Output format: containerfile (describe is not yet implemented).
+    /// Output format: containerfile, or describe for a human-readable tree.
     #[arg(short = 'f', long, value_enum, default_value_t = Format::Containerfile)]
     pub format: Format,
 
@@ -107,6 +107,6 @@ pub struct VendArgs {
 pub enum Format {
     /// Containerfile (Dockerfile) syntax (default).
     Containerfile,
-    /// Tree view (not yet implemented).
+    /// Human-readable tree of phases, layers, steps, and runtime.
     Describe,
 }

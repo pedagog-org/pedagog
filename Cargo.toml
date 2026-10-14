@@ -10,6 +10,8 @@ publish = false
 # Shared dependency versions (referenced by crates as `dep.workspace = true` when
 # code actually needs them).
 [workspace.dependencies]
+anstream = "1"
+anstyle = "1"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 ipnet = "2"

@@ -13,6 +13,7 @@ use cli::{Cli, Command, Format, PlanArgs, VendArgs};
 use pedagog_core::recipe::assignment::AssignmentYaml;
 use pedagog_core::recipe::primitives::Id;
 use pedagog_core::recipe::render::containerfile::Containerfile;
+use pedagog_core::recipe::render::describe::Describe;
 use pedagog_core::recipe::render::{FromSource, Render, RenderOptions};
 use pedagog_core::recipe::resolve::{resolve, resolve_base, ResolveError};
 use pedagog_core::recipe::store::RecipeStore;
@@ -81,22 +82,22 @@ fn run_plan(args: PlanArgs) -> Result<()> {
 
     let text = match args.format {
         Format::Containerfile => Containerfile::render(&spec, &opts).to_string(),
-        Format::Describe => {
-            return Err(miette!(
-                "describe output is not yet implemented; use -f containerfile"
-            ));
-        }
+        Format::Describe => Describe::render(&spec, &opts).to_string(),
     };
 
+    // describe output is ANSI-styled: anstream strips it when stdout isn't a
+    // terminal (or NO_COLOR is set); files never get it.
     match &args.output {
         Some(path) => {
             let path = expand_tilde(path.clone());
             let mut f = std::fs::File::create(&path)
                 .map_err(|e| miette!("cannot create {}: {}", path.display(), e))?;
-            f.write_all(text.as_bytes())
+            write!(f, "{}", anstream::adapter::strip_str(&text))
                 .map_err(|e| miette!("write error: {}", e))?;
         }
-        None => print!("{text}"),
+        None => anstream::stdout()
+            .write_all(text.as_bytes())
+            .map_err(|e| miette!("write error: {}", e))?,
     }
     Ok(())
 }

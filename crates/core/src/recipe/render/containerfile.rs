@@ -1,9 +1,8 @@
-use std::borrow::Cow;
 use std::fmt::Write;
 
 use super::{
     BuildPhase, BuildPlan, FromSource, ImageSpec, Layer, LayerSource, Render, RenderOptions,
-    ResolvedStep, Runtime, ToolchainOrigin,
+    ResolvedStep, Runtime,
 };
 
 pub struct Containerfile(String);
@@ -38,13 +37,7 @@ impl Render for Containerfile {
                 ports,
                 ..
             } => {
-                // The registry prefix only applies to images pedagog builds;
-                // upstream images are pulled as written.
-                let from = match opts.from {
-                    FromSource::Standalone => Cow::from(upstream.as_str()),
-                    FromSource::PrebuiltBase => prefixed(opts.registry.as_deref(), base_image),
-                };
-                render_from(&mut to, &from);
+                render_from(&mut to, &opts.full_from(upstream, base_image));
                 render_phases(&mut to, plan, opts.from);
 
                 for port in ports {
@@ -87,7 +80,7 @@ fn render_layer(to: &mut String, layer: &Layer) {
     if layer.steps.is_empty() {
         return;
     }
-    let _ = writeln!(to, "\n# ----- {} -----", layer_label(&layer.source));
+    let _ = writeln!(to, "\n# ----- {} -----", layer.source.label());
     // The `vend` helper resolves ingredient paths from these per-layer vars.
     let (ptype, pid) = layer_env(&layer.source);
     let _ = writeln!(to, "ENV PEDAGOG_TYPE={ptype}");
@@ -132,34 +125,6 @@ fn render_runtime(to: &mut String, rt: &Runtime) {
 
 fn exec_array(words: &[String]) -> String {
     serde_json::to_string(words).unwrap_or_default()
-}
-
-fn prefixed<'a>(registry: Option<&str>, image: &'a str) -> Cow<'a, str> {
-    match registry {
-        Some(reg) => format!("{reg}/{image}").into(),
-        None => image.into(),
-    }
-}
-
-fn layer_label(source: &LayerSource) -> String {
-    match source {
-        LayerSource::Os(id) => format!("OS: {id}"),
-        LayerSource::Platform(kind) => format!("Platform: {kind}"),
-        LayerSource::Toolchain { tc, origins } => {
-            let addon_of: Vec<String> = origins
-                .iter()
-                .filter(|o| matches!(o, ToolchainOrigin::AddonOf(_)))
-                .map(ToString::to_string)
-                .collect();
-            if addon_of.is_empty() {
-                format!("Toolchain: {tc}")
-            } else {
-                format!("Toolchain: {tc} ({})", addon_of.join(", "))
-            }
-        }
-        LayerSource::Assignment(id) => format!("Assignment: {id}"),
-        LayerSource::OsCleanup(id) => format!("OS Cleanup: {id}"),
-    }
 }
 
 /// (PEDAGOG_TYPE, PEDAGOG_ID) for a layer — the `vend` helper joins these into

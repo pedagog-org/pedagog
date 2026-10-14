@@ -12,6 +12,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+anstream = { workspace = true }
 clap = { workspace = true }
 miette = { workspace = true }
 pedagog-core = { path = "../core" }
