@@ -53,6 +53,20 @@ solution/    # reference implementation (baked, grader-only)
 tests/       # test suite (baked, grader-only)
 ```
 
+The three source directories are configurable in `assignment.yml` (each defaults to
+the name above); the image paths `/pedagog/{starter,tests,solution}` are fixed:
+
+```yaml
+files:
+  starter: src
+  tests: grading/hidden
+  solution: reference
+```
+
+A configured directory that doesn't exist is an error; a missing default one simply
+isn't baked. Tests students should see and run are ordinary starter files; everything
+from the tests source is hidden.
+
 - `hammer upload <dir>` validates the directory locally (`assignment.yml` parses and
   resolves), packs it, and POSTs it to `jobs` `POST /internal/assignments` (body: the tgz).
 - `jobs` stores it in Garage as `assignments/<assignment-id>/<sha256>.tgz` (every upload is
