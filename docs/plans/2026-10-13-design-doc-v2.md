@@ -151,15 +151,25 @@ pub struct ToolchainRecipe {
 **Assignment selection** (replaces `Environment.toolchains: Vec<ToolchainRef>`):
 
 ```rust
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ToolchainSelection {
     pub id: ToolchainId,
-    pub version: Version,                // required
-    #[serde(default)]
-    pub addons: Vec<ToolchainRef>,       // "gdb:14" — version required
+    pub version: Version,          // required
+    pub addons: Vec<ToolchainRef>, // "gdb:14" — version required
 }
 ```
+
+Two accepted forms, both parsing to `ToolchainSelection`:
+
+- **Shorthand string:** `gcc:13+gdb:14+valgrind:3.22` — split on `+`; the first item is the
+  parent, the rest are its addons, each `id:version`. `+` can't appear in an id
+  (`[a-z][a-z0-9-]*`) or version (numeric dot segments), so this is unambiguous. `+` is
+  used instead of `,` because a comma splits items inside YAML flow lists (`[...]`).
+- **Object form:** `{id, version, addons}` with unknown keys rejected — leaves room for
+  per-toolchain fields later.
+
+Implemented as a hand-written `Deserialize` with `visit_str` + `visit_map` (not
+`#[serde(untagged)]`, which swallows the specific parse error into "did not match any
+variant").
 
 **Resolution rules:**
 
@@ -281,9 +291,12 @@ Ported from the commented-out `describe.rs` against the current types, same
 - **Then:** ports, user, entrypoint argv, network policy summary, toolchain resolution
   (coexisting versions called out).
 - **`Base`:** FROM upstream, OS layer, produced image tag.
-- **Color:** only when hammer decides output is a TTY (and not `-O file`); passed in as
-  `RenderOptions.color: bool` so core does no terminal detection. How color is produced
-  is an open question (see below).
+- **Color:** core styles text with `anstyle` and always emits ANSI codes; hammer writes
+  stdout through `anstream`, which strips them when output isn't a terminal and respects
+  `NO_COLOR` / `CLICOLOR`. For `-O file`, hammer strips them with
+  `anstream::adapter::strip_str`. No color flag in `RenderOptions`. Both crates are
+  already compiled in via clap; they become direct dependencies (`anstyle` in core,
+  `anstream` in hammer).
 
 ---
 
@@ -332,9 +345,10 @@ environment:
   platform:
     kind: interactive
   toolchains:
-    - id: gcc
-      version: "13"
-      addons: [gdb:14, valgrind:3.22]
+    - gcc:13+gdb:14+valgrind:3.22   # shorthand
+    - id: python                    # object form, equivalent shape
+      version: "3.12"
+      addons: [pytest:8]
   network:
     mode: deny
     allow:
@@ -349,7 +363,7 @@ environment:
 
 - Map `ResolveError` into miette reports (`Display` text; `help:` line surfaced as miette
   help where present).
-- Set `RenderOptions.color` from TTY detection (and off when `-O` is used).
+- Write stdout through `anstream` (auto-strips ANSI off-terminal); strip for `-O file`.
 - Wire `-f describe` to the new renderer.
 - No CLI flag changes otherwise; `--registry` semantics change as in §2.
 
@@ -379,6 +393,11 @@ environment:
 - **`thiserror` / miette in core / String errors** — rejected in favor of a typed enum
   with hand-written `Display` (no new dependency, structured data for describe/hammer).
 - **Hand-rolled CIDR parsing** — rejected in favor of `ipnet`.
+- **`describe` color via `console`, `owo-colors`, or a hand-rolled ANSI helper** —
+  rejected in favor of `anstyle` + `anstream`: already in the build via clap, and
+  `anstream` handles terminal detection and `NO_COLOR`.
+- **Shorthand `gcc:13+gdb:14,valgrind:3.22`** — rejected; the comma splits the item
+  inside YAML flow lists. `+` throughout instead.
 
 ---
 
@@ -389,12 +408,6 @@ environment:
   creates it, the OS recipe's `build.init` should.
 - **`network.transcribe` usage** — confirm nothing else in the recipes repo depends on the
   network hooks before removing them.
-- **`describe` color** — the `console` crate was removed from the workspace. Options:
-  re-add `console` (new dependency; needs approval), or `std::io::IsTerminal` in hammer
-  plus a tiny ANSI helper in core. Decide before PR 5.
-- **Toolchain selection shorthand** — whether `toolchains:` also accepts the `gcc:13`
-  string form (no addons) alongside the object form. Default in this plan: object form
-  only.
 - **FQDN enforcement backend** — standard NetworkPolicy matches CIDRs/ports only;
   `host:` entries need an FQDN-aware plugin (e.g. Cilium) or an egress proxy. Platform-side
   decision.
@@ -426,7 +439,8 @@ Branches follow `<type>/<slug>`; small Conventional Commits within each. Tests i
 2. Platform recipes: `entrypoint` → list; `ports: ["{port}"]`.
 3. Toolchain recipes: `addons` → grouped map; add `coexist: true` where versions install
    side-by-side.
-4. Example assignments: `toolchains` → object form; new `network` allow-entry shape.
+4. Example assignments: `toolchains` → shorthand or object form; new `network`
+   allow-entry shape.
 5. Bump the submodule in each pedagog PR below as it needs the new schema.
 
 ### PR 1 — `refactor/network-policy-schema`
@@ -459,14 +473,16 @@ Branches follow `<type>/<slug>`; small Conventional Commits within each. Tests i
 1. `ResolveError` enum + `Display` (including the conflict report); switch `resolve` /
    `resolve_base` to it.
 2. Artifact split (`os_artifact`, `platform_artifact`, `toolchain_layers`).
-3. `ToolchainRecipe.addons` grouped map + `coexist`; `ToolchainSelection`;
-   `LayerSource::Toolchain { tc, origins }`.
+3. `ToolchainRecipe.addons` grouped map + `coexist`; `ToolchainSelection` with the
+   shorthand + object-form deserializer; `LayerSource::Toolchain { tc, origins }`.
 4. Resolution rules 1–6 (§4).
 5. Store cross-reference pass: addon declarations, ArgHook tokens; `pkg.remove` optional.
 6. Corpus tests fail loudly when `recipes/` is missing unless
    `PEDAGOG_SKIP_RECIPE_CORPUS=1`; document in README/Justfile that tests need
    `git submodule update --init recipes`.
-7. Tests (fixture stores built in-test where possible): addon order; undeclared version;
+7. Tests (fixture stores built in-test where possible): shorthand parsing (parent only,
+   multiple addons, same addon twice, missing version, empty segment, bad id) and
+   shorthand ≡ object form; object form rejects unknown keys; addon order; undeclared version;
    addon missing for OS; exact dedupe across top-level + addon; conflict without
    `coexist` (assert `Display` contains origins, declared sets, overlap, missing coexist,
    help); conflict with all `coexist` installs both; non-empty overlap suggestion;
@@ -474,10 +490,11 @@ Branches follow `<type>/<slug>`; small Conventional Commits within each. Tests i
 
 ### PR 5 — `feat/describe-renderer`
 
-1. Resolve the color open question.
-2. Port `describe.rs`; add `RenderOptions.color`; wire `-f describe` in hammer.
+1. Add direct deps: `anstyle` (core), `anstream` (hammer).
+2. Port `describe.rs` with `anstyle` styling; wire `-f describe` in hammer, writing via
+   `anstream` and stripping for `-O`.
 3. Tests: `Base`, `Full` × `Standalone`/`PrebuiltBase`, addon origins shown, network
-   summary, color off produces no ANSI codes.
+   summary (assert on `strip_str` output so styling doesn't affect assertions).
 
 ### PR 6 — `docs/design-doc-v2`
 
