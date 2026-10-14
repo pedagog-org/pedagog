@@ -1,7 +1,7 @@
 # Design Doc v2 — Recipe Pipeline Follow-ups
 
 **Date:** 2026-10-13
-**Status:** Planned
+**Status:** Implemented
 **Builds on:** [2026-07-21-recipe-resolve-render-refactor](2026-07-21-recipe-resolve-render-refactor.md)
 
 ## Rationale
