@@ -1,0 +1,31 @@
+# Dev mode against the recipes mounted into the kind node (deploy/kind/cluster.yaml):
+# no auto-build at startup; the rebuild endpoint is the trigger. The image is
+# loaded into the node, never pulled.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pedagog-jobs
+  namespace: pedagog-builds
+spec:
+  template:
+    spec:
+      containers:
+        - name: jobs
+          imagePullPolicy: Never
+          env:
+            - name: PEDAGOG_ENV
+              value: dev
+            - name: PEDAGOG_RECIPES_DIR
+              value: /host/recipes
+            # node path handed to Kaniko pods as their /pedagog/recipes hostPath
+            - name: PEDAGOG_RECIPES_HOSTPATH
+              value: /srv/pedagog/recipes
+          volumeMounts:
+            - name: recipes-src
+              mountPath: /host/recipes
+              readOnly: true
+      volumes:
+        - name: recipes-src
+          hostPath:
+            path: /srv/pedagog/recipes
+            type: Directory

@@ -87,3 +87,38 @@ db-shell:
 db-prepare:
     cargo sqlx migrate run --source crates/store/migrations
     cargo sqlx prepare --workspace -- --all-features
+
+# ---- Local kind cluster (podman) for end-to-end tests -----------------------
+KIND := "KIND_EXPERIMENTAL_PROVIDER=podman kind"
+KIND_CTX := "kind-pedagog"
+
+# (Re)create the kind cluster with this checkout's recipes mounted into the node.
+# Deletes an existing `pedagog` kind cluster first. Needs a rootful podman machine.
+kind-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if {{KIND}} get clusters 2>/dev/null | grep -qx pedagog; then {{KIND}} delete cluster --name pedagog; fi
+    sed "s|@RECIPES@|{{justfile_directory()}}/recipes|" deploy/kind/cluster.yaml | {{KIND}} create cluster --config -
+
+# Delete the kind cluster.
+kind-down:
+    {{KIND}} delete cluster --name pedagog
+
+# Build the jobs image with podman and load it into the kind node.
+kind-load-jobs:
+    podman build -f crates/jobs/Containerfile -t localhost/pedagog/jobs:dev .
+    podman save --format docker-archive -o target/jobs-image.tar localhost/pedagog/jobs:dev
+    {{KIND}} load image-archive target/jobs-image.tar --name pedagog
+
+# Apply the kind overlay (full base, dev-mode jobs, local-path storage).
+kind-deploy:
+    kubectl --context {{KIND_CTX}} apply -k deploy/overlays/kind
+
+# Trigger an OS rebuild through the jobs endpoint (port-forwarded); e.g. `just kind-rebuild force=true`.
+kind-rebuild QUERY="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubectl --context {{KIND_CTX}} -n pedagog-builds port-forward svc/pedagog-jobs 18081:8080 >/dev/null &
+    trap 'kill $!' EXIT
+    sleep 2
+    curl -fsS -X POST "http://localhost:18081/internal/recipes/rebuild?{{QUERY}}"; echo

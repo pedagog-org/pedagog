@@ -47,6 +47,35 @@ just db-down     # stop it (keeps the named volume)
 CI compiles offline via the committed `.sqlx/` cache (`SQLX_OFFLINE=true`); only
 regenerating that cache needs a live DB.
 
+### Local cluster (kind)
+
+To exercise in-cluster builds without the Pi cluster, run the platform on a local
+[kind](https://kind.sigs.k8s.io/) cluster inside the podman machine. This is not k3s
+(different Kubernetes version and storage), so the real cluster still needs its own run.
+
+One-time setup (macOS):
+
+```sh
+brew install kind kubectl
+podman machine stop && podman machine set --rootful && podman machine start
+```
+
+Rootful mode switches podman to a separate container store; containers created before
+the switch are still reachable with `podman --connection podman-machine-default …`.
+
+```sh
+just kind-up           # (re)create the cluster, recipes/ mounted into the node
+just kind-load-jobs    # build the jobs image with podman, load it into the node
+just kind-deploy       # apply deploy/overlays/kind (local-path storage, dev-mode jobs)
+just kind-rebuild      # POST /internal/recipes/rebuild; `just kind-rebuild force=true`
+just kind-down         # delete the cluster
+```
+
+The kind overlay generates dev-only secrets (password `pedagog`) and runs `jobs` in dev
+mode: no build at startup, Kaniko reads the recipes mounted into the node, and
+`kind-rebuild` is the trigger. Results land in the in-cluster registry
+(`registry-service.pedagog-data.svc:5000`) and in the `os_builds` / `build_runs` tables.
+
 ---
 
 ## Pinned Versions
