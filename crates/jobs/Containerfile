@@ -7,7 +7,7 @@
 #
 # hammer is a build-time tool only; it is not in the runtime image.
 
-FROM docker.io/library/rust:1-bookworm AS build
+FROM docker.io/library/rust:1.97.1-bookworm AS build
 WORKDIR /src
 COPY . .
 ENV SQLX_OFFLINE=true
