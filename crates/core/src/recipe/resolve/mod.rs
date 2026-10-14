@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::num::NonZeroU16;
 
 use crate::recipe::assignment::AssignmentYaml;
 use crate::recipe::os::PkgArg;
@@ -7,7 +8,7 @@ use crate::recipe::render::{BuildPlan, ImageSpec, Layer, LayerSource, ResolvedSt
 use crate::recipe::store::RecipeStore;
 
 mod params;
-use params::{interpolate, resolve_params};
+use params::{interpolate, interpolate_args, resolve_params};
 
 const STUDENT_USER: &str = "student";
 
@@ -87,11 +88,16 @@ pub fn resolve(assignment: &AssignmentYaml, store: &RecipeStore) -> Result<Image
         steps: resolve_steps(&os.hooks.build.cleanup, pkg_install, &empty)?,
     };
 
-    let entrypoint = interpolate(&platform.hooks.entrypoint, &params)
+    let entrypoint = interpolate_args(&platform.hooks.entrypoint, &params)
         .map_err(|e| format!("entrypoint interpolation failed: {e}"))?;
+    let ports = interpolate_args(&platform.hooks.ports, &params)
+        .map_err(|e| format!("ports interpolation failed: {e}"))?
+        .iter()
+        .map(|p| parse_port(p))
+        .collect::<Result<Vec<_>, _>>()?;
     let runtime = Runtime {
         user: STUDENT_USER.to_owned(),
-        entrypoint: Command(entrypoint),
+        entrypoint,
     };
 
     Ok(ImageSpec::Full {
@@ -105,7 +111,7 @@ pub fn resolve(assignment: &AssignmentYaml, store: &RecipeStore) -> Result<Image
             os_cleanup,
         },
         runtime,
-        ports: platform.hooks.ports.clone(),
+        ports,
         network: env.network.clone(),
     })
 }
@@ -175,6 +181,12 @@ fn expand_arg_hook<A: Ord>(
     Ok(out)
 }
 
+fn parse_port(raw: &str) -> Result<u16, String> {
+    raw.parse::<NonZeroU16>()
+        .map(NonZeroU16::get)
+        .map_err(|_| format!("invalid port {raw:?}: expected a number from 1 to 65535"))
+}
+
 fn pkg_names(packages: &[PkgName]) -> ParamVal {
     ParamVal::List(
         packages
@@ -224,6 +236,19 @@ mod tests {
         let step: Step = serde_yaml::from_str("packages: [gcc-13, g++]\n").unwrap();
         let resolved = resolve_step(&step, &pkg, &HashMap::new()).unwrap();
         assert_eq!(resolved.commands[0].0, "install gcc-13 g++");
+    }
+
+    #[test]
+    fn parse_port_accepts_valid_range() {
+        assert_eq!(parse_port("8080").unwrap(), 8080);
+        assert_eq!(parse_port("65535").unwrap(), 65535);
+    }
+
+    #[test]
+    fn parse_port_rejects_zero_out_of_range_and_text() {
+        for bad in ["0", "65536", "-1", "http", ""] {
+            assert!(parse_port(bad).is_err(), "{bad:?} should be rejected");
+        }
     }
 
     // ---- Store-backed tests (real recipes submodule) ------------------------
