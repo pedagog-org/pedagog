@@ -1,7 +1,7 @@
 # Recipe Resolve/Render Refactor
 
 **Date:** 2026-07-21
-**Status:** Planned
+**Status:** Implemented (superseded in part by [design-doc-v2](2026-10-13-design-doc-v2.md))
 
 ## Rationale
 
