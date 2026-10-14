@@ -80,8 +80,12 @@ refused unless **each** of those versions allows it, in one of two ways:
   The instructor takes responsibility: if the recipes overwrite each other, the image is
   broken.
 
-Which coexisting version is the default on `PATH` is up to the recipes (e.g. via
-`update-alternatives`), not hammer.
+Which coexisting version is the default on `PATH` is up to the recipes, not hammer.
+The convention in the bundled recipes: install versioned binaries (`gcc-12`,
+`python3.11`) and register them with `update-alternatives` at a priority derived from
+the version, so the newest installed version is the default and the others stay
+available by name. See `examples/compiler-comparison.yaml` and
+`examples/python-versions.yaml` in the recipes repo.
 
 When versions conflict, hammer lists each version, where it was requested, the versions
 each parent allows and their overlap, and how to fix it:
