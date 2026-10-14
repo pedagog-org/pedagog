@@ -1,7 +1,7 @@
 # Plan: Jobs Service — In-Cluster Kaniko OS Base Builds
 
 **Date:** 2026-08-06
-**Status:** Pending review
+**Status:** Implemented (landed via [kaniko-revival](2026-10-14-kaniko-revival.md))
 **Supersedes:** the unmerged `2026-07-14-jobs-kaniko-os-builds.md` (never landed on `main`; not carried into the repo — recoverable from the git object store. See *What changed* below.)
 
 ---
