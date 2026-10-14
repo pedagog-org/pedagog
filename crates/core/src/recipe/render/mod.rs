@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use strum_macros::Display;
 
 use crate::recipe::network::NetworkSpec;
@@ -5,6 +7,7 @@ use crate::recipe::platform::PlatformKind;
 use crate::recipe::primitives::{command::Command, id::AssignmentId, OsId, ToolchainRef};
 
 pub mod containerfile;
+pub mod describe;
 
 #[derive(Debug, Clone)]
 pub struct Layer {
@@ -23,6 +26,30 @@ pub enum LayerSource {
     },
     Assignment(AssignmentId),
     OsCleanup(OsId),
+}
+
+impl LayerSource {
+    /// Human-readable layer name shared by every renderer.
+    fn label(&self) -> String {
+        match self {
+            LayerSource::Os(id) => format!("OS: {id}"),
+            LayerSource::Platform(kind) => format!("Platform: {kind}"),
+            LayerSource::Toolchain { tc, origins } => {
+                let addon_of: Vec<String> = origins
+                    .iter()
+                    .filter(|o| matches!(o, ToolchainOrigin::AddonOf(_)))
+                    .map(ToString::to_string)
+                    .collect();
+                if addon_of.is_empty() {
+                    format!("Toolchain: {tc}")
+                } else {
+                    format!("Toolchain: {tc} ({})", addon_of.join(", "))
+                }
+            }
+            LayerSource::Assignment(id) => format!("Assignment: {id}"),
+            LayerSource::OsCleanup(id) => format!("OS Cleanup: {id}"),
+        }
+    }
 }
 
 /// Why a toolchain is in the image: listed directly, or chosen as an addon of
@@ -113,6 +140,24 @@ pub enum FromSource {
 pub struct RenderOptions {
     pub registry: Option<String>,
     pub from: FromSource,
+}
+
+impl RenderOptions {
+    /// FROM image for a `Full` build. The registry prefix only applies to images
+    /// pedagog builds; upstream images are pulled as written.
+    fn full_from<'a>(&self, upstream: &'a str, base_image: &'a str) -> Cow<'a, str> {
+        match self.from {
+            FromSource::Standalone => Cow::Borrowed(upstream),
+            FromSource::PrebuiltBase => self.prefixed(base_image),
+        }
+    }
+
+    fn prefixed<'a>(&self, image: &'a str) -> Cow<'a, str> {
+        match &self.registry {
+            Some(reg) => format!("{reg}/{image}").into(),
+            None => image.into(),
+        }
+    }
 }
 
 pub trait Render: ToString {

@@ -102,6 +102,39 @@ impl TryFrom<RawAllowRule> for AllowRule {
     }
 }
 
+impl std::fmt::Display for EgressTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EgressTarget::Host(h) => h.fmt(f),
+            EgressTarget::Cidr(n) => n.fmt(f),
+        }
+    }
+}
+
+// e.g. "*.github.com:443", "mirror.internal:80,443", "10.0.0.0/8 (all ports)"
+impl std::fmt::Display for AllowRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.ports.is_empty() {
+            return write!(f, "{} (all ports)", self.target);
+        }
+        let ports: Vec<String> = self.ports.iter().map(ToString::to_string).collect();
+        write!(f, "{}:{}", self.target, ports.join(","))
+    }
+}
+
+impl std::fmt::Display for NetworkSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NetworkSpec::Allow => f.write_str("unrestricted"),
+            NetworkSpec::Deny { allow } if allow.is_empty() => f.write_str("deny all egress"),
+            NetworkSpec::Deny { allow } => {
+                let rules: Vec<String> = allow.iter().map(ToString::to_string).collect();
+                write!(f, "deny by default; allow {}", rules.join(", "))
+            }
+        }
+    }
+}
+
 /// RFC 1123 hostname, optionally prefixed with a single `*.` wildcard label.
 /// Stored lowercased.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,5 +276,17 @@ mod tests {
         let err = host("10.0.0.1").unwrap_err();
         assert!(err.contains("cidr"), "{err}");
         assert!(host("2001:db8::1").is_err());
+    }
+
+    #[test]
+    fn network_summary_display() {
+        assert_eq!(NetworkSpec::Allow.to_string(), "unrestricted");
+        assert_eq!(spec("mode: deny\n").unwrap().to_string(), "deny all egress");
+        let s = spec("mode: deny\nallow:\n  - host: '*.github.com'\n    ports: [80, 443]\n  - cidr: 10.0.0.0/8\n")
+            .unwrap();
+        assert_eq!(
+            s.to_string(),
+            "deny by default; allow *.github.com:80,443, 10.0.0.0/8 (all ports)"
+        );
     }
 }

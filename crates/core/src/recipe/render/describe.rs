@@ -1,207 +1,344 @@
-// use console::style;
+use anstyle::{AnsiColor, Style};
 
-// use crate::resolve::plan::{BasePlan, BuildPlan, Layer, LayerSource, ResolvedStep};
+use super::{BuildPhase, BuildPlan, FromSource, ImageSpec, Layer, LayerSource, Render, RenderOptions, Runtime};
+use crate::recipe::network::NetworkSpec;
+use crate::recipe::primitives::ToolchainRef;
 
-// pub struct Describe;
+/// Human-readable tree of what an image contains. Always styled with ANSI codes;
+/// callers strip them when the output isn't a terminal.
+pub struct Describe(String);
 
-// impl super::Render for Describe {
-//     fn render_build(&self, plan: &BuildPlan) -> String {
-//         render_build(plan)
-//     }
+impl std::fmt::Display for Describe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
-//     fn render_base(&self, plan: &BasePlan) -> String {
-//         render_base(plan)
-//     }
+const HEADER: Style = Style::new().bold();
+const LAYER: Style = AnsiColor::Cyan.on_default();
+const FROM: Style = AnsiColor::Green.on_default();
+const STEP: Style = Style::new().italic();
+const DIM: Style = Style::new().dimmed();
+const NOTE: Style = AnsiColor::Yellow.on_default();
 
-//     fn render_build_with_base(&self, base: &BasePlan, build: &BuildPlan) -> String {
-//         let mut merged_layers = base.layers.clone();
-//         merged_layers.extend(build.layers.iter().cloned());
-//         let merged = BuildPlan {
-//             id: build.id.clone(),
-//             name: build.name.clone(),
-//             base_image: base.upstream.clone(),
-//             layers: merged_layers,
-//             entrypoint: build.entrypoint.clone(),
-//         };
-//         render_build(&merged)
-//     }
-// }
+impl Render for Describe {
+    fn render(spec: &ImageSpec, opts: &RenderOptions) -> Self {
+        let root = match spec {
+            ImageSpec::Base { upstream, image, os } => {
+                let mut root = Node::new(paint(HEADER, &format!("Base image {}", opts.prefixed(image))));
+                root.push(Node::new(paint(FROM, &format!("FROM {upstream}"))));
+                root.push(layer_node(os));
+                root
+            }
+            ImageSpec::Full {
+                upstream,
+                base_image,
+                plan,
+                runtime,
+                ports,
+                network,
+            } => {
+                let mut root = Node::new(paint(HEADER, &plan.assignment.source.label()));
+                root.push(Node::new(paint(
+                    FROM,
+                    &format!("FROM {}", opts.full_from(upstream, base_image)),
+                )));
+                for (phase, layers) in phases(plan, opts.from) {
+                    if layers.iter().all(|l| l.steps.is_empty()) {
+                        continue;
+                    }
+                    let mut node = Node::new(paint(HEADER, &phase.to_string()));
+                    for layer in layers.iter().filter(|l| !l.steps.is_empty()) {
+                        node.push(layer_node(layer));
+                    }
+                    root.push(node);
+                }
+                root.push(runtime_node(runtime, ports, network));
+                if let Some(notes) = notes_node(plan) {
+                    root.push(notes);
+                }
+                root
+            }
+        };
+        Describe(render_tree(&root))
+    }
+}
 
-// pub fn render_build(plan: &BuildPlan) -> String {
-//     let label = format!(
-//         "{} {}",
-//         style(format!("[{}]", plan.id)).dim(),
-//         style(&plan.name).bold(),
-//     );
-//     let mut root = Node::new(label);
+fn phases(plan: &BuildPlan, from: FromSource) -> Vec<(BuildPhase, Vec<&Layer>)> {
+    let mut out = Vec::new();
+    // Under PrebuiltBase the os layer is already in the base image.
+    if matches!(from, FromSource::Standalone) {
+        out.push((BuildPhase::Base, vec![&plan.os]));
+    }
+    out.push((BuildPhase::Platform, vec![&plan.platform]));
+    out.push((BuildPhase::Toolchain, plan.toolchain.iter().collect()));
+    out.push((BuildPhase::Assignment, vec![&plan.assignment]));
+    out.push((BuildPhase::OsCleanup, vec![&plan.os_cleanup]));
+    out
+}
 
-//     root.push(Node::leaf(style(format!("FROM {}", plan.base_image)).green().to_string()));
+fn layer_node(layer: &Layer) -> Node {
+    let mut node = Node::new(paint(LAYER, &layer.source.label()));
+    for (n, step) in layer.steps.iter().enumerate() {
+        let label = match &step.name {
+            Some(name) => paint(STEP, name),
+            None => paint(DIM, &format!("Step {}", n + 1)),
+        };
+        node.push(Node::new(label));
+    }
+    node
+}
 
-//     let os_layers: Vec<_> = plan
-//         .layers
-//         .iter()
-//         .filter(|l| matches!(l.source, LayerSource::Os(_)))
-//         .collect();
-//     let build_layers: Vec<_> = plan
-//         .layers
-//         .iter()
-//         .filter(|l| !matches!(l.source, LayerSource::Os(_)))
-//         .collect();
+fn runtime_node(runtime: &Runtime, ports: &[u16], network: &NetworkSpec) -> Node {
+    let mut node = Node::new(paint(HEADER, "RUNTIME"));
+    node.push(field("user", &runtime.user));
+    node.push(field("entrypoint", &shell_words(&runtime.entrypoint)));
+    if !ports.is_empty() {
+        let ports: Vec<String> = ports.iter().map(ToString::to_string).collect();
+        node.push(field("ports", &ports.join(", ")));
+    }
+    node.push(field("network", &network.to_string()));
+    node
+}
 
+/// Calls out toolchains installed at more than one version.
+fn notes_node(plan: &BuildPlan) -> Option<Node> {
+    let refs: Vec<&ToolchainRef> = plan
+        .toolchain
+        .iter()
+        .filter_map(|l| match &l.source {
+            LayerSource::Toolchain { tc, .. } => Some(tc),
+            _ => None,
+        })
+        .collect();
+    let mut notes = Vec::new();
+    for (i, tc) in refs.iter().enumerate() {
+        if refs[..i].iter().any(|t| t.id == tc.id) {
+            continue;
+        }
+        let versions: Vec<String> = refs
+            .iter()
+            .filter(|t| t.id == tc.id)
+            .map(|t| t.version.to_string())
+            .collect();
+        if versions.len() > 1 {
+            notes.push(format!("{} is installed at versions {}", tc.id, versions.join(", ")));
+        }
+    }
+    if notes.is_empty() {
+        return None;
+    }
+    let mut node = Node::new(paint(HEADER, "NOTES"));
+    for note in notes {
+        node.push(Node::new(paint(NOTE, &note)));
+    }
+    Some(node)
+}
 
-//     if !os_layers.is_empty() {
-//         let mut base_node = Node::new(style("Base").bold().to_string());
-//         for layer in os_layers {
-//             base_node.push(layer_node(layer));
-//         }
-//         root.push(base_node);
-//     }
+fn field(name: &str, value: &str) -> Node {
+    Node::new(format!("{} {value}", paint(DIM, &format!("{name}:"))))
+}
 
-//     if !build_layers.is_empty() {
-//         let mut build_node = Node::new(style("Build").bold().to_string());
-//         for layer in build_layers {
-//             build_node.push(layer_node(layer));
-//         }
-//         root.push(build_node);
-//     }
+/// Joins argv for display, quoting items that contain whitespace.
+fn shell_words(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| {
+            if a.chars().any(char::is_whitespace) {
+                format!("{a:?}")
+            } else {
+                a.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
-//     let mut runtime = Node::new(style("Runtime").bold().to_string());
-//     let platform_kind = plan.layers.iter().find_map(|l| match &l.source {
-//         LayerSource::Platform(k) => Some(k),
-//         _ => None,
-//     });
-//     if let Some(kind) = platform_kind {
-//         let mut platform_node = Node::new(style(format!("Platform: {kind}")).cyan().to_string());
-//         platform_node.push(entrypoint_node(&plan.entrypoint));
-//         runtime.push(platform_node);
-//     } else {
-//         runtime.push(entrypoint_node(&plan.entrypoint));
-//     }
-//     root.push(runtime);
+fn paint(style: Style, text: &str) -> String {
+    format!("{style}{text}{style:#}")
+}
 
-//     format!("{}\n", render_tree(&root))
-// }
+// ---- Tree renderer -----------------------------------------------------------
 
-// pub fn render_base(plan: &BasePlan) -> String {
-//     let mut root = Node::new(style(format!("Base Image: {}", plan.os_id)).bold().to_string());
-//     root.push(Node::leaf(
-//         style(format!("FROM {} → {}", plan.upstream, plan.image))
-//             .green()
-//             .to_string(),
-//     ));
-//     for layer in &plan.layers {
-//         root.push(layer_node(layer));
-//     }
-//     format!("{}\n", render_tree(&root))
-// }
+struct Node {
+    label: String,
+    children: Vec<Node>,
+}
 
-// fn layer_node(layer: &Layer) -> Node {
-//     let mut node = Node::new(style(layer_header(&layer.source)).cyan().to_string());
-//     for (n, step) in layer.steps.iter().enumerate() {
-//         node.push(step_node(step, n));
-//     }
-//     node
-// }
+impl Node {
+    fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            children: vec![],
+        }
+    }
 
-// fn step_node(step: &ResolvedStep, n: usize) -> Node {
-//     let step_name = step
-//         .name
-//         .as_deref()
-//         .map(|s| style(s).italic().to_string())
-//         .unwrap_or_else(|| style(format!("Step {}", n + 1)).dim().to_string());
+    fn push(&mut self, child: Node) {
+        self.children.push(child);
+    }
+}
 
-//     let width = line_num_width(step.commands.len());
-//     // Continuation lines within a command are padded to align with command content.
-//     let cont_pad = " ".repeat(width + 2);
+fn render_tree(root: &Node) -> String {
+    let mut buf = String::new();
+    buf.push_str(&root.label);
+    buf.push('\n');
+    write_children(&mut buf, &root.children, "");
+    buf
+}
 
-//     let mut lines: Vec<String> = vec![step_name];
-//     for (i, cmd) in step.commands.iter().enumerate() {
-//         let num = format!("{:>width$}", i + 1);
-//         let mut cmd_lines = cmd.0.lines();
-//         if let Some(first) = cmd_lines.next() {
-//             lines.push(style(format!("{num}  {first}")).dim().to_string());
-//             for cont in cmd_lines {
-//                 lines.push(style(format!("{cont_pad}{cont}")).dim().to_string());
-//             }
-//         }
-//     }
+fn write_children(buf: &mut String, children: &[Node], prefix: &str) {
+    for (i, child) in children.iter().enumerate() {
+        let last = i + 1 == children.len();
+        let (connector, cont) = if last { ("└── ", "    ") } else { ("├── ", "│   ") };
+        buf.push_str(&format!("{prefix}{connector}{}\n", child.label));
+        write_children(buf, &child.children, &format!("{prefix}{cont}"));
+    }
+}
 
-//     Node::leaf(lines.join("\n"))
-// }
+#[cfg(test)]
+mod tests {
+    use regex::Regex;
 
-// fn entrypoint_node(cmd: &str) -> Node {
-//     let mut lines: Vec<String> = vec![style("Entrypoint").italic().to_string()];
-//     for (i, line) in cmd.lines().enumerate() {
-//         let num = format!("{:>1}", i + 1);
-//         lines.push(style(format!("{num}  {line}")).dim().to_string());
-//     }
-//     Node::leaf(lines.join("\n"))
-// }
+    use super::*;
+    use crate::recipe::platform::PlatformKind;
+    use crate::recipe::primitives::{Command, Id};
+    use crate::recipe::render::{ResolvedStep, ToolchainOrigin};
 
-// // ── Custom tree renderer ───────────────────────────────────────────────────
+    fn plain(d: Describe) -> String {
+        Regex::new("\x1b\\[[0-9;]*m").unwrap().replace_all(&d.to_string(), "").into_owned()
+    }
 
-// struct Node {
-//     label: String,
-//     children: Vec<Node>,
-// }
+    fn id(s: &str) -> Id {
+        Id::try_from(s.to_owned()).unwrap()
+    }
 
-// impl Node {
-//     fn new(label: impl Into<String>) -> Self {
-//         Self { label: label.into(), children: vec![] }
-//     }
+    fn tc(s: &str) -> ToolchainRef {
+        ToolchainRef::try_from(s.to_owned()).unwrap()
+    }
 
-//     fn leaf(label: impl Into<String>) -> Self {
-//         Self::new(label)
-//     }
+    fn layer(source: LayerSource, steps: &[Option<&str>]) -> Layer {
+        Layer {
+            source,
+            steps: steps
+                .iter()
+                .map(|n| ResolvedStep {
+                    name: n.map(str::to_owned),
+                    commands: vec![Command("true".to_owned())],
+                })
+                .collect(),
+        }
+    }
 
-//     fn push(&mut self, child: Node) -> &mut Self {
-//         self.children.push(child);
-//         self
-//     }
-// }
+    fn toolchain(r: &str, origins: Vec<ToolchainOrigin>) -> Layer {
+        layer(LayerSource::Toolchain { tc: tc(r), origins }, &[Some("Install")])
+    }
 
-// fn render_tree(root: &Node) -> String {
-//     let mut buf = String::new();
-//     write_label(&mut buf, &root.label, "", "");
-//     write_children(&mut buf, &root.children, "");
-//     buf
-// }
+    fn full(toolchain: Vec<Layer>, network: NetworkSpec) -> ImageSpec {
+        ImageSpec::Full {
+            upstream: "ubuntu:22.04".to_owned(),
+            base_image: "pedagog/ubuntu:22".to_owned(),
+            plan: BuildPlan {
+                os: layer(LayerSource::Os(id("ubuntu-22")), &[Some("init")]),
+                platform: layer(LayerSource::Platform(PlatformKind::Interactive), &[Some("Install code-server"), None]),
+                toolchain,
+                assignment: layer(LayerSource::Assignment(id("hw1")), &[]),
+                os_cleanup: layer(LayerSource::OsCleanup(id("ubuntu-22")), &[Some("clean")]),
+            },
+            runtime: Runtime {
+                user: "student".to_owned(),
+                entrypoint: vec!["code-server".to_owned(), "/home/student/my work".to_owned()],
+            },
+            ports: vec![8080],
+            network,
+        }
+    }
 
-// fn write_children(buf: &mut String, children: &[Node], prefix: &str) {
-//     for (i, child) in children.iter().enumerate() {
-//         let last = i == children.len() - 1;
-//         let connector = if last { "└── " } else { "├── " };
-//         let cont = if last { "    " } else { "│   " };
-//         let child_prefix = format!("{prefix}{cont}");
-//         write_label(buf, &child.label, &format!("{prefix}{connector}"), &child_prefix);
-//         write_children(buf, &child.children, &child_prefix);
-//     }
-// }
+    fn opts(registry: Option<&str>, from: FromSource) -> RenderOptions {
+        RenderOptions {
+            registry: registry.map(str::to_owned),
+            from,
+        }
+    }
 
-// fn write_label(buf: &mut String, label: &str, first_prefix: &str, cont_prefix: &str) {
-//     let mut iter = label.lines().peekable();
-//     match iter.next() {
-//         None => buf.push_str(&format!("{first_prefix}\n")),
-//         Some(first) => {
-//             buf.push_str(&format!("{first_prefix}{first}\n"));
-//             for line in iter {
-//                 buf.push_str(&format!("{cont_prefix}{line}\n"));
-//             }
-//         }
-//     }
-// }
+    #[test]
+    fn full_prebuilt_tree() {
+        let spec = full(
+            vec![
+                toolchain("gcc:13", vec![ToolchainOrigin::TopLevel]),
+                toolchain("gdb:14", vec![ToolchainOrigin::AddonOf(tc("gcc:13"))]),
+            ],
+            NetworkSpec::Allow,
+        );
+        let out = plain(Describe::render(&spec, &opts(Some("localhost"), FromSource::PrebuiltBase)));
+        assert_eq!(
+            out,
+            "\
+Assignment: hw1
+├── FROM localhost/pedagog/ubuntu:22
+├── PLATFORM
+│   └── Platform: interactive
+│       ├── Install code-server
+│       └── Step 2
+├── TOOLCHAIN
+│   ├── Toolchain: gcc:13
+│   │   └── Install
+│   └── Toolchain: gdb:14 (addon of gcc:13)
+│       └── Install
+├── OS CLEANUP
+│   └── OS Cleanup: ubuntu-22
+│       └── clean
+└── RUNTIME
+    ├── user: student
+    ├── entrypoint: code-server \"/home/student/my work\"
+    ├── ports: 8080
+    └── network: unrestricted
+"
+        );
+    }
 
-// // ── Helpers ────────────────────────────────────────────────────────────────
+    #[test]
+    fn full_standalone_includes_base_phase_from_upstream() {
+        let out = plain(Describe::render(
+            &full(vec![], NetworkSpec::Allow),
+            &opts(Some("localhost"), FromSource::Standalone),
+        ));
+        assert!(out.contains("├── FROM ubuntu:22.04\n"), "{out}");
+        assert!(out.contains("├── BASE\n│   └── OS: ubuntu-22\n"), "{out}");
+    }
 
-// fn line_num_width(n: usize) -> usize {
-//     if n < 10 { 1 } else if n < 100 { 2 } else { 3 }
-// }
+    #[test]
+    fn base_shows_upstream_and_produced_tag() {
+        let spec = ImageSpec::Base {
+            upstream: "ubuntu:22.04".to_owned(),
+            image: "pedagog/ubuntu:22".to_owned(),
+            os: layer(LayerSource::Os(id("ubuntu-22")), &[Some("init")]),
+        };
+        let out = plain(Describe::render(&spec, &opts(Some("localhost"), FromSource::Standalone)));
+        assert_eq!(
+            out,
+            "Base image localhost/pedagog/ubuntu:22\n├── FROM ubuntu:22.04\n└── OS: ubuntu-22\n    └── init\n"
+        );
+    }
 
-// fn layer_header(source: &LayerSource) -> String {
-//     match source {
-//         LayerSource::Os(id) => format!("OS: {id}"),
-//         LayerSource::Platform(kind) => format!("Platform: {kind}"),
-//         LayerSource::Toolchain(v) => format!("Toolchain: {v}"),
-//         LayerSource::BuildCleanup => "Build: cleanup".into(),
-//     }
-// }
+    #[test]
+    fn network_policy_and_multi_version_notes_are_shown() {
+        let network: NetworkSpec =
+            serde_yaml::from_str("mode: deny\nallow:\n  - cidr: 10.0.0.0/8\n").unwrap();
+        let spec = full(
+            vec![
+                toolchain("gdb:15", vec![ToolchainOrigin::TopLevel]),
+                toolchain("gdb:13", vec![ToolchainOrigin::TopLevel]),
+            ],
+            network,
+        );
+        let out = plain(Describe::render(&spec, &opts(None, FromSource::PrebuiltBase)));
+        assert!(out.contains("network: deny by default; allow 10.0.0.0/8 (all ports)"), "{out}");
+        assert!(out.ends_with("└── NOTES\n    └── gdb is installed at versions 15, 13\n"), "{out}");
+    }
+
+    #[test]
+    fn output_is_styled() {
+        let out = Describe::render(&full(vec![], NetworkSpec::Allow), &opts(None, FromSource::PrebuiltBase))
+            .to_string();
+        assert!(out.contains('\x1b'), "expected ANSI styling");
+    }
+}
