@@ -2,7 +2,7 @@ mod cli;
 mod vend;
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use miette::{GraphicalReportHandler, MietteDiagnostic, Report, Result, Severity, miette};
@@ -12,7 +12,7 @@ use pedagog_core::recipe::assignment::AssignmentYaml;
 use pedagog_core::recipe::primitives::Id;
 use pedagog_core::recipe::render::containerfile::Containerfile;
 use pedagog_core::recipe::render::describe::Describe;
-use pedagog_core::recipe::render::{FromSource, Render, RenderOptions};
+use pedagog_core::recipe::render::{AssignmentFiles, FromSource, Render, RenderOptions};
 use pedagog_core::recipe::resolve::{ResolveError, resolve, resolve_base};
 use pedagog_core::recipe::store::RecipeStore;
 
@@ -61,7 +61,9 @@ fn run_plan(args: PlanArgs) -> Result<()> {
                 .map_err(|e| miette!("cannot read {}: {}", path.display(), e))?;
             let assignment: AssignmentYaml =
                 serde_yaml::from_str(&src).map_err(|e| miette!("{}", e))?;
-            resolve(&assignment, &store).map_err(resolve_report)?
+            resolve(&assignment, &store)
+                .map_err(resolve_report)?
+                .with_files(detect_files(&path))
         }
         (None, Some(os_str)) => {
             let os_id = Id::try_from(os_str.clone()).map_err(|e| miette!("{}", e))?;
@@ -102,6 +104,17 @@ fn run_plan(args: PlanArgs) -> Result<()> {
             .map_err(|e| miette!("write error: {}", e))?,
     }
     Ok(())
+}
+
+/// Archive directories next to `assignment.yml` (the build context) become the
+/// ASSIGNMENT FILES phase.
+fn detect_files(assignment: &Path) -> AssignmentFiles {
+    let dir = assignment.parent().unwrap_or(Path::new("."));
+    AssignmentFiles {
+        starter: dir.join("starter").is_dir(),
+        tests: dir.join("tests").is_dir(),
+        solution: dir.join("solution").is_dir(),
+    }
 }
 
 fn resolve_report(err: ResolveError) -> Report {
@@ -177,4 +190,26 @@ fn emit_warning(message: &str, help: &str, quiet: bool) {
     let _ = handler.render_report(&mut buf, report.as_ref());
     // Trailing newline separates consecutive warnings or a warning from an error.
     eprintln!("{buf}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_archive_dirs_next_to_the_assignment() {
+        let dir = std::env::temp_dir().join(format!("hammer-files-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::fs::create_dir_all(dir.join("starter")).unwrap();
+        let files = detect_files(&dir.join("assignment.yml"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            files,
+            AssignmentFiles {
+                starter: true,
+                tests: true,
+                solution: false
+            }
+        );
+    }
 }
