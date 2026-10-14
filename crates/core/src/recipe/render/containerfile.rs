@@ -421,4 +421,31 @@ mod tests {
     fn no_files_means_no_phase() {
         assert!(!render_with(AssignmentFiles::default()).contains("ASSIGNMENT FILES"));
     }
+
+    fn assignment(extra: &str) -> crate::recipe::assignment::AssignmentYaml {
+        serde_yaml::from_str(&format!(
+            "id: t\nname: T\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: interactive\n{extra}"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn testing_requires_tests_but_starter_and_solution_are_optional() {
+        let with_testing =
+            assignment("testing:\n  framework: pytest:1\nfiles:\n  tests: grading\n");
+        let none = AssignmentFiles::default();
+        assert_eq!(
+            none.problems(&with_testing),
+            ["testing.framework is pytest:1 but the archive has no grading/ directory"]
+        );
+        let tests_only = AssignmentFiles {
+            tests: Some("grading".into()),
+            ..Default::default()
+        };
+        assert!(tests_only.problems(&with_testing).is_empty());
+        assert!(
+            none.problems(&assignment("")).is_empty(),
+            "no testing, nothing required"
+        );
+    }
 }

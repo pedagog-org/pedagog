@@ -61,9 +61,13 @@ fn run_plan(args: PlanArgs) -> Result<()> {
                 .map_err(|e| miette!("cannot read {}: {}", path.display(), e))?;
             let assignment: AssignmentYaml =
                 serde_yaml::from_str(&src).map_err(|e| miette!("{}", e))?;
+            let files = detect_files(&path, &assignment.files)?;
+            if let Some(problem) = files.problems(&assignment).into_iter().next() {
+                return Err(miette!("{problem}"));
+            }
             resolve(&assignment, &store)
                 .map_err(resolve_report)?
-                .with_files(detect_files(&path, &assignment.files)?)
+                .with_files(files)
         }
         (None, Some(os_str)) => {
             let os_id = Id::try_from(os_str.clone()).map_err(|e| miette!("{}", e))?;

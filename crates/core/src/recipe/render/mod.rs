@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use strum_macros::Display;
 
-use crate::recipe::assignment::Testing;
+use crate::recipe::assignment::{AssignmentYaml, Testing};
 use crate::recipe::network::NetworkSpec;
 use crate::recipe::platform::PlatformKind;
 use crate::recipe::primitives::{OsId, ToolchainRef, command::Command, id::AssignmentId};
@@ -108,6 +108,22 @@ pub struct AssignmentFiles {
 impl AssignmentFiles {
     pub fn is_empty(&self) -> bool {
         self.starter.is_none() && self.tests.is_none() && self.solution.is_none()
+    }
+
+    /// What the assignment requires of the archive: tests whenever `testing:`
+    /// is set. Starter and solution are optional (no solution ⇒ validation is
+    /// skipped, not failed).
+    pub fn problems(&self, assignment: &AssignmentYaml) -> Vec<String> {
+        let mut problems = Vec::new();
+        if let Some(testing) = &assignment.testing
+            && self.tests.is_none()
+        {
+            problems.push(format!(
+                "testing.framework is {} but the archive has no {}/ directory",
+                testing.framework, assignment.files.tests
+            ));
+        }
+        problems
     }
 }
 
