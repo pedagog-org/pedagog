@@ -167,7 +167,7 @@ fn layer_env(source: &LayerSource) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recipe::assignment::NetworkSpec;
+    use crate::recipe::network::NetworkSpec;
     use crate::recipe::platform::PlatformKind;
     use crate::recipe::primitives::{Command, Id};
 

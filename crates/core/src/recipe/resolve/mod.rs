@@ -189,7 +189,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::recipe::assignment::NetworkSpec;
+    use crate::recipe::network::NetworkSpec;
 
     fn arg_hook(yaml: &str) -> ArgHook<PkgArg> {
         serde_yaml::from_str(yaml).unwrap()
@@ -249,7 +249,7 @@ mod tests {
     fn resolve_carries_network_policy_through() {
         let Some(store) = load_store() else { return };
         let spec = resolve(
-            &assignment("  network:\n    mode: deny\n    allow: [\"10.0.0.0/8\"]\n"),
+            &assignment("  network:\n    mode: deny\n    allow:\n      - cidr: 10.0.0.0/8\n"),
             &store,
         )
         .unwrap();
