@@ -5,14 +5,15 @@
 use std::collections::HashMap;
 use std::num::NonZeroU16;
 
-use crate::recipe::assignment::{AssignmentYaml, ToolchainPick, ToolchainSelection};
+use crate::recipe::assignment::{AssignmentYaml, Testing, ToolchainPick, ToolchainSelection};
 use crate::recipe::os::PkgArg;
 use crate::recipe::platform::PlatformSpec;
 use crate::recipe::primitives::{
     ArgHook, Command, OsId, ParamVal, PkgName, Step, ToolchainId, ToolchainRef,
 };
 use crate::recipe::render::{
-    BuildPlan, ImageSpec, Layer, LayerSource, ResolvedStep, Runtime, ToolchainOrigin,
+    AssignmentFiles, BuildPlan, ImageSpec, Layer, LayerSource, ResolvedStep, Runtime,
+    ToolchainOrigin,
 };
 use crate::recipe::store::RecipeStore;
 use crate::recipe::toolchain::ToolchainRecipe;
@@ -44,7 +45,7 @@ pub fn resolve(
     let env = &assignment.environment;
     let os = os_artifact(&env.os, store)?;
     let platform = platform_artifact(&env.platform, &os, store)?;
-    let toolchain = toolchain_layers(&env.toolchains, &os, store)?;
+    let toolchain = toolchain_layers(&env.toolchains, assignment.testing.as_ref(), &os, store)?;
     let assignment_layer = Layer {
         source: LayerSource::Assignment(assignment.id.clone()),
         steps: resolve_steps(&env.steps, os.pkg_install, &Params::new())?,
@@ -66,6 +67,8 @@ pub fn resolve(
         },
         ports: platform.ports,
         network: env.network.clone(),
+        testing: assignment.testing.clone(),
+        files: AssignmentFiles::default(),
     })
 }
 
@@ -141,10 +144,11 @@ fn platform_artifact(
 
 fn toolchain_layers(
     selections: &[ToolchainSelection],
+    testing: Option<&Testing>,
     os: &OsArtifact,
     store: &RecipeStore,
 ) -> Result<Vec<Layer>, ResolveError> {
-    let picked = pick_toolchains(selections, os.id, store)?;
+    let picked = pick_toolchains(selections, testing, os.id, store)?;
     check_versions(&picked)?;
     picked
         .into_iter()
@@ -172,9 +176,15 @@ struct Picked<'a> {
 /// addons), merging exact id+version repeats into the first occurrence.
 fn pick_toolchains<'a>(
     selections: &[ToolchainSelection],
+    testing: Option<&Testing>,
     os: &OsId,
     store: &'a RecipeStore,
 ) -> Result<Vec<Picked<'a>>, ResolveError> {
+    let helper = testing
+        .map(|t| t.helper().map(|tc| (t, tc)))
+        .transpose()
+        .map_err(|message| interp_error("testing.framework", message))?;
+    let mut helper_placed = false;
     let mut picked: Vec<Picked> = Vec::new();
     for sel in selections {
         let parent_ref = sel.parent.tc.clone();
@@ -194,8 +204,47 @@ fn pick_toolchains<'a>(
             let recipe = find_toolchain(addon, origin.clone(), os, store)?;
             add_picked(&mut picked, pick, recipe, origin);
         }
+        // The framework's helper rides along with the first toolchain that
+        // declares it compatible, right after that toolchain's own addons.
+        if let Some((_, helper)) = &helper
+            && !helper_placed
+            && offers(parent, helper)
+        {
+            let origin = ToolchainOrigin::AddonOf(parent_ref.clone());
+            let recipe = find_toolchain(helper, origin.clone(), os, store)?;
+            let pick = ToolchainPick {
+                tc: helper.clone(),
+                allow_coexist: false,
+            };
+            add_picked(&mut picked, &pick, recipe, origin);
+            helper_placed = true;
+        }
+    }
+    if let Some((testing, helper)) = helper
+        && !helper_placed
+    {
+        let offered_by = picked
+            .iter()
+            .filter(|p| p.origins.contains(&ToolchainOrigin::TopLevel))
+            .filter_map(|p| {
+                let versions = p.recipe.addons.get(&helper.id)?;
+                Some((p.tc.clone(), versions.clone()))
+            })
+            .collect();
+        return Err(ResolveError::FrameworkUnavailable {
+            framework: testing.framework.clone(),
+            helper,
+            offered_by,
+        });
     }
     Ok(picked)
+}
+
+fn offers(recipe: &ToolchainRecipe, addon: &ToolchainRef) -> bool {
+    recipe
+        .addons
+        .get(&addon.id)
+        .is_some_and(|versions| versions.contains(&addon.version))
 }
 
 fn find_toolchain<'a>(
@@ -645,6 +694,94 @@ mod tests {
         assert_eq!(
             layer_refs(&layers),
             ["gcc:13", "gdb:15", "clang:17", "gdb:13"]
+        );
+    }
+
+    // ---- Testing framework helper placement --------------------------------
+
+    /// python:3.12 offers pedagog-pytest 1 and numpy 1; python:3.11 offers
+    /// pedagog-pytest 2. Both pythons coexist.
+    fn framework_store() -> RecipeStore {
+        let tcs = [
+            fix_tc(
+                "python",
+                "3.12",
+                "os-a",
+                "coexist: true\naddons:\n  pedagog-pytest: [\"1\"]\n  numpy: [\"1\"]\n",
+            ),
+            fix_tc(
+                "python",
+                "3.11",
+                "os-a",
+                "coexist: true\naddons:\n  pedagog-pytest: [\"2\"]\n",
+            ),
+            fix_tc("numpy", "1", "os-a", ""),
+            fix_tc("pedagog-pytest", "1", "os-a", ""),
+            fix_tc("pedagog-pytest", "2", "os-a", ""),
+        ];
+        let mut files: Vec<(&str, &str)> = vec![
+            ("os/a.yaml", FIX_OS),
+            ("platforms/interactive.yaml", FIX_PLATFORM),
+        ];
+        files.extend(tcs.iter().map(|(p, s)| (p.as_str(), s.as_str())));
+        crate::recipe::store::fixture_store(&files).unwrap()
+    }
+
+    fn resolve_with_testing(toolchains: &str, framework: &str) -> Result<Vec<Layer>, ResolveError> {
+        let yaml = format!(
+            "id: t\nname: T\nenvironment:\n  os: os-a\n  platform:\n    kind: interactive\n  toolchains: {toolchains}\ntesting:\n  framework: {framework}\n"
+        );
+        let a: AssignmentYaml = serde_yaml::from_str(&yaml).unwrap();
+        match resolve(&a, &framework_store())? {
+            ImageSpec::Full { plan, .. } => Ok(plan.toolchain),
+            ImageSpec::Base { .. } => panic!("expected Full"),
+        }
+    }
+
+    #[test]
+    fn framework_helper_follows_its_toolchain_and_explicit_addons() {
+        let layers = resolve_with_testing("[python:3.12+numpy:1]", "pytest:1").unwrap();
+        assert_eq!(
+            layer_refs(&layers),
+            ["python:3.12", "numpy:1", "pedagog-pytest:1"]
+        );
+        assert_eq!(origins(&layers[2]), ["addon of python:3.12"]);
+    }
+
+    #[test]
+    fn framework_helper_goes_with_the_first_toolchain_offering_its_version() {
+        let layers = resolve_with_testing("[python:3.11, python:3.12]", "pytest:1").unwrap();
+        assert_eq!(
+            layer_refs(&layers),
+            ["python:3.11", "python:3.12", "pedagog-pytest:1"]
+        );
+    }
+
+    #[test]
+    fn explicitly_listed_helper_is_not_duplicated() {
+        let layers = resolve_with_testing("[python:3.12+pedagog-pytest:1]", "pytest:1").unwrap();
+        assert_eq!(layer_refs(&layers), ["python:3.12", "pedagog-pytest:1"]);
+    }
+
+    #[test]
+    fn unavailable_framework_names_what_is_offered() {
+        let err = resolve_with_testing("[python:3.12]", "pytest:2").unwrap_err();
+        assert!(
+            matches!(err, ResolveError::FrameworkUnavailable { .. }),
+            "{err}"
+        );
+        assert_eq!(
+            err.to_string(),
+            "testing framework pytest:2 needs pedagog-pytest:2, which none of the selected toolchains declares compatible\n  python:3.12 offers pedagog-pytest 1"
+        );
+    }
+
+    #[test]
+    fn framework_without_any_matching_toolchain_errors() {
+        let err = resolve_with_testing("[numpy:1]", "pytest:1").unwrap_err();
+        assert!(
+            matches!(err, ResolveError::FrameworkUnavailable { ref offered_by, .. } if offered_by.is_empty()),
+            "{err}"
         );
     }
 

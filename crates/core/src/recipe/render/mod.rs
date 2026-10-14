@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use strum_macros::Display;
 
+use crate::recipe::assignment::{AssignmentYaml, Testing};
 use crate::recipe::network::NetworkSpec;
 use crate::recipe::platform::PlatformKind;
 use crate::recipe::primitives::{OsId, ToolchainRef, command::Command, id::AssignmentId};
@@ -87,7 +88,50 @@ pub enum BuildPhase {
     Assignment,
     #[strum(serialize = "OS CLEANUP")]
     OsCleanup,
+    #[strum(serialize = "ASSIGNMENT FILES")]
+    AssignmentFiles,
 }
+
+/// The archive directories baked into the image, by source path inside the
+/// build context (the unpacked archive). `None` means not present / not baked;
+/// all `None` for environment-only renders.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AssignmentFiles {
+    /// → `/pedagog/starter` (root, read-only)
+    pub starter: Option<String>,
+    /// → `/pedagog/tests` (grader only)
+    pub tests: Option<String>,
+    /// → `/pedagog/solution` (grader only)
+    pub solution: Option<String>,
+}
+
+impl AssignmentFiles {
+    pub fn is_empty(&self) -> bool {
+        self.starter.is_none() && self.tests.is_none() && self.solution.is_none()
+    }
+
+    /// What the assignment requires of the archive: tests whenever `testing:`
+    /// is set. Starter and solution are optional (no solution ⇒ validation is
+    /// skipped, not failed).
+    pub fn problems(&self, assignment: &AssignmentYaml) -> Vec<String> {
+        let mut problems = Vec::new();
+        if let Some(testing) = &assignment.testing
+            && self.tests.is_none()
+        {
+            problems.push(format!(
+                "testing.framework is {} but the archive has no {}/ directory",
+                testing.framework, assignment.files.tests
+            ));
+        }
+        problems
+    }
+}
+
+pub const STARTER_DIR: &str = "/pedagog/starter";
+pub const TESTS_DIR: &str = "/pedagog/tests";
+pub const SOLUTION_DIR: &str = "/pedagog/solution";
+/// Owns the baked tests and solution; see the OS init contract.
+pub const GRADER_USER: &str = "grader";
 
 /// Runtime metadata for the final image: the user the entrypoint runs as and the
 /// entrypoint command.
@@ -125,6 +169,8 @@ pub enum ImageSpec {
         ports: Vec<u16>,
         /// Egress policy for the platform to enforce; does not affect the image.
         network: NetworkSpec,
+        testing: Option<Testing>,
+        files: AssignmentFiles,
     },
 }
 
@@ -140,6 +186,16 @@ pub enum FromSource {
 pub struct RenderOptions {
     pub registry: Option<String>,
     pub from: FromSource,
+}
+
+impl ImageSpec {
+    /// Sets which archive directories to bake in; no-op for base images.
+    pub fn with_files(mut self, baked: AssignmentFiles) -> Self {
+        if let ImageSpec::Full { files, .. } = &mut self {
+            *files = baked;
+        }
+        self
+    }
 }
 
 impl RenderOptions {

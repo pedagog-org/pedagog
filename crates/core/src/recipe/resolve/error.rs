@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::recipe::platform::PlatformKind;
-use crate::recipe::primitives::{OsId, ToolchainId, ToolchainRef, Version};
+use crate::recipe::primitives::{OsId, ToolchainId, ToolchainRef, Version, Versioned};
 use crate::recipe::render::ToolchainOrigin;
 
 #[derive(Debug)]
@@ -24,6 +24,13 @@ pub enum ResolveError {
     VersionConflict {
         id: ToolchainId,
         entries: Vec<ConflictEntry>,
+    },
+    /// No selected toolchain declares the framework's helper version compatible.
+    FrameworkUnavailable {
+        framework: Versioned,
+        helper: ToolchainRef,
+        /// Selected toolchains offering other versions of the helper.
+        offered_by: Vec<(ToolchainRef, Vec<Version>)>,
     },
     InvalidParams(String),
     Interpolation {
@@ -89,6 +96,20 @@ impl fmt::Display for ResolveError {
                 }
             }
             ResolveError::VersionConflict { id, entries } => write_conflict(f, id, entries),
+            ResolveError::FrameworkUnavailable {
+                framework,
+                helper,
+                offered_by,
+            } => {
+                write!(
+                    f,
+                    "testing framework {framework} needs {helper}, which none of the selected toolchains declares compatible"
+                )?;
+                for (tc, offered) in offered_by {
+                    write!(f, "\n  {tc} offers {} {}", helper.id, versions(offered))?;
+                }
+                Ok(())
+            }
             ResolveError::InvalidParams(msg) => write!(f, "invalid platform params: {msg}"),
             ResolveError::Interpolation { context, message } => {
                 write!(f, "interpolation error in {context}: {message}")

@@ -40,7 +40,8 @@ build ASSIGNMENT:
     set -euo pipefail
     tag="{{REGISTRY}}/pedagog/$(basename {{ASSIGNMENT}} .yaml)"
     {{HAMMER}} plan -a {{ASSIGNMENT}} --registry {{REGISTRY}} \
-        | podman build --volume "{{RECIPES}}/ingredients:/pedagog/ingredients:ro,z" -t "$tag" -
+        | podman build --volume "{{RECIPES}}/ingredients:/pedagog/ingredients:ro,z" -t "$tag" \
+            -f - "$(dirname {{ASSIGNMENT}})"
 
 # Squash an assignment image's layers in place to reclaim space from deleted files.
 squash ASSIGNMENT:

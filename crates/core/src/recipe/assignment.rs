@@ -1,17 +1,144 @@
 use std::fmt;
+use std::sync::LazyLock;
+
+use regex::Regex;
 
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 use super::network::NetworkSpec;
 use super::platform::PlatformSpec;
-use super::primitives::{AssignmentId, OsId, Step, ToolchainId, ToolchainRef, Version};
+use super::primitives::{
+    AssignmentId, Id, OsId, Step, ToolchainId, ToolchainRef, Version, Versioned,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct AssignmentYaml {
     pub id: AssignmentId,
     pub name: String,
     pub environment: Environment,
+    #[serde(default)]
+    pub testing: Option<Testing>,
+    #[serde(default)]
+    pub files: FileSources,
+}
+
+/// Where the archive keeps the directories baked into the image. Only the
+/// sources are configurable; the image paths (`/pedagog/{starter,tests,solution}`)
+/// are a fixed platform contract.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileSources {
+    #[serde(default = "default_starter")]
+    pub starter: ArchivePath,
+    #[serde(default = "default_tests")]
+    pub tests: ArchivePath,
+    #[serde(default = "default_solution")]
+    pub solution: ArchivePath,
+}
+
+impl Default for FileSources {
+    fn default() -> Self {
+        Self {
+            starter: default_starter(),
+            tests: default_tests(),
+            solution: default_solution(),
+        }
+    }
+}
+
+fn default_starter() -> ArchivePath {
+    ArchivePath("starter".to_owned())
+}
+fn default_tests() -> ArchivePath {
+    ArchivePath("tests".to_owned())
+}
+fn default_solution() -> ArchivePath {
+    ArchivePath("solution".to_owned())
+}
+
+#[allow(clippy::expect_used)]
+static ARCHIVE_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$").expect("valid archive path pattern")
+});
+
+/// A directory inside the assignment archive: relative, without `.`/`..`
+/// segments, and limited to plain path characters (it's written into COPY lines).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct ArchivePath(String);
+
+impl ArchivePath {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for ArchivePath {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        let trimmed = s.trim_end_matches('/');
+        let ok = ARCHIVE_PATH_RE.is_match(trimmed)
+            && trimmed.split('/').all(|seg| seg != "." && seg != "..");
+        if ok {
+            Ok(ArchivePath(trimmed.to_owned()))
+        } else {
+            Err(format!(
+                "invalid archive path {s:?}: must be a relative directory inside the archive (letters, digits, '_', '.', '-', '/'; no '..')"
+            ))
+        }
+    }
+}
+
+impl fmt::Display for ArchivePath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// How the assignment's tests run. The framework names a pedagog test helper
+/// (`pytest:1` → the `pedagog-pytest:1` toolchain), which resolve adds as an
+/// addon of the selected toolchain that declares it compatible.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Testing {
+    pub framework: Versioned,
+    #[serde(default)]
+    pub isolation: Isolation,
+}
+
+impl Testing {
+    /// The helper toolchain implementing this framework.
+    pub fn helper(&self) -> Result<ToolchainRef, String> {
+        Ok(ToolchainRef {
+            id: Id::try_from(format!("{HELPER_PREFIX}{}", self.framework.id))?,
+            version: self.framework.version.clone(),
+        })
+    }
+}
+
+/// Helper toolchain ids are the framework id with this prefix.
+pub const HELPER_PREFIX: &str = "pedagog-";
+
+/// Whether student code shares the test harness's process.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Isolation {
+    /// Student code runs as `runner` in its own process; tests can't be read from it.
+    #[default]
+    Process,
+    /// Student code runs inside the harness process (faster; can read the tests).
+    InProcess,
+}
+
+impl fmt::Display for Isolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Isolation::Process => "process",
+            Isolation::InProcess => "in-process",
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,6 +281,88 @@ impl fmt::Display for ToolchainSelection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assignment(extra: &str) -> Result<AssignmentYaml, String> {
+        let yaml = format!(
+            "id: t\nname: T\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: interactive\n{extra}"
+        );
+        serde_yaml::from_str(&yaml).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn file_sources_default_to_conventional_names() {
+        let files = assignment("").unwrap().files;
+        assert_eq!(
+            [
+                files.starter.as_str(),
+                files.tests.as_str(),
+                files.solution.as_str()
+            ],
+            ["starter", "tests", "solution"]
+        );
+    }
+
+    #[test]
+    fn file_sources_are_configurable_per_directory() {
+        let files = assignment("files:\n  starter: src/\n  tests: grading/hidden\n")
+            .unwrap()
+            .files;
+        assert_eq!(files.starter.as_str(), "src", "trailing slash trimmed");
+        assert_eq!(files.tests.as_str(), "grading/hidden");
+        assert_eq!(
+            files.solution.as_str(),
+            "solution",
+            "unset keeps the default"
+        );
+    }
+
+    #[test]
+    fn file_sources_reject_escapes_and_odd_characters() {
+        for bad in [
+            "../secrets",
+            "/abs",
+            "a/../b",
+            ".",
+            "with space",
+            "a\nRUN x",
+            "",
+        ] {
+            assert!(
+                ArchivePath::try_from(bad.to_owned()).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+        assert!(assignment("files:\n  sources: x\n").is_err(), "unknown key");
+    }
+
+    #[test]
+    fn testing_is_optional() {
+        assert!(assignment("").unwrap().testing.is_none());
+    }
+
+    #[test]
+    fn testing_defaults_to_process_isolation_and_maps_to_helper() {
+        let t = assignment("testing:\n  framework: pytest:1\n")
+            .unwrap()
+            .testing
+            .unwrap();
+        assert_eq!(t.isolation, Isolation::Process);
+        assert_eq!(t.helper().unwrap().to_string(), "pedagog-pytest:1");
+    }
+
+    #[test]
+    fn testing_accepts_in_process_and_rejects_unknown_keys() {
+        let t = assignment("testing:\n  framework: pytest:1\n  isolation: in-process\n")
+            .unwrap()
+            .testing
+            .unwrap();
+        assert_eq!(t.isolation, Isolation::InProcess);
+        assert!(assignment("testing:\n  framework: pytest:1\n  isolate: process\n").is_err());
+        assert!(
+            assignment("testing:\n  framework: pytest\n").is_err(),
+            "version required"
+        );
+    }
 
     fn selections(yaml: &str) -> Result<Vec<ToolchainSelection>, String> {
         serde_yaml::from_str(yaml).map_err(|e| e.to_string())
