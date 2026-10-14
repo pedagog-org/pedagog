@@ -17,7 +17,9 @@ just install-hooks
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same checks plus `cargo test --workspace` on
-every pull request and push to `main`. The toolchain is pinned in `rust-toolchain.toml`.
+every pull request and push to `main`, with a Postgres service for the database tests, and
+fails if the committed `.sqlx/` query cache is stale (regenerate with `just db-prepare`).
+The toolchain is pinned in `rust-toolchain.toml`.
 
 To keep `git blame` from attributing lines to bulk-formatting commits:
 
