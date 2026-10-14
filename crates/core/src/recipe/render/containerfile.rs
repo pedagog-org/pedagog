@@ -127,11 +127,10 @@ fn render_from(to: &mut String, from: &str) {
 fn render_runtime(to: &mut String, rt: &Runtime) {
     let _ = writeln!(to);
     let _ = writeln!(to, "USER {}", rt.user);
-    let words: Vec<&str> = rt.entrypoint.0.split_whitespace().collect();
-    let _ = writeln!(to, "ENTRYPOINT {}", exec_array(&words));
+    let _ = writeln!(to, "ENTRYPOINT {}", exec_array(&rt.entrypoint));
 }
 
-fn exec_array(words: &[&str]) -> String {
+fn exec_array(words: &[String]) -> String {
     serde_json::to_string(words).unwrap_or_default()
 }
 
@@ -210,14 +209,14 @@ mod tests {
         }
     }
 
-    fn full_spec(entrypoint: &str, ports: Vec<u16>, network: NetworkSpec) -> ImageSpec {
+    fn full_spec(entrypoint: &[&str], ports: Vec<u16>, network: NetworkSpec) -> ImageSpec {
         ImageSpec::Full {
             upstream: "ubuntu:22.04".to_owned(),
             base_image: "pedagog/ubuntu:22".to_owned(),
             plan: full_plan(),
             runtime: Runtime {
                 user: "student".to_owned(),
-                entrypoint: Command(entrypoint.to_owned()),
+                entrypoint: entrypoint.iter().map(|s| (*s).to_owned()).collect(),
             },
             ports,
             network,
@@ -247,7 +246,11 @@ mod tests {
 
     #[test]
     fn full_standalone_has_user_and_exec_entrypoint() {
-        let spec = full_spec("code-server --bind 0.0.0.0:8080", vec![8080], NetworkSpec::Allow);
+        let spec = full_spec(
+            &["code-server", "--bind", "0.0.0.0:8080", "/home/student/my work"],
+            vec![8080],
+            NetworkSpec::Allow,
+        );
         let out = Containerfile::render(&spec, &opts(None, FromSource::Standalone)).to_string();
         assert!(out.contains("FROM ubuntu:22.04"));
         assert!(out.contains("PHASE: BASE"));
@@ -256,14 +259,16 @@ mod tests {
         assert!(out.contains("EXPOSE 8080"));
         assert!(out.contains("USER student"));
         assert!(
-            out.contains(r#"ENTRYPOINT ["code-server","--bind","0.0.0.0:8080"]"#),
+            out.contains(
+                r#"ENTRYPOINT ["code-server","--bind","0.0.0.0:8080","/home/student/my work"]"#
+            ),
             "{out}"
         );
     }
 
     #[test]
     fn full_prebuilt_skips_os_layer() {
-        let spec = full_spec("code-server", vec![], NetworkSpec::Allow);
+        let spec = full_spec(&["code-server"], vec![], NetworkSpec::Allow);
         let out = Containerfile::render(&spec, &opts(Some("localhost"), FromSource::PrebuiltBase))
             .to_string();
         assert!(out.contains("FROM localhost/pedagog/ubuntu:22"), "{out}");
@@ -281,7 +286,7 @@ mod tests {
             .to_string();
         assert!(out.starts_with("FROM ubuntu:22.04\n"), "{out}");
 
-        let full = full_spec("code-server", vec![], NetworkSpec::Allow);
+        let full = full_spec(&["code-server"], vec![], NetworkSpec::Allow);
         let out = Containerfile::render(&full, &opts(Some("localhost"), FromSource::Standalone))
             .to_string();
         assert!(out.starts_with("FROM ubuntu:22.04\n"), "{out}");
@@ -289,7 +294,7 @@ mod tests {
 
     #[test]
     fn prebuilt_without_registry_is_unprefixed() {
-        let spec = full_spec("code-server", vec![], NetworkSpec::Allow);
+        let spec = full_spec(&["code-server"], vec![], NetworkSpec::Allow);
         let out = Containerfile::render(&spec, &opts(None, FromSource::PrebuiltBase)).to_string();
         assert!(out.starts_with("FROM pedagog/ubuntu:22\n"), "{out}");
     }
@@ -298,7 +303,7 @@ mod tests {
     fn network_policy_does_not_change_the_image() {
         let render = |network| {
             Containerfile::render(
-                &full_spec("code-server", vec![], network),
+                &full_spec(&["code-server"], vec![], network),
                 &opts(None, FromSource::Standalone),
             )
             .to_string()
@@ -311,7 +316,7 @@ mod tests {
 
     #[test]
     fn layers_emit_pedagog_env_for_vend() {
-        let spec = full_spec("code-server", vec![], NetworkSpec::Allow);
+        let spec = full_spec(&["code-server"], vec![], NetworkSpec::Allow);
         let out = Containerfile::render(&spec, &opts(None, FromSource::PrebuiltBase)).to_string();
         assert!(out.contains("ENV PEDAGOG_TYPE=platform"), "{out}");
         assert!(out.contains("ENV PEDAGOG_ID=interactive"), "{out}");
