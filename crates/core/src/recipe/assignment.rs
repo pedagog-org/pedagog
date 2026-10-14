@@ -1,4 +1,7 @@
 use std::fmt;
+use std::sync::LazyLock;
+
+use regex::Regex;
 
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -16,6 +19,82 @@ pub struct AssignmentYaml {
     pub environment: Environment,
     #[serde(default)]
     pub testing: Option<Testing>,
+    #[serde(default)]
+    pub files: FileSources,
+}
+
+/// Where the archive keeps the directories baked into the image. Only the
+/// sources are configurable; the image paths (`/pedagog/{starter,tests,solution}`)
+/// are a fixed platform contract.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileSources {
+    #[serde(default = "default_starter")]
+    pub starter: ArchivePath,
+    #[serde(default = "default_tests")]
+    pub tests: ArchivePath,
+    #[serde(default = "default_solution")]
+    pub solution: ArchivePath,
+}
+
+impl Default for FileSources {
+    fn default() -> Self {
+        Self {
+            starter: default_starter(),
+            tests: default_tests(),
+            solution: default_solution(),
+        }
+    }
+}
+
+fn default_starter() -> ArchivePath {
+    ArchivePath("starter".to_owned())
+}
+fn default_tests() -> ArchivePath {
+    ArchivePath("tests".to_owned())
+}
+fn default_solution() -> ArchivePath {
+    ArchivePath("solution".to_owned())
+}
+
+#[allow(clippy::expect_used)]
+static ARCHIVE_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$").expect("valid archive path pattern")
+});
+
+/// A directory inside the assignment archive: relative, without `.`/`..`
+/// segments, and limited to plain path characters (it's written into COPY lines).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct ArchivePath(String);
+
+impl ArchivePath {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for ArchivePath {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        let trimmed = s.trim_end_matches('/');
+        let ok = ARCHIVE_PATH_RE.is_match(trimmed)
+            && trimmed.split('/').all(|seg| seg != "." && seg != "..");
+        if ok {
+            Ok(ArchivePath(trimmed.to_owned()))
+        } else {
+            Err(format!(
+                "invalid archive path {s:?}: must be a relative directory inside the archive (letters, digits, '_', '.', '-', '/'; no '..')"
+            ))
+        }
+    }
+}
+
+impl fmt::Display for ArchivePath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// How the assignment's tests run. The framework names a pedagog test helper
@@ -208,6 +287,52 @@ mod tests {
             "id: t\nname: T\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: interactive\n{extra}"
         );
         serde_yaml::from_str(&yaml).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn file_sources_default_to_conventional_names() {
+        let files = assignment("").unwrap().files;
+        assert_eq!(
+            [
+                files.starter.as_str(),
+                files.tests.as_str(),
+                files.solution.as_str()
+            ],
+            ["starter", "tests", "solution"]
+        );
+    }
+
+    #[test]
+    fn file_sources_are_configurable_per_directory() {
+        let files = assignment("files:\n  starter: src/\n  tests: grading/hidden\n")
+            .unwrap()
+            .files;
+        assert_eq!(files.starter.as_str(), "src", "trailing slash trimmed");
+        assert_eq!(files.tests.as_str(), "grading/hidden");
+        assert_eq!(
+            files.solution.as_str(),
+            "solution",
+            "unset keeps the default"
+        );
+    }
+
+    #[test]
+    fn file_sources_reject_escapes_and_odd_characters() {
+        for bad in [
+            "../secrets",
+            "/abs",
+            "a/../b",
+            ".",
+            "with space",
+            "a\nRUN x",
+            "",
+        ] {
+            assert!(
+                ArchivePath::try_from(bad.to_owned()).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+        assert!(assignment("files:\n  sources: x\n").is_err(), "unknown key");
     }
 
     #[test]

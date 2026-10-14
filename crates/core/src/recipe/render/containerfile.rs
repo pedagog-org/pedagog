@@ -79,16 +79,13 @@ fn render_files(to: &mut String, files: &AssignmentFiles) {
     }
     let _ = writeln!(to, "\n# ===== PHASE: {} =====", BuildPhase::AssignmentFiles);
     let mut fixups = Vec::new();
-    if files.starter {
-        let _ = writeln!(to, "COPY starter/ {STARTER_DIR}/");
+    if let Some(src) = &files.starter {
+        let _ = writeln!(to, "COPY {src}/ {STARTER_DIR}/");
         fixups.push(format!("chmod -R go-w {STARTER_DIR}"));
     }
     let mut private = Vec::new();
-    for (present, src, dest) in [
-        (files.tests, "tests", TESTS_DIR),
-        (files.solution, "solution", SOLUTION_DIR),
-    ] {
-        if present {
+    for (src, dest) in [(&files.tests, TESTS_DIR), (&files.solution, SOLUTION_DIR)] {
+        if let Some(src) = src {
             let _ = writeln!(
                 to,
                 "COPY --chown={GRADER_USER}:{GRADER_USER} {src}/ {dest}/"
@@ -373,9 +370,9 @@ mod tests {
     #[test]
     fn assignment_files_phase_bakes_archive_dirs_before_runtime() {
         let out = render_with(AssignmentFiles {
-            starter: true,
-            tests: true,
-            solution: true,
+            starter: Some("starter".into()),
+            tests: Some("tests".into()),
+            solution: Some("solution".into()),
         });
         assert!(
             out.contains(
@@ -394,12 +391,30 @@ mod tests {
     #[test]
     fn only_present_dirs_are_copied() {
         let out = render_with(AssignmentFiles {
-            tests: true,
+            tests: Some("tests".into()),
             ..Default::default()
         });
         assert!(!out.contains("COPY starter/"), "{out}");
         assert!(!out.contains("solution/"), "{out}");
         assert!(out.contains("RUN chmod 0700 /pedagog/tests\n"), "{out}");
+    }
+
+    #[test]
+    fn configured_sources_copy_to_fixed_image_paths() {
+        let out = render_with(AssignmentFiles {
+            starter: Some("src".into()),
+            tests: Some("grading/hidden".into()),
+            solution: Some("reference".into()),
+        });
+        assert!(out.contains("COPY src/ /pedagog/starter/\n"), "{out}");
+        assert!(
+            out.contains("COPY --chown=grader:grader grading/hidden/ /pedagog/tests/\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("COPY --chown=grader:grader reference/ /pedagog/solution/\n"),
+            "{out}"
+        );
     }
 
     #[test]

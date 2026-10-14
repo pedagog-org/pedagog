@@ -92,21 +92,22 @@ pub enum BuildPhase {
     AssignmentFiles,
 }
 
-/// Which of the archive's directories are baked into the image (the build
-/// context is the unpacked archive). All false for environment-only renders.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The archive directories baked into the image, by source path inside the
+/// build context (the unpacked archive). `None` means not present / not baked;
+/// all `None` for environment-only renders.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AssignmentFiles {
-    /// `starter/` → `/pedagog/starter` (root, read-only)
-    pub starter: bool,
-    /// `tests/` → `/pedagog/tests` (grader only)
-    pub tests: bool,
-    /// `solution/` → `/pedagog/solution` (grader only)
-    pub solution: bool,
+    /// → `/pedagog/starter` (root, read-only)
+    pub starter: Option<String>,
+    /// → `/pedagog/tests` (grader only)
+    pub tests: Option<String>,
+    /// → `/pedagog/solution` (grader only)
+    pub solution: Option<String>,
 }
 
 impl AssignmentFiles {
     pub fn is_empty(&self) -> bool {
-        !(self.starter || self.tests || self.solution)
+        self.starter.is_none() && self.tests.is_none() && self.solution.is_none()
     }
 }
 

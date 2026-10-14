@@ -8,7 +8,7 @@ use clap::Parser;
 use miette::{GraphicalReportHandler, MietteDiagnostic, Report, Result, Severity, miette};
 
 use cli::{Cli, Command, Format, PlanArgs, VendArgs};
-use pedagog_core::recipe::assignment::AssignmentYaml;
+use pedagog_core::recipe::assignment::{ArchivePath, AssignmentYaml, FileSources};
 use pedagog_core::recipe::primitives::Id;
 use pedagog_core::recipe::render::containerfile::Containerfile;
 use pedagog_core::recipe::render::describe::Describe;
@@ -63,7 +63,7 @@ fn run_plan(args: PlanArgs) -> Result<()> {
                 serde_yaml::from_str(&src).map_err(|e| miette!("{}", e))?;
             resolve(&assignment, &store)
                 .map_err(resolve_report)?
-                .with_files(detect_files(&path))
+                .with_files(detect_files(&path, &assignment.files)?)
         }
         (None, Some(os_str)) => {
             let os_id = Id::try_from(os_str.clone()).map_err(|e| miette!("{}", e))?;
@@ -107,14 +107,28 @@ fn run_plan(args: PlanArgs) -> Result<()> {
 }
 
 /// Archive directories next to `assignment.yml` (the build context) become the
-/// ASSIGNMENT FILES phase.
-fn detect_files(assignment: &Path) -> AssignmentFiles {
-    let dir = assignment.parent().unwrap_or(Path::new("."));
-    AssignmentFiles {
-        starter: dir.join("starter").is_dir(),
-        tests: dir.join("tests").is_dir(),
-        solution: dir.join("solution").is_dir(),
-    }
+/// ASSIGNMENT FILES phase. A missing directory under its default name just isn't
+/// baked; a missing directory the assignment configured is an error (likely a typo).
+fn detect_files(assignment_path: &Path, sources: &FileSources) -> Result<AssignmentFiles> {
+    let dir = assignment_path.parent().unwrap_or(Path::new("."));
+    let defaults = FileSources::default();
+    let find = |src: &ArchivePath, default: &ArchivePath| -> Result<Option<String>> {
+        if dir.join(src.as_str()).is_dir() {
+            Ok(Some(src.to_string()))
+        } else if src == default {
+            Ok(None)
+        } else {
+            Err(miette!(
+                "files: {src}/ not found next to {}",
+                assignment_path.display()
+            ))
+        }
+    };
+    Ok(AssignmentFiles {
+        starter: find(&sources.starter, &defaults.starter)?,
+        tests: find(&sources.tests, &defaults.tests)?,
+        solution: find(&sources.solution, &defaults.solution)?,
+    })
 }
 
 fn resolve_report(err: ResolveError) -> Report {
@@ -196,20 +210,52 @@ fn emit_warning(message: &str, help: &str, quiet: bool) {
 mod tests {
     use super::*;
 
+    fn scratch(name: &str, dirs: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("hammer-{name}-{}", std::process::id()));
+        for d in dirs {
+            std::fs::create_dir_all(dir.join(d)).unwrap();
+        }
+        dir
+    }
+
+    fn sources(yaml: &str) -> FileSources {
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
     #[test]
-    fn detects_archive_dirs_next_to_the_assignment() {
-        let dir = std::env::temp_dir().join(format!("hammer-files-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("tests")).unwrap();
-        std::fs::create_dir_all(dir.join("starter")).unwrap();
-        let files = detect_files(&dir.join("assignment.yml"));
+    fn detects_default_dirs_next_to_the_assignment() {
+        let dir = scratch("defaults", &["tests", "starter"]);
+        let files = detect_files(&dir.join("assignment.yml"), &FileSources::default()).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(
             files,
             AssignmentFiles {
-                starter: true,
-                tests: true,
-                solution: false
+                starter: Some("starter".into()),
+                tests: Some("tests".into()),
+                solution: None,
             }
         );
+    }
+
+    #[test]
+    fn uses_configured_source_dirs() {
+        let dir = scratch("configured", &["src", "grading/hidden"]);
+        let files = detect_files(
+            &dir.join("assignment.yml"),
+            &sources("starter: src\ntests: grading/hidden\n"),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(files.starter.as_deref(), Some("src"));
+        assert_eq!(files.tests.as_deref(), Some("grading/hidden"));
+        assert_eq!(files.solution, None);
+    }
+
+    #[test]
+    fn missing_configured_dir_is_an_error() {
+        let dir = scratch("typo", &["tests"]);
+        let err = detect_files(&dir.join("assignment.yml"), &sources("tests: gradng\n"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(err.unwrap_err().to_string().contains("gradng/ not found"));
     }
 }

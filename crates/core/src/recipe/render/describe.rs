@@ -110,14 +110,14 @@ fn files_node(files: &AssignmentFiles) -> Option<Node> {
         return None;
     }
     let mut node = Node::new(paint(HEADER, &BuildPhase::AssignmentFiles.to_string()));
-    for (present, src, dest, note) in [
-        (files.starter, "starter/", STARTER_DIR, "read-only"),
-        (files.tests, "tests/", TESTS_DIR, "grader only"),
-        (files.solution, "solution/", SOLUTION_DIR, "grader only"),
+    for (src, dest, note) in [
+        (&files.starter, STARTER_DIR, "read-only"),
+        (&files.tests, TESTS_DIR, "grader only"),
+        (&files.solution, SOLUTION_DIR, "grader only"),
     ] {
-        if present {
+        if let Some(src) = src {
             node.push(Node::new(format!(
-                "{src} → {dest} {}",
+                "{src}/ → {dest} {}",
                 paint(DIM, &format!("({note})"))
             )));
         }
@@ -429,9 +429,9 @@ Assignment: hw1
     #[test]
     fn shows_assignment_files_and_testing() {
         let mut spec = full(vec![], NetworkSpec::Allow).with_files(AssignmentFiles {
-            starter: true,
-            tests: true,
-            solution: false,
+            starter: Some("src".into()),
+            tests: Some("tests".into()),
+            solution: None,
         });
         if let ImageSpec::Full { testing, .. } = &mut spec {
             *testing = Some(serde_yaml::from_str("framework: pytest:1\n").unwrap());
@@ -442,7 +442,7 @@ Assignment: hw1
         ));
         assert!(
             out.contains(
-                "├── ASSIGNMENT FILES\n│   ├── starter/ → /pedagog/starter (read-only)\n│   └── tests/ → /pedagog/tests (grader only)\n"
+                "├── ASSIGNMENT FILES\n│   ├── src/ → /pedagog/starter (read-only)\n│   └── tests/ → /pedagog/tests (grader only)\n"
             ),
             "{out}"
         );
