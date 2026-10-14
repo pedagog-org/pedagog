@@ -22,8 +22,7 @@ pub struct Environment {
     pub network: NetworkSpec,
 }
 
-/// Build-time egress policy. `Allow` is unrestricted (no os_configure layer, no
-/// runtime privilege drop); `Deny` restricts egress to the `allow` CIDR list.
+/// Egress policy, enforced by the platform at runtime (not baked into the image).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum NetworkSpec {

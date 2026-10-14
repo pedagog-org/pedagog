@@ -1,5 +1,6 @@
 use strum_macros::Display;
 
+use crate::recipe::assignment::NetworkSpec;
 use crate::recipe::platform::PlatformKind;
 use crate::recipe::primitives::{command::Command, id::AssignmentId, OsId, ToolchainRef};
 
@@ -17,7 +18,6 @@ pub enum LayerSource {
     Platform(PlatformKind),
     Toolchain(ToolchainRef),
     Assignment(AssignmentId),
-    OsConfigure(OsId),
     OsCleanup(OsId),
 }
 
@@ -37,20 +37,16 @@ pub enum BuildPhase {
     Toolchain,
     #[strum(serialize = "ASSIGNMENT")]
     Assignment,
-    #[strum(serialize = "OS CONFIGURE")]
-    OsConfigure,
     #[strum(serialize = "OS CLEANUP")]
     OsCleanup,
 }
 
-/// Runtime metadata for the final image: which user the entrypoint runs as, the
-/// entrypoint command, and any root-only startup that must run before dropping
-/// privileges (e.g. network.enable). `pre_root` empty ⇒ no privileged startup.
+/// Runtime metadata for the final image: the user the entrypoint runs as and the
+/// entrypoint command.
 #[derive(Clone)]
 pub struct Runtime {
     pub user: String,
     pub entrypoint: Command,
-    pub pre_root: Vec<Command>,
 }
 
 #[derive(Clone)]
@@ -59,7 +55,6 @@ pub struct BuildPlan {
     pub platform: Layer,
     pub toolchain: Vec<Layer>,
     pub assignment: Layer,
-    pub os_configure: Option<Layer>,
     pub os_cleanup: Layer,
 }
 
@@ -80,6 +75,8 @@ pub enum ImageSpec {
         plan: BuildPlan,
         runtime: Runtime,
         ports: Vec<u16>,
+        /// Egress policy for the platform to enforce; does not affect the image.
+        network: NetworkSpec,
     },
 }
 
