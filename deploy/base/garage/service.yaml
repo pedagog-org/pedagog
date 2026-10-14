@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: garage-service
+  namespace: pedagog-data
+spec:
+  selector:
+    app: garage
+  ports:
+    - name: s3
+      port: 3900
+    - name: admin
+      port: 3903
+---
+# Headless and publishes not-ready pods: Garage reports unhealthy until a layout
+# is applied, so the bootstrap Job must reach the admin API before readiness.
+apiVersion: v1
+kind: Service
+metadata:
+  name: garage-headless
+  namespace: pedagog-data
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: garage
+  ports:
+    - name: admin
+      port: 3903

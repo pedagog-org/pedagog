@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: garage-config
+  namespace: pedagog-data
+data:
+  garage.toml: |
+    metadata_dir = "/var/lib/garage/meta"
+    data_dir = "/var/lib/garage/data"
+    db_engine = "lmdb"
+    # Single node for now; raise with a multi-node layout on the Pis.
+    replication_factor = 1
+    rpc_bind_addr = "[::]:3901"
+
+    [s3_api]
+    s3_region = "garage"
+    api_bind_addr = "[::]:3900"
+
+    [admin]
+    api_bind_addr = "[::]:3903"
+  # Idempotent bootstrap over the admin API: single-node layout, the bucket, and
+  # the imported access key (from the garage-s3-key Secret) with read/write on it.
+  bootstrap.sh: |
+    #!/bin/sh
+    set -eu
+    api() {
+      path=$1; shift
+      curl -fsS -H "Authorization: Bearer $GARAGE_ADMIN_TOKEN" -H 'Content-Type: application/json' \
+        "$GARAGE_ADMIN_URL/v2/$path" "$@"
+    }
+    status() {
+      curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GARAGE_ADMIN_TOKEN" \
+        "$GARAGE_ADMIN_URL/v2/$1"
+    }
+
+    until api GetClusterHealth >/dev/null 2>&1; do echo "waiting for garage"; sleep 2; done
+
+    if api GetClusterLayout | grep -q '"version": 0'; then
+      node=$(api GetClusterStatus | sed -n 's/.*"id": "\([0-9a-f]\{64\}\)".*/\1/p' | head -1)
+      api UpdateClusterLayout -d "{\"roles\":[{\"id\":\"$node\",\"zone\":\"dc1\",\"capacity\":$GARAGE_CAPACITY_BYTES,\"tags\":[]}]}" >/dev/null
+      api ApplyClusterLayout -d '{"version":1}' >/dev/null
+      echo "layout applied for node $node"
+    fi
+
+    if [ "$(status "GetKeyInfo?id=$S3_ACCESS_KEY_ID")" != 200 ]; then
+      api ImportKey -d "{\"accessKeyId\":\"$S3_ACCESS_KEY_ID\",\"secretAccessKey\":\"$S3_SECRET_ACCESS_KEY\",\"name\":\"pedagog\"}" >/dev/null
+      echo "imported key $S3_ACCESS_KEY_ID"
+    fi
+
+    if [ "$(status "GetBucketInfo?globalAlias=$S3_BUCKET")" != 200 ]; then
+      api CreateBucket -d "{\"globalAlias\":\"$S3_BUCKET\"}" >/dev/null
+      echo "created bucket $S3_BUCKET"
+    fi
+    bucket=$(api "GetBucketInfo?globalAlias=$S3_BUCKET" | sed -n 's/^  "id": "\([0-9a-f]\{64\}\)".*/\1/p' | head -1)
+    api AllowBucketKey -d "{\"bucketId\":\"$bucket\",\"accessKeyId\":\"$S3_ACCESS_KEY_ID\",\"permissions\":{\"read\":true,\"write\":true,\"owner\":false}}" >/dev/null
+    echo "garage bootstrap complete"
