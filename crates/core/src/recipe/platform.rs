@@ -54,9 +54,11 @@ impl std::fmt::Display for PlatformKind {
 #[derive(Debug, Deserialize)]
 pub struct PlatformHookDefs {
     pub build: ParamHook,
-    pub entrypoint: String,
+    /// Exec-form argv; each item is interpolated with the platform params.
+    pub entrypoint: Vec<String>,
+    /// Interpolated like `entrypoint`, then parsed as non-zero port numbers.
     #[serde(default)]
-    pub ports: Vec<u16>,
+    pub ports: Vec<String>,
 }
 
 // ---- PlatformSpec -----------------------------------------------------------

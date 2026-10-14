@@ -153,34 +153,11 @@ pub fn interpolate(cmd: &str, params: &HashMap<String, ParamVal>) -> Result<Stri
                     None => (inner, None),
                 };
 
-                // `a+b` path syntax: union two or more lists of the same element type.
-                let union_val: Option<ParamVal> = if path.contains('+') {
-                    let mut combined: Vec<ParamVal> = Vec::new();
-                    for p in path.split('+') {
-                        let v = navigate(params, p)
-                            .ok_or_else(|| format!("unknown param {p:?} in: {cmd}"))?;
-                        match v {
-                            ParamVal::List(items) => combined.extend(items.iter().cloned()),
-                            _ => return Err(format!(
-                                "param {p:?}: list union requires list, got {:?}",
-                                v.param_type()
-                            )),
-                        }
-                    }
-                    Some(ParamVal::List(combined))
-                } else {
-                    None
-                };
-
-                let val = match &union_val {
-                    Some(v) => v,
-                    None => navigate(params, path)
-                        .ok_or_else(|| format!("unknown param {path:?} in: {cmd}"))?,
-                };
+                let val = lookup(params, path, cmd)?;
 
                 let formatted = match fmt {
-                    None => default_format(val, path)?,
-                    Some("json") => serde_json::to_string(val)
+                    None => default_format(&val, path)?,
+                    Some("json") => serde_json::to_string(&val)
                         .map_err(|e| format!("json serialization failed for {path:?}: {e}"))?,
                     Some(other) => return Err(format!("unknown format specifier {other:?} in: {cmd}")),
                 };
@@ -190,6 +167,59 @@ pub fn interpolate(cmd: &str, params: &HashMap<String, ParamVal>) -> Result<Stri
         }
     }
     Ok(out)
+}
+
+/// Interpolates each item of an argv-like list (entrypoint, ports). An item that
+/// is exactly one unformatted token resolving to a list expands into one item
+/// per element; every other item goes through [`interpolate`].
+pub fn interpolate_args(
+    items: &[String],
+    params: &HashMap<String, ParamVal>,
+) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for item in items {
+        if let Some(path) = whole_token(item)
+            && let ParamVal::List(elems) = lookup(params, path, item)?
+        {
+            for elem in &elems {
+                out.push(default_format(elem, path)?);
+            }
+            continue;
+        }
+        out.push(interpolate(item, params)?);
+    }
+    Ok(out)
+}
+
+/// `"{path}"` → `Some("path")`; `None` for escapes, format specifiers, or any
+/// surrounding text.
+fn whole_token(item: &str) -> Option<&str> {
+    let inner = item.strip_prefix('{')?.strip_suffix('}')?;
+    let plain = !inner.is_empty() && !inner.contains(['{', '}', ':']);
+    plain.then_some(inner)
+}
+
+/// Resolves a token path: dotted navigation, or `a+b` to union two or more lists.
+fn lookup(params: &HashMap<String, ParamVal>, path: &str, cmd: &str) -> Result<ParamVal, String> {
+    if !path.contains('+') {
+        return navigate(params, path)
+            .cloned()
+            .ok_or_else(|| format!("unknown param {path:?} in: {cmd}"));
+    }
+    let mut combined: Vec<ParamVal> = Vec::new();
+    for p in path.split('+') {
+        let v = navigate(params, p).ok_or_else(|| format!("unknown param {p:?} in: {cmd}"))?;
+        match v {
+            ParamVal::List(items) => combined.extend(items.iter().cloned()),
+            _ => {
+                return Err(format!(
+                    "param {p:?}: list union requires list, got {:?}",
+                    v.param_type()
+                ));
+            }
+        }
+    }
+    Ok(ParamVal::List(combined))
 }
 
 fn navigate<'a>(params: &'a HashMap<String, ParamVal>, path: &str) -> Option<&'a ParamVal> {
@@ -575,5 +605,68 @@ mod tests {
         let mut overrides = HashMap::new();
         overrides.insert("label".to_owned(), ParamVal::Str("x".to_owned()));
         assert!(resolve_params(&decls, &overrides).is_err());
+    }
+
+    fn args_params() -> HashMap<String, ParamVal> {
+        let mut m = HashMap::new();
+        m.insert("port".to_owned(), ParamVal::Int(8080));
+        m.insert(
+            "flags".to_owned(),
+            ParamVal::List(vec![
+                ParamVal::Str("--a".to_owned()),
+                ParamVal::Str("--b".to_owned()),
+            ]),
+        );
+        m.insert("more".to_owned(), ParamVal::List(vec![ParamVal::Str("--c".to_owned())]));
+        m
+    }
+
+    fn args(items: &[&str]) -> Result<Vec<String>, String> {
+        let items: Vec<String> = items.iter().map(|s| (*s).to_owned()).collect();
+        interpolate_args(&items, &args_params())
+    }
+
+    #[test]
+    fn interpolate_args_splats_whole_item_list() {
+        assert_eq!(args(&["cs", "{flags}", "x"]).unwrap(), ["cs", "--a", "--b", "x"]);
+    }
+
+    #[test]
+    fn interpolate_args_splats_list_union() {
+        assert_eq!(args(&["{flags+more}"]).unwrap(), ["--a", "--b", "--c"]);
+    }
+
+    #[test]
+    fn interpolate_args_joins_list_embedded_in_text() {
+        assert_eq!(args(&["--opts={flags}"]).unwrap(), ["--opts=--a --b"]);
+    }
+
+    #[test]
+    fn interpolate_args_keeps_spaces_within_an_item() {
+        assert_eq!(args(&["--bind-addr", "0.0.0.0:{port}", "a b"]).unwrap(), [
+            "--bind-addr",
+            "0.0.0.0:8080",
+            "a b"
+        ]);
+    }
+
+    #[test]
+    fn interpolate_args_scalar_token_is_not_splatted() {
+        assert_eq!(args(&["{port}"]).unwrap(), ["8080"]);
+    }
+
+    #[test]
+    fn interpolate_args_json_format_is_not_splatted() {
+        assert_eq!(args(&["{flags:json}"]).unwrap(), [r#"["--a","--b"]"#]);
+    }
+
+    #[test]
+    fn interpolate_args_escape_is_literal() {
+        assert_eq!(args(&["{{flags}}"]).unwrap(), ["{flags}"]);
+    }
+
+    #[test]
+    fn interpolate_args_unknown_param_errors() {
+        assert!(args(&["{nope}"]).is_err());
     }
 }

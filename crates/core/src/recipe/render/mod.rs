@@ -46,7 +46,7 @@ pub enum BuildPhase {
 #[derive(Clone)]
 pub struct Runtime {
     pub user: String,
-    pub entrypoint: Command,
+    pub entrypoint: Vec<String>,
 }
 
 #[derive(Clone)]
