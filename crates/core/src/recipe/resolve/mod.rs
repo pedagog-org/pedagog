@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::recipe::assignment::{AssignmentYaml, NetworkSpec};
+use crate::recipe::assignment::AssignmentYaml;
 use crate::recipe::os::PkgArg;
 use crate::recipe::primitives::{ArgHook, Command, OsId, ParamVal, PkgName, Step};
 use crate::recipe::render::{BuildPlan, ImageSpec, Layer, LayerSource, ResolvedStep, Runtime};
@@ -82,22 +82,6 @@ pub fn resolve(assignment: &AssignmentYaml, store: &RecipeStore) -> Result<Image
         steps: resolve_steps(&env.steps, pkg_install, &empty)?,
     };
 
-    let os_configure = match &env.network {
-        NetworkSpec::Allow => None,
-        NetworkSpec::Deny { allow } => {
-            let mut args = HashMap::new();
-            args.insert("cidrs".to_owned(), string_list(allow));
-            let commands = expand_arg_hook(&os.hooks.network.transcribe, &args)?;
-            Some(Layer {
-                source: LayerSource::OsConfigure(os_id.clone()),
-                steps: vec![ResolvedStep {
-                    name: Some("restrict network egress".to_owned()),
-                    commands,
-                }],
-            })
-        }
-    };
-
     let os_cleanup = Layer {
         source: LayerSource::OsCleanup(os_id.clone()),
         steps: resolve_steps(&os.hooks.build.cleanup, pkg_install, &empty)?,
@@ -105,14 +89,9 @@ pub fn resolve(assignment: &AssignmentYaml, store: &RecipeStore) -> Result<Image
 
     let entrypoint = interpolate(&platform.hooks.entrypoint, &params)
         .map_err(|e| format!("entrypoint interpolation failed: {e}"))?;
-    let pre_root = match &env.network {
-        NetworkSpec::Allow => Vec::new(),
-        NetworkSpec::Deny { .. } => expand_arg_hook(&os.hooks.network.enable, &empty)?,
-    };
     let runtime = Runtime {
         user: STUDENT_USER.to_owned(),
         entrypoint: Command(entrypoint),
-        pre_root,
     };
 
     Ok(ImageSpec::Full {
@@ -123,11 +102,11 @@ pub fn resolve(assignment: &AssignmentYaml, store: &RecipeStore) -> Result<Image
             platform: platform_layer,
             toolchain: toolchain_layers,
             assignment: assignment_layer,
-            os_configure,
             os_cleanup,
         },
         runtime,
         ports: platform.hooks.ports.clone(),
+        network: env.network.clone(),
     })
 }
 
@@ -205,15 +184,12 @@ fn pkg_names(packages: &[PkgName]) -> ParamVal {
     )
 }
 
-fn string_list(items: &[String]) -> ParamVal {
-    ParamVal::List(items.iter().map(|s| ParamVal::Str(s.clone())).collect())
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::recipe::network::NetworkSpec;
 
     fn arg_hook(yaml: &str) -> ArgHook<PkgArg> {
         serde_yaml::from_str(yaml).unwrap()
@@ -270,39 +246,16 @@ mod tests {
     }
 
     #[test]
-    fn resolve_allow_has_no_os_configure_and_empty_pre_root() {
-        let Some(store) = load_store() else { return };
-        let spec = resolve(&assignment(""), &store).unwrap();
-        match spec {
-            ImageSpec::Full {
-                plan, runtime, ..
-            } => {
-                assert!(plan.os_configure.is_none());
-                assert!(runtime.pre_root.is_empty());
-            }
-            ImageSpec::Base { .. } => panic!("expected Full"),
-        }
-    }
-
-    #[test]
-    fn resolve_deny_builds_os_configure_and_pre_root() {
+    fn resolve_carries_network_policy_through() {
         let Some(store) = load_store() else { return };
         let spec = resolve(
-            &assignment("  network:\n    mode: deny\n    allow: [\"10.0.0.0/8\"]\n"),
+            &assignment("  network:\n    mode: deny\n    allow:\n      - cidr: 10.0.0.0/8\n"),
             &store,
         )
         .unwrap();
         match spec {
-            ImageSpec::Full { plan, runtime, .. } => {
-                let configure = plan.os_configure.expect("os_configure present under deny");
-                let joined: String = configure.steps[0]
-                    .commands
-                    .iter()
-                    .map(|c| c.0.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                assert!(joined.contains("10.0.0.0/8"));
-                assert!(!runtime.pre_root.is_empty());
+            ImageSpec::Full { network, .. } => {
+                assert!(matches!(network, NetworkSpec::Deny { allow } if allow.len() == 1));
             }
             ImageSpec::Base { .. } => panic!("expected Full"),
         }

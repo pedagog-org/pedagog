@@ -1,5 +1,6 @@
 use serde::Deserialize;
 
+use super::network::NetworkSpec;
 use super::platform::PlatformSpec;
 use super::primitives::{AssignmentId, OsId, Step, ToolchainRef};
 
@@ -20,19 +21,6 @@ pub struct Environment {
     pub steps: Vec<Step>,
     #[serde(default)]
     pub network: NetworkSpec,
-}
-
-/// Build-time egress policy. `Allow` is unrestricted (no os_configure layer, no
-/// runtime privilege drop); `Deny` restricts egress to the `allow` CIDR list.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(tag = "mode", rename_all = "lowercase")]
-pub enum NetworkSpec {
-    #[default]
-    Allow,
-    Deny {
-        #[serde(default)]
-        allow: Vec<String>,
-    },
 }
 
 #[cfg(test)]
@@ -56,7 +44,10 @@ platform:
   kind: interactive
 network:
   mode: deny
-  allow: [\"10.0.0.0/8\", \"192.168.0.0/16\"]
+  allow:
+    - cidr: 10.0.0.0/8
+    - host: mirror.internal
+      ports: [80]
 ";
         let env: Environment = serde_yaml::from_str(yaml).unwrap();
         match env.network {

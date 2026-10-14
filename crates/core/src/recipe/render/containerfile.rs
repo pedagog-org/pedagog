@@ -21,8 +21,7 @@ impl Render for Containerfile {
     //   2. platform     — platform build steps (e.g. install code-server)
     //   3. toolchain    — each requested toolchain, in listed order
     //   4. assignment   — the assignment's own build steps
-    //   5. os_configure — network.transcribe (Deny allowlist); omitted when Allow
-    //   6. os_cleanup   — OS build cleanup; runs last
+    //   5. os_cleanup   — OS build cleanup; runs last
     // Then runtime metadata: EXPOSE ports, then USER + ENTRYPOINT (see render_runtime).
     fn render(spec: &ImageSpec, opts: &RenderOptions) -> Self {
         let mut to = String::new();
@@ -37,6 +36,7 @@ impl Render for Containerfile {
                 plan,
                 runtime,
                 ports,
+                ..
             } => {
                 let from = match opts.from {
                     FromSource::Standalone => upstream,
@@ -68,9 +68,6 @@ fn render_phases(to: &mut String, plan: &BuildPlan, from: FromSource) {
         &plan.toolchain.iter().collect::<Vec<_>>(),
     );
     render_phase(to, BuildPhase::Assignment, &[&plan.assignment]);
-    if let Some(configure) = &plan.os_configure {
-        render_phase(to, BuildPhase::OsConfigure, &[configure]);
-    }
     render_phase(to, BuildPhase::OsCleanup, &[&plan.os_cleanup]);
 }
 
@@ -125,25 +122,11 @@ fn render_from(to: &mut String, from: &str) {
     let _ = writeln!(to, "FROM {from}");
 }
 
-/// Emits `USER student` + exec-form ENTRYPOINT when there is no privileged
-/// startup; otherwise stays root and runs `pre_root` before dropping to the user
-/// with `gosu` (network.enable needs root, so we cannot switch user first).
 fn render_runtime(to: &mut String, rt: &Runtime) {
     let _ = writeln!(to);
-    if rt.pre_root.is_empty() {
-        let _ = writeln!(to, "USER {}", rt.user);
-        let words: Vec<&str> = rt.entrypoint.0.split_whitespace().collect();
-        let _ = writeln!(to, "ENTRYPOINT {}", exec_array(&words));
-    } else {
-        let mut chain: Vec<String> = rt.pre_root.iter().map(|c| c.0.clone()).collect();
-        chain.push(format!("exec gosu {u} {ep}", u = rt.user, ep = rt.entrypoint.0));
-        let script = chain.join(" && ");
-        let _ = writeln!(
-            to,
-            "ENTRYPOINT {}",
-            exec_array(&["/bin/sh", "-c", script.as_str()])
-        );
-    }
+    let _ = writeln!(to, "USER {}", rt.user);
+    let words: Vec<&str> = rt.entrypoint.0.split_whitespace().collect();
+    let _ = writeln!(to, "ENTRYPOINT {}", exec_array(&words));
 }
 
 fn exec_array(words: &[&str]) -> String {
@@ -163,7 +146,6 @@ fn layer_label(source: &LayerSource) -> String {
         LayerSource::Platform(kind) => format!("Platform: {kind}"),
         LayerSource::Toolchain(tc) => format!("Toolchain: {tc}"),
         LayerSource::Assignment(id) => format!("Assignment: {id}"),
-        LayerSource::OsConfigure(id) => format!("OS Configure: {id}"),
         LayerSource::OsCleanup(id) => format!("OS Cleanup: {id}"),
     }
 }
@@ -177,14 +159,15 @@ fn layer_env(source: &LayerSource) -> (String, String) {
         LayerSource::Platform(kind) => ("platform".to_owned(), kind.to_string()),
         LayerSource::Toolchain(tc) => ("toolchain".to_owned(), format!("{}/{}", tc.id, tc.version)),
         LayerSource::Assignment(id) => ("assignment".to_owned(), id.to_string()),
-        LayerSource::OsConfigure(id) => ("os".to_owned(), id.to_string()),
         LayerSource::OsCleanup(id) => ("os".to_owned(), id.to_string()),
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recipe::network::NetworkSpec;
     use crate::recipe::platform::PlatformKind;
     use crate::recipe::primitives::{Command, Id};
 
@@ -206,7 +189,7 @@ mod tests {
         }
     }
 
-    fn full_plan(os_configure: Option<Layer>) -> BuildPlan {
+    fn full_plan() -> BuildPlan {
         BuildPlan {
             os: os_layer(),
             platform: Layer {
@@ -218,11 +201,24 @@ mod tests {
                 source: LayerSource::Assignment(id("hw1")),
                 steps: vec![],
             },
-            os_configure,
             os_cleanup: Layer {
                 source: LayerSource::OsCleanup(id("ubuntu-22")),
                 steps: vec![],
             },
+        }
+    }
+
+    fn full_spec(entrypoint: &str, ports: Vec<u16>, network: NetworkSpec) -> ImageSpec {
+        ImageSpec::Full {
+            upstream: "ubuntu:22.04".to_owned(),
+            base_image: "pedagog/ubuntu:22".to_owned(),
+            plan: full_plan(),
+            runtime: Runtime {
+                user: "student".to_owned(),
+                entrypoint: Command(entrypoint.to_owned()),
+            },
+            ports,
+            network,
         }
     }
 
@@ -248,18 +244,8 @@ mod tests {
     }
 
     #[test]
-    fn full_standalone_allow_has_user_and_exec_entrypoint() {
-        let spec = ImageSpec::Full {
-            upstream: "ubuntu:22.04".to_owned(),
-            base_image: "pedagog/ubuntu:22".to_owned(),
-            plan: full_plan(None),
-            runtime: Runtime {
-                user: "student".to_owned(),
-                entrypoint: Command("code-server --bind 0.0.0.0:8080".to_owned()),
-                pre_root: vec![],
-            },
-            ports: vec![8080],
-        };
+    fn full_standalone_has_user_and_exec_entrypoint() {
+        let spec = full_spec("code-server --bind 0.0.0.0:8080", vec![8080], NetworkSpec::Allow);
         let out = Containerfile::render(&spec, &opts(None, FromSource::Standalone)).to_string();
         assert!(out.contains("FROM ubuntu:22.04"));
         assert!(out.contains("PHASE: BASE"));
@@ -274,18 +260,32 @@ mod tests {
     }
 
     #[test]
-    fn layers_emit_pedagog_env_for_vend() {
-        let spec = ImageSpec::Full {
-            upstream: "ubuntu:22.04".to_owned(),
-            base_image: "pedagog/ubuntu:22".to_owned(),
-            plan: full_plan(None),
-            runtime: Runtime {
-                user: "student".to_owned(),
-                entrypoint: Command("code-server".to_owned()),
-                pre_root: vec![],
-            },
-            ports: vec![],
+    fn full_prebuilt_skips_os_layer() {
+        let spec = full_spec("code-server", vec![], NetworkSpec::Allow);
+        let out = Containerfile::render(&spec, &opts(Some("localhost"), FromSource::PrebuiltBase))
+            .to_string();
+        assert!(out.contains("FROM localhost/pedagog/ubuntu:22"), "{out}");
+        assert!(!out.contains("PHASE: BASE"), "os layer baked into base image");
+    }
+
+    #[test]
+    fn network_policy_does_not_change_the_image() {
+        let render = |network| {
+            Containerfile::render(
+                &full_spec("code-server", vec![], network),
+                &opts(None, FromSource::Standalone),
+            )
+            .to_string()
         };
+        assert_eq!(
+            render(NetworkSpec::Allow),
+            render(NetworkSpec::Deny { allow: vec![] })
+        );
+    }
+
+    #[test]
+    fn layers_emit_pedagog_env_for_vend() {
+        let spec = full_spec("code-server", vec![], NetworkSpec::Allow);
         let out = Containerfile::render(&spec, &opts(None, FromSource::PrebuiltBase)).to_string();
         assert!(out.contains("ENV PEDAGOG_TYPE=platform"), "{out}");
         assert!(out.contains("ENV PEDAGOG_ID=interactive"), "{out}");
@@ -303,35 +303,5 @@ mod tests {
         };
         let out = Containerfile::render(&spec, &opts(None, FromSource::Standalone)).to_string();
         assert!(out.contains("RUN <<'EOF'\nif true; then\n  echo hi\nfi\nEOF"), "{out}");
-    }
-
-    #[test]
-    fn full_prebuilt_deny_drops_privileges_and_skips_os_layer() {
-        let configure = Layer {
-            source: LayerSource::OsConfigure(id("ubuntu-22")),
-            steps: vec![step("restrict", &["iptables -P OUTPUT DROP"])],
-        };
-        let spec = ImageSpec::Full {
-            upstream: "ubuntu:22.04".to_owned(),
-            base_image: "pedagog/ubuntu:22".to_owned(),
-            plan: full_plan(Some(configure)),
-            runtime: Runtime {
-                user: "student".to_owned(),
-                entrypoint: Command("code-server".to_owned()),
-                pre_root: vec![Command("iptables-restore < /etc/pedagog/network.rules".to_owned())],
-            },
-            ports: vec![],
-        };
-        let out = Containerfile::render(&spec, &opts(Some("localhost"), FromSource::PrebuiltBase))
-            .to_string();
-        assert!(out.contains("FROM localhost/pedagog/ubuntu:22"), "{out}");
-        assert!(!out.contains("PHASE: BASE"), "os layer baked into base image");
-        assert!(out.contains("PHASE: OS CONFIGURE"));
-        assert!(!out.contains("USER student"), "stays root to run iptables");
-        assert!(out.contains("exec gosu student"), "{out}");
-        assert!(
-            out.contains(r#"ENTRYPOINT ["/bin/sh","-c","iptables-restore"#),
-            "{out}"
-        );
     }
 }
