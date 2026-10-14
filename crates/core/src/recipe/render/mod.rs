@@ -1,6 +1,6 @@
 use strum_macros::Display;
 
-use crate::recipe::assignment::NetworkSpec;
+use crate::recipe::network::NetworkSpec;
 use crate::recipe::platform::PlatformKind;
 use crate::recipe::primitives::{command::Command, id::AssignmentId, OsId, ToolchainRef};
 
