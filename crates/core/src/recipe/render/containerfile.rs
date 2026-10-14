@@ -27,7 +27,7 @@ impl Render for Containerfile {
         let mut to = String::new();
         match spec {
             ImageSpec::Base { upstream, os, .. } => {
-                render_from(&mut to, &prefixed(opts.registry.as_deref(), upstream));
+                render_from(&mut to, upstream);
                 render_phase(&mut to, BuildPhase::Base, &[os]);
             }
             ImageSpec::Full {
@@ -38,11 +38,13 @@ impl Render for Containerfile {
                 ports,
                 ..
             } => {
+                // The registry prefix only applies to images pedagog builds;
+                // upstream images are pulled as written.
                 let from = match opts.from {
-                    FromSource::Standalone => upstream,
-                    FromSource::PrebuiltBase => base_image,
+                    FromSource::Standalone => Cow::from(upstream.as_str()),
+                    FromSource::PrebuiltBase => prefixed(opts.registry.as_deref(), base_image),
                 };
-                render_from(&mut to, &prefixed(opts.registry.as_deref(), from));
+                render_from(&mut to, &from);
                 render_phases(&mut to, plan, opts.from);
 
                 for port in ports {
@@ -266,6 +268,30 @@ mod tests {
             .to_string();
         assert!(out.contains("FROM localhost/pedagog/ubuntu:22"), "{out}");
         assert!(!out.contains("PHASE: BASE"), "os layer baked into base image");
+    }
+
+    #[test]
+    fn registry_never_prefixes_upstream() {
+        let base = ImageSpec::Base {
+            upstream: "ubuntu:22.04".to_owned(),
+            image: "pedagog/ubuntu:22".to_owned(),
+            os: os_layer(),
+        };
+        let out = Containerfile::render(&base, &opts(Some("localhost"), FromSource::Standalone))
+            .to_string();
+        assert!(out.starts_with("FROM ubuntu:22.04\n"), "{out}");
+
+        let full = full_spec("code-server", vec![], NetworkSpec::Allow);
+        let out = Containerfile::render(&full, &opts(Some("localhost"), FromSource::Standalone))
+            .to_string();
+        assert!(out.starts_with("FROM ubuntu:22.04\n"), "{out}");
+    }
+
+    #[test]
+    fn prebuilt_without_registry_is_unprefixed() {
+        let spec = full_spec("code-server", vec![], NetworkSpec::Allow);
+        let out = Containerfile::render(&spec, &opts(None, FromSource::PrebuiltBase)).to_string();
+        assert!(out.starts_with("FROM pedagog/ubuntu:22\n"), "{out}");
     }
 
     #[test]

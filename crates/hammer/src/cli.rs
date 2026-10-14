@@ -50,7 +50,8 @@ pub struct PlanArgs {
     #[arg(short = 'O', long, value_name = "FILE")]
     pub output: Option<PathBuf>,
 
-    /// Registry prefix for base image names in Containerfile output (e.g. localhost).
+    /// Registry holding pedagog-built base images (e.g. localhost). Prefixes the
+    /// pre-built base image only; upstream images are never prefixed.
     #[arg(long, value_name = "REGISTRY")]
     pub registry: Option<String>,
 
