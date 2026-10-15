@@ -32,10 +32,105 @@ pub struct BuildRun {
     pub image_ref: String,
 }
 
+/// Build stage of an assignment build attempt (`assignment_builds.build_status`).
+/// `Superseded` means a newer upload cancelled the attempt, at whatever stage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
+pub enum AssignmentBuildStatus {
+    Running,
+    Succeeded,
+    Failed,
+    Superseded,
+}
+
+/// Validation stage of an assignment build attempt (`assignment_builds.validation_status`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
+pub enum ValidationStatus {
+    /// Not started (or never will be, if the build failed).
+    Pending,
+    Running,
+    Passed,
+    /// The results are consistent, but the reference solution disagrees with the tests.
+    Failed,
+    /// No reference solution to validate against.
+    Skipped,
+    /// No results, or results that fail the format checks (untrusted).
+    Invalid,
+}
+
+impl ValidationStatus {
+    /// Whether a build that reached this status can become the assignment's current build.
+    pub fn is_usable(self) -> bool {
+        matches!(self, Self::Passed | Self::Skipped)
+    }
+}
+
+/// An `assignment_uploads` row: one distinct file tree of an assignment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssignmentUpload {
+    pub id: i64,
+    pub assignment_id: String,
+    pub tree_hash: String,
+    pub object_key: String,
+    pub size_bytes: i64,
+}
+
+/// An `assignment_builds` row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssignmentBuild {
+    pub id: i64,
+    pub assignment_id: String,
+    pub upload_id: i64,
+    pub image_hash: String,
+    pub image_ref: String,
+    pub build_status: AssignmentBuildStatus,
+    pub validation_status: ValidationStatus,
+    /// The parsed results as JSON text (kept as text so this crate needs no JSON library).
+    pub results: Option<String>,
+    pub validation_problems: Vec<String>,
+    pub error: Option<String>,
+    /// Whether the attempt (build and validation) is over.
+    pub finished: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[test]
+    fn assignment_statuses_roundtrip_lowercase() {
+        for s in [
+            AssignmentBuildStatus::Running,
+            AssignmentBuildStatus::Succeeded,
+            AssignmentBuildStatus::Failed,
+            AssignmentBuildStatus::Superseded,
+        ] {
+            assert_eq!(AssignmentBuildStatus::from_str(&s.to_string()).unwrap(), s);
+        }
+        assert_eq!(AssignmentBuildStatus::Superseded.to_string(), "superseded");
+        for s in [
+            ValidationStatus::Pending,
+            ValidationStatus::Running,
+            ValidationStatus::Passed,
+            ValidationStatus::Failed,
+            ValidationStatus::Skipped,
+            ValidationStatus::Invalid,
+        ] {
+            assert_eq!(ValidationStatus::from_str(&s.to_string()).unwrap(), s);
+        }
+    }
+
+    #[test]
+    fn only_passed_and_skipped_validations_are_usable() {
+        use ValidationStatus::*;
+        let usable: Vec<_> = [Pending, Running, Passed, Failed, Skipped, Invalid]
+            .into_iter()
+            .filter(|s| s.is_usable())
+            .collect();
+        assert_eq!(usable, [Passed, Skipped]);
+    }
 
     #[test]
     fn build_status_serializes_lowercase() {

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE assignment_builds\n            SET build_status = $2, error = $3,\n                finished_at = CASE WHEN $4 THEN NULL ELSE now() END\n          WHERE id = $1 AND finished_at IS NULL AND build_status = 'running'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "21afca9a96aafaabca764eae6611a0602cb20cc051e4d8365b514b8e7c6163b8"
+}

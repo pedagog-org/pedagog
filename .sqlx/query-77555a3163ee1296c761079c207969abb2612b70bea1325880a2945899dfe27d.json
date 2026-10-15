@@ -1,0 +1,139 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,\n                  validation_status, results::text AS \"results?\", validation_problems,\n                  error, finished_at IS NOT NULL AS \"finished!\"\n             FROM assignment_builds\n            WHERE assignment_id = $1 AND id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "assignment_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "assignment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "upload_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "upload_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "image_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "image_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "image_ref",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "image_ref"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "build_status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "build_status"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "validation_status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "validation_status"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "results?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "validation_problems",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "validation_problems"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "error"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "finished!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "77555a3163ee1296c761079c207969abb2612b70bea1325880a2945899dfe27d"
+}
