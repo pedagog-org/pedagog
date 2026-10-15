@@ -8,7 +8,7 @@ use clap::Parser;
 use miette::{GraphicalReportHandler, MietteDiagnostic, Report, Result, Severity, miette};
 
 use cli::{Cli, Command, Format, PlanArgs, VendArgs};
-use pedagog_core::recipe::assignment::{ArchivePath, AssignmentYaml, FileSources};
+use pedagog_core::recipe::assignment::{AssignmentYaml, FileSources};
 use pedagog_core::recipe::primitives::Id;
 use pedagog_core::recipe::render::containerfile::Containerfile;
 use pedagog_core::recipe::render::describe::Describe;
@@ -115,24 +115,8 @@ fn run_plan(args: PlanArgs) -> Result<()> {
 /// baked; a missing directory the assignment configured is an error (likely a typo).
 fn detect_files(assignment_path: &Path, sources: &FileSources) -> Result<AssignmentFiles> {
     let dir = assignment_path.parent().unwrap_or(Path::new("."));
-    let defaults = FileSources::default();
-    let find = |src: &ArchivePath, default: &ArchivePath| -> Result<Option<String>> {
-        if dir.join(src.as_str()).is_dir() {
-            Ok(Some(src.to_string()))
-        } else if src == default {
-            Ok(None)
-        } else {
-            Err(miette!(
-                "files: {src}/ not found next to {}",
-                assignment_path.display()
-            ))
-        }
-    };
-    Ok(AssignmentFiles {
-        starter: find(&sources.starter, &defaults.starter)?,
-        tests: find(&sources.tests, &defaults.tests)?,
-        solution: find(&sources.solution, &defaults.solution)?,
-    })
+    AssignmentFiles::detect(sources, |src| dir.join(src).is_dir())
+        .map_err(|e| miette!("{e} ({})", assignment_path.display()))
 }
 
 fn resolve_report(err: ResolveError) -> Report {

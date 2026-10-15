@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use strum_macros::Display;
 
-use crate::recipe::assignment::{AssignmentYaml, Testing};
+use crate::recipe::assignment::{ArchivePath, AssignmentYaml, FileSources, Testing};
 use crate::recipe::network::NetworkSpec;
 use crate::recipe::platform::PlatformKind;
 use crate::recipe::primitives::{OsId, ToolchainRef, command::Command, id::AssignmentId};
@@ -108,6 +108,31 @@ pub struct AssignmentFiles {
 impl AssignmentFiles {
     pub fn is_empty(&self) -> bool {
         self.starter.is_none() && self.tests.is_none() && self.solution.is_none()
+    }
+
+    /// Which source directories the archive has, given a test for "is this a
+    /// directory in the archive". A missing directory under its default name
+    /// just isn't baked; a missing directory the assignment configured is an
+    /// error (likely a typo).
+    pub fn detect(
+        sources: &FileSources,
+        is_dir: impl Fn(&str) -> bool,
+    ) -> Result<AssignmentFiles, String> {
+        let defaults = FileSources::default();
+        let find = |src: &ArchivePath, default: &ArchivePath| {
+            if is_dir(src.as_str()) {
+                Ok(Some(src.to_string()))
+            } else if src == default {
+                Ok(None)
+            } else {
+                Err(format!("files: {src}/ not found next to assignment.yml"))
+            }
+        };
+        Ok(AssignmentFiles {
+            starter: find(&sources.starter, &defaults.starter)?,
+            tests: find(&sources.tests, &defaults.tests)?,
+            solution: find(&sources.solution, &defaults.solution)?,
+        })
     }
 
     /// What the assignment requires of the archive: tests whenever `testing:`

@@ -62,7 +62,7 @@ environment:
       install: [cpptools]        # pre-installed at image build time; always in allowlist
       allow: [vim]               # in allowlist only; student may install from marketplace
   network:                 # runtime egress policy; enforced by the platform, not the image
-    mode: deny             # allow (default, unrestricted) | deny
+    mode: deny             # deny (default: no egress) | allow (unrestricted)
     allow:
       - host: mirror.internal
         ports: [80]
@@ -159,10 +159,11 @@ The `assignment:` block is treated as a **suggestion**. When an instructor publi
 ### Network: Build-Time and Runtime
 
 - `environment.network` serves as the **default** for both build time and runtime. It never changes the image: no firewall rules are baked in, and containers never need `NET_ADMIN`.
-- At build time: intended to apply when the builder runs the solution validation step (deferred until the builder exists; image build steps currently have network access).
+- At build time: it applies to the validation run (the reference solution against the tests); image build steps themselves keep network access for package installs.
+- Omitted, it denies all egress (`mode: deny` with no rules).
 - At runtime: the YAML value is the starting point, but the platform UI can override it independently. The current runtime policy is fetched from the platform and applied as a Kubernetes network policy just before handing off the container to the student. It can be updated without a rebuild.
 - Schema: `mode: allow | deny`. Under `deny`, each `allow` entry is exactly one of `host` (RFC 1123 hostname, optionally with a single leading `*.`) or `cidr` (IPv4/IPv6), plus optional `ports` (TCP; omitted = all ports). `hammer` validates the policy and shows it in `describe`.
-- Open: standard NetworkPolicy matches CIDRs and ports only. `host` entries need an FQDN-aware CNI (e.g. Cilium) or an egress proxy, and the cluster's CNI must actually enforce NetworkPolicy.
+- Enforcement: `allow` and `cidr` entries map to Kubernetes NetworkPolicies (k3s and kind both enforce them). `host` entries need an egress proxy (a planned follow-up); until it exists they're accepted but **not enforced**, so those hosts stay unreachable, and `hammer upload` warns about them.
 
 ### Assignment Updates
 
