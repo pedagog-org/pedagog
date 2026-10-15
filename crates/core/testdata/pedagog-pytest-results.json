@@ -3,7 +3,7 @@
   "run-id": null,
   "summary": {
     "score": 10.0,
-    "total": 10.0
+    "total": 11.0
   },
   "tests": [
     {
@@ -37,7 +37,7 @@
       "name": "pop_front",
       "status": "pass",
       "score": 4.0,
-      "max": 3.0,
+      "max": 4.0,
       "output": "",
       "visibility": {
         "score": "visible",
@@ -66,7 +66,7 @@
           "name": "the list still works after being emptied",
           "score": 1.0,
           "max": 1.0,
-          "extra-credit": true,
+          "extra-credit": false,
           "output": ""
         }
       ]

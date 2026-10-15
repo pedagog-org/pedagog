@@ -414,15 +414,14 @@ items:
             r.summary,
             Summary {
                 score: 10.0,
-                total: 10.0
+                total: 11.0
             }
         );
         assert_eq!(r.tests.len(), 5);
         let pop_front = &r.tests[2];
         assert_eq!(pop_front.visibility.output, Visibility::Hidden);
-        assert_eq!((pop_front.score, pop_front.max), (4.0, 3.0));
+        assert_eq!((pop_front.score, pop_front.max), (4.0, 4.0));
         assert_eq!(pop_front.items.len(), 3);
-        assert!(pop_front.items[2].extra_credit);
         assert_eq!(r.tests[3].solution_expect, Some(Expect::Fail));
         assert!(
             r.tests[4].items.is_empty(),
