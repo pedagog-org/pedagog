@@ -5,6 +5,9 @@ use std::path::PathBuf;
 
 use pedagog_core::env::Env;
 use pedagog_k8s::build::BuildEnv;
+use pedagog_store::objects::ObjectsConfig;
+
+use crate::archive::Limits;
 
 pub const DATABASE_URL: &str = "DATABASE_URL";
 pub const RECIPES_DIR: &str = "PEDAGOG_RECIPES_DIR";
@@ -13,11 +16,19 @@ pub const REGISTRY: &str = "PEDAGOG_REGISTRY";
 pub const JOBS_IMAGE: &str = "PEDAGOG_JOBS_IMAGE";
 pub const RECIPES_HOSTPATH: &str = "PEDAGOG_RECIPES_HOSTPATH";
 pub const LISTEN_ADDR: &str = "PEDAGOG_LISTEN_ADDR";
+pub const MAX_UPLOAD_BYTES: &str = "PEDAGOG_MAX_UPLOAD_BYTES";
+pub const MAX_UNPACKED_BYTES: &str = "PEDAGOG_MAX_UNPACKED_BYTES";
+pub const MAX_UPLOAD_FILES: &str = "PEDAGOG_MAX_UPLOAD_FILES";
 
 const DEFAULT_RECIPES_DIR: &str = "/opt/pedagog/recipes";
 const DEFAULT_NAMESPACE: &str = "pedagog-builds";
 const DEFAULT_REGISTRY: &str = "registry-service.pedagog-data.svc:5000";
 const DEFAULT_LISTEN: &str = "0.0.0.0:8080";
+const DEFAULT_LIMITS: Limits = Limits {
+    max_compressed_bytes: 50 << 20,
+    max_unpacked_bytes: 200 << 20,
+    max_files: 10_000,
+};
 
 pub struct Config {
     pub env: Env,
@@ -30,6 +41,10 @@ pub struct Config {
     /// dev: node path to the recipes checkout mounted into Kaniko.
     pub recipes_hostpath: Option<String>,
     pub listen_addr: String,
+    /// Garage, for assignment archives and run results.
+    pub objects: ObjectsConfig,
+    /// Upload limits (compressed, unpacked, file count).
+    pub limits: Limits,
 }
 
 impl Config {
@@ -45,6 +60,15 @@ impl Config {
             jobs_image: std::env::var(JOBS_IMAGE).unwrap_or_default(),
             recipes_hostpath: std::env::var(RECIPES_HOSTPATH).ok(),
             listen_addr: var_or(LISTEN_ADDR, DEFAULT_LISTEN),
+            objects: ObjectsConfig::from_env().map_err(|e| anyhow::anyhow!(e))?,
+            limits: Limits {
+                max_compressed_bytes: num_or(
+                    MAX_UPLOAD_BYTES,
+                    DEFAULT_LIMITS.max_compressed_bytes,
+                )?,
+                max_unpacked_bytes: num_or(MAX_UNPACKED_BYTES, DEFAULT_LIMITS.max_unpacked_bytes)?,
+                max_files: num_or(MAX_UPLOAD_FILES, DEFAULT_LIMITS.max_files)?,
+            },
         })
     }
 
@@ -54,6 +78,15 @@ impl Config {
             jobs_image: self.jobs_image.clone(),
             recipes_hostpath: self.recipes_hostpath.clone(),
         }
+    }
+}
+
+fn num_or<T: std::str::FromStr>(key: &str, default: T) -> anyhow::Result<T> {
+    match std::env::var(key) {
+        Ok(v) => v
+            .parse()
+            .map_err(|_| anyhow::anyhow!("{key} must be a number, got {v:?}")),
+        Err(_) => Ok(default),
     }
 }
 

@@ -16,12 +16,17 @@ anyhow = "1"
 axum = "0.8"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
+flate2 = "1"
 ipnet = "2"
 k8s-openapi = { version = "0.28", features = ["v1_32"] } # nearest offered ≥ cluster k3s 1.31 (see docs/SETUP.md)
 kube = { version = "4", features = ["client", "runtime", "rustls-tls"] }
 miette = { version = "7", features = ["fancy"] }
 object_store = { version = "0.14", default-features = false, features = ["aws"] }
 regex = "1"
+# Same version object_store already pulls in.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+# jobs installs the ring provider explicitly (see crates/jobs/src/main.rs).
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -30,6 +35,7 @@ sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "macros", "migrate"] }
 strum = "0.26"
 strum_macros = "0.26"
+tar = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

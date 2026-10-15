@@ -1,6 +1,7 @@
-//! HTTP surface — the dispatch-and-return rebuild endpoint.
+//! HTTP surface: the dispatch-and-return rebuild endpoint and assignment uploads.
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
@@ -8,11 +9,17 @@ use axum::routing::post;
 use serde::Deserialize;
 
 use crate::dispatch::dispatch;
+use crate::intake;
 use crate::state::AppState;
 
 pub fn router(state: AppState) -> Router {
+    let max_upload = state.config.limits.max_compressed_bytes;
     Router::new()
         .route("/internal/recipes/rebuild", post(rebuild))
+        .route(
+            "/internal/assignments",
+            post(intake::upload).layer(DefaultBodyLimit::max(max_upload)),
+        )
         .with_state(state)
 }
 
