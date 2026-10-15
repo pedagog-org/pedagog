@@ -1,0 +1,64 @@
+{
+  "submission-id": null,
+  "run-id": null,
+  "summary": {
+    "score": 7.0,
+    "total": 8.0
+  },
+  "tests": [
+    {
+      "id": "test_linked_list.py::test_append_and_to_list",
+      "name": "append keeps insertion order",
+      "status": "pass",
+      "score": 2.0,
+      "max": 2.0,
+      "output": "",
+      "visibility": {
+        "score": "visible",
+        "output": "after_end"
+      },
+      "number": "1"
+    },
+    {
+      "id": "test_linked_list.py::test_len",
+      "name": "len counts elements",
+      "status": "pass",
+      "score": 2.0,
+      "max": 2.0,
+      "output": "",
+      "visibility": {
+        "score": "visible",
+        "output": "after_end"
+      },
+      "number": "2"
+    },
+    {
+      "id": "test_linked_list.py::test_pop_front",
+      "name": "pop_front removes from the front and raises when empty",
+      "status": "pass",
+      "score": 3.0,
+      "max": 3.0,
+      "output": "",
+      "visibility": {
+        "score": "visible",
+        "output": "hidden"
+      },
+      "number": "3"
+    },
+    {
+      "id": "test_linked_list.py::test_reverse_stretch_goal",
+      "name": "stretch goal: reverse() (the reference solution doesn't implement it)",
+      "status": "fail",
+      "score": 0.0,
+      "max": 1.0,
+      "output": "@weight(1)\n    @number(4)\n    @solution_expect(\"fail\")\n    def test_reverse_stretch_goal():\n        \"\"\"stretch goal: reverse() (the reference solution doesn't implement it)\"\"\"\n        items = LinkedList()\n        items.append(1)\n        items.append(2)\n>       items.reverse()\n        ^^^^^^^^^^^^^\n\n/pedagog/tests/test_linked_list.py:51: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n/opt/pedagog/pytest/lib/python3.12/site-packages/pedagog_pytest/isolation/client.py:135: in __getattr__\n    return session.unpack(session.root.getattr(self._pedagog_handle(), name))\n                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/opt/pedagog/pytest/lib/python3.12/site-packages/rpyc/core/netref.py:239: in __call__\n    return syncreq(_self, consts.HANDLE_CALL, args, kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/opt/pedagog/pytest/lib/python3.12/site-packages/rpyc/core/netref.py:63: in syncreq\n    return conn.sync_request(handler, proxy, *args)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/opt/pedagog/pytest/lib/python3.12/site-packages/rpyc/core/protocol.py:744: in sync_request\n    return _async_res.value\n           ^^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <AsyncResult object (ready) at 0xffff9c213ce0>\n\n    @property\n    def value(self):\n        \"\"\"Returns the result of the operation. If the result has not yet\n        arrived, accessing this property will wait for it. If the result does\n        not arrive before the expiry time elapses, :class:`AsyncResultTimeout`\n        is raised. If the returned result is an exception, it will be raised\n        here. Otherwise, the result is returned directly.\n        \"\"\"\n        self.wait()\n        if self._is_exc:\n>           raise self._obj\nE           _get_exception_class.<locals>.Derived: 'LinkedList' object has no attribute 'reverse'\nE           \nE           ========= Remote Traceback (1) =========\nE           Traceback (most recent call last):\nE             File \"/opt/pedagog/pytest/lib/python3.12/site-packages/rpyc/core/protocol.py\", line 369, in _dispatch_request\nE               res = self._HANDLERS[handler](self, *args)\nE                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE             File \"/opt/pedagog/pytest/lib/python3.12/site-packages/rpyc/core/protocol.py\", line 863, in _handle_call\nE               return obj(*args, **dict(kwargs))\nE                      ^^^^^^^^^^^^^^^^^^^^^^^^^^\nE             File \"/opt/pedagog/pytest/lib/python3.12/site-packages/pedagog_pytest/isolation/server.py\", line 117, in exposed_getattr\nE               return self._describe(getattr(self.objects[handle], name))\nE                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE           AttributeError: 'LinkedList' object has no attribute 'reverse'\n\n/opt/pedagog/pytest/lib/python3.12/site-packages/rpyc/core/async_.py:111: AttributeError",
+      "visibility": {
+        "score": "visible",
+        "output": "after_end"
+      },
+      "number": "4",
+      "solution-expect": "fail"
+    }
+  ],
+  "artifacts": []
+}

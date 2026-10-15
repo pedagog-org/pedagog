@@ -270,4 +270,25 @@ artifacts:
         let json = serde_json::to_string(&r).unwrap();
         assert_eq!(serde_json::from_str::<Results>(&json).unwrap(), r);
     }
+
+    /// Real output of the pedagog-pytest helper (examples/linked-list-python
+    /// validated against its solution), so the Python and Rust sides of the
+    /// results format can't drift apart unnoticed.
+    #[test]
+    fn parses_real_pedagog_pytest_output() {
+        let r: Results =
+            serde_yaml::from_str(include_str!("../testdata/pedagog-pytest-results.json")).unwrap();
+        assert!(r.problems().is_empty(), "{:?}", r.problems());
+        assert_eq!(
+            r.summary,
+            Summary {
+                score: 7.0,
+                total: 8.0
+            }
+        );
+        assert_eq!(r.tests.len(), 4);
+        assert_eq!(r.tests[2].visibility.output, Visibility::Hidden);
+        assert_eq!(r.tests[3].solution_expect, Some(Expect::Fail));
+        assert!(r.solution_mismatches().is_empty(), "the example validates");
+    }
 }
