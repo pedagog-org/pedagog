@@ -42,6 +42,10 @@ pub fn run_vend(args: VendArgs, dirs: Vec<PathBuf>) -> Result<()> {
                 .map_err(|e| miette!("failed to create {}: {}", out_dir.display(), e))?;
             let out_path = out_dir.join(&ingredient.output);
             print!("Vending {} ... {} ", target.label, ingredient.output);
+            if is_cached(ingredient, &out_path) {
+                println!("✓ (cached)");
+                continue;
+            }
             let fetched = fetch(ingredient, &out_path).and_then(|()| match &ingredient.sha256 {
                 Some(expected) => verify_sha256(&out_path, expected),
                 None => Ok(()),
@@ -78,6 +82,15 @@ fn fetch(ingredient: &Ingredient, out_path: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// A previously vended file is reused only when the recipe pins its checksum
+/// and the file still matches (otherwise it's deleted and fetched again).
+fn is_cached(ingredient: &Ingredient, path: &Path) -> bool {
+    match &ingredient.sha256 {
+        Some(expected) if path.exists() => verify_sha256(path, expected).is_ok(),
+        _ => false,
+    }
 }
 
 /// Refuses (and deletes) a download whose SHA-256 isn't the recipe's.
@@ -246,6 +259,34 @@ mod tests {
         let path = scratch_file("ok", b"hello");
         verify_sha256(&path, HELLO).unwrap();
         assert!(path.exists());
+    }
+
+    fn ingredient(sha256: Option<&str>) -> Ingredient {
+        let yaml = match sha256 {
+            Some(s) => format!("output: f\nurl: 'https://example.com/f'\nsha256: {s}\n"),
+            None => "output: f\nurl: 'https://example.com/f'\n".to_owned(),
+        };
+        serde_yaml::from_str(&yaml).unwrap()
+    }
+
+    #[test]
+    fn only_pinned_matching_files_count_as_cached() {
+        let path = scratch_file("cache", b"hello");
+        assert!(is_cached(&ingredient(Some(HELLO)), &path));
+        assert!(
+            !is_cached(&ingredient(None), &path),
+            "unpinned: always refetch"
+        );
+        let other = "0".repeat(64);
+        assert!(
+            !is_cached(&ingredient(Some(&other)), &path),
+            "stale: refetch"
+        );
+        assert!(!path.exists(), "a stale file is removed");
+        assert!(
+            !is_cached(&ingredient(Some(HELLO)), &path),
+            "missing: fetch"
+        );
     }
 
     #[test]
