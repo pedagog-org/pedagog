@@ -20,13 +20,22 @@ pub const MAX_UPLOAD_BYTES: &str = "PEDAGOG_MAX_UPLOAD_BYTES";
 pub const MAX_UNPACKED_BYTES: &str = "PEDAGOG_MAX_UNPACKED_BYTES";
 pub const MAX_UPLOAD_FILES: &str = "PEDAGOG_MAX_UPLOAD_FILES";
 pub const ASSIGNMENT_BUILD_DEADLINE: &str = "PEDAGOG_ASSIGNMENT_BUILD_DEADLINE";
+pub const VALIDATION_DEADLINE: &str = "PEDAGOG_VALIDATION_DEADLINE";
+pub const VALIDATION_CPU: &str = "PEDAGOG_VALIDATION_CPU";
+pub const VALIDATION_MEMORY: &str = "PEDAGOG_VALIDATION_MEMORY";
+pub const CLUSTER_CIDRS: &str = "PEDAGOG_CLUSTER_CIDRS";
 
 const DEFAULT_RECIPES_DIR: &str = "/opt/pedagog/recipes";
 const DEFAULT_NAMESPACE: &str = "pedagog-builds";
 const DEFAULT_REGISTRY: &str = "registry-service.pedagog-data.svc:5000";
 const DEFAULT_LISTEN: &str = "0.0.0.0:8080";
-/// Fallback until assignments can set their own (seconds).
+// Fallbacks until assignments can set their own.
 const DEFAULT_ASSIGNMENT_BUILD_DEADLINE: u64 = 1800;
+const DEFAULT_VALIDATION_DEADLINE: u64 = 600;
+const DEFAULT_VALIDATION_CPU: &str = "1";
+const DEFAULT_VALIDATION_MEMORY: &str = "1Gi";
+/// k3s' default pod and service ranges.
+const DEFAULT_CLUSTER_CIDRS: &str = "10.42.0.0/16,10.43.0.0/16";
 pub const DEFAULT_LIMITS: Limits = Limits {
     max_compressed_bytes: 50 << 20,
     max_unpacked_bytes: 200 << 20,
@@ -50,6 +59,16 @@ pub struct Config {
     pub limits: Limits,
     /// An assignment build Job's `activeDeadlineSeconds`.
     pub assignment_build_deadline: std::time::Duration,
+    pub validation: ValidationConfig,
+    /// The cluster's own pod and service ranges, excluded from `mode: allow` egress.
+    pub cluster_cidrs: Vec<String>,
+}
+
+pub struct ValidationConfig {
+    /// A validation Job's `activeDeadlineSeconds`.
+    pub deadline: std::time::Duration,
+    pub cpu: String,
+    pub memory: String,
 }
 
 impl Config {
@@ -78,6 +97,19 @@ impl Config {
                 ASSIGNMENT_BUILD_DEADLINE,
                 DEFAULT_ASSIGNMENT_BUILD_DEADLINE,
             )?),
+            validation: ValidationConfig {
+                deadline: std::time::Duration::from_secs(num_or(
+                    VALIDATION_DEADLINE,
+                    DEFAULT_VALIDATION_DEADLINE,
+                )?),
+                cpu: var_or(VALIDATION_CPU, DEFAULT_VALIDATION_CPU),
+                memory: var_or(VALIDATION_MEMORY, DEFAULT_VALIDATION_MEMORY),
+            },
+            cluster_cidrs: var_or(CLUSTER_CIDRS, DEFAULT_CLUSTER_CIDRS)
+                .split(',')
+                .map(|c| c.trim().to_owned())
+                .filter(|c| !c.is_empty())
+                .collect(),
         })
     }
 

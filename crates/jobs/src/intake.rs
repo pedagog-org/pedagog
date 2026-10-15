@@ -1,10 +1,11 @@
 //! `POST /internal/assignments[?force=true]`: accept an assignment archive,
 //! check it, store it in Garage, and dispatch its build.
+//! `GET /internal/assignments/{id}/builds/{build}`: an attempt's progress and outcome.
 
 use std::path::Path;
 
 use axum::body::Bytes;
-use axum::extract::{Query, State};
+use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use pedagog_core::recipe::assignment::AssignmentYaml;
@@ -19,6 +20,8 @@ use serde::{Deserialize, Serialize};
 use crate::archive::{self, ArchiveError, Limits};
 use crate::assignments::{self, Decision, Plan};
 use crate::state::AppState;
+use pedagog_core::recipe::network::{EgressTarget, NetworkSpec};
+use pedagog_k8s::validate::Egress;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct Uploaded {
@@ -45,6 +48,7 @@ pub struct Checked {
     pub tree_hash: String,
     /// Rendered FROM the prebuilt OS image in `registry`.
     pub containerfile: String,
+    pub has_solution: bool,
     pub warnings: Vec<String>,
 }
 
@@ -129,6 +133,7 @@ pub fn check_upload(
         assignment,
         tree_hash: inspected.tree_hash,
         containerfile,
+        has_solution: files.solution.is_some(),
         warnings,
     })
 }
@@ -163,14 +168,9 @@ pub async fn upload(
         .map_err(|e| internal("recording the upload", e))?;
     tracing::info!(assignment = %id, upload = upload.id, tree = %checked.tree_hash, "upload stored");
 
-    let plan = Plan {
-        assignment_id: id.clone(),
-        upload_id: upload.id,
-        tree_hash: checked.tree_hash.clone(),
-        object_key: key,
-        containerfile: checked.containerfile,
-        force: query.force,
-    };
+    let tree_hash = checked.tree_hash.clone();
+    let warnings = checked.warnings.clone();
+    let plan = Plan::from_checked(checked, upload.id, key, query.force);
     let build = assignments::dispatch(&state, plan)
         .await
         .map_err(|e| internal("dispatching the build", e))?;
@@ -178,12 +178,108 @@ pub async fn upload(
     let reply = Uploaded {
         assignment_id: id,
         upload_id: upload.id,
-        tree_hash: checked.tree_hash,
+        tree_hash,
         size_bytes: size,
-        warnings: checked.warnings,
+        warnings,
         build,
     };
     Ok((StatusCode::CREATED, Json(reply)).into_response())
+}
+
+/// How much of a failed build's log the status endpoint returns.
+const ERROR_TAIL: usize = 4000;
+
+#[derive(Debug, Serialize)]
+pub struct BuildStatus {
+    pub id: i64,
+    pub assignment_id: String,
+    pub image_ref: String,
+    pub build_status: String,
+    pub validation_status: String,
+    pub finished: bool,
+    /// Whether this is the assignment's current (usable) build.
+    pub current: bool,
+    pub error: Option<String>,
+    pub validation_problems: Vec<String>,
+    /// The parsed results.yaml, when trusted.
+    pub results: Option<serde_json::Value>,
+}
+
+pub async fn build_status(
+    State(state): State<AppState>,
+    UrlPath((id, build)): UrlPath<(String, i64)>,
+) -> Result<Response, Refused> {
+    let row = db::get_build(&state.pool, &id, build)
+        .await
+        .map_err(|e| internal("reading the build", e))?
+        .ok_or_else(|| refused(StatusCode::NOT_FOUND, format!("{id} has no build {build}")))?;
+    let current = db::current_build_id(&state.pool, &id)
+        .await
+        .map_err(|e| internal("reading the assignment", e))?
+        == Some(row.id);
+    let reply = BuildStatus {
+        id: row.id,
+        assignment_id: row.assignment_id,
+        image_ref: row.image_ref,
+        build_status: row.build_status.to_string(),
+        validation_status: row.validation_status.to_string(),
+        finished: row.finished,
+        current,
+        error: row
+            .error
+            .map(|e| e[e.len().saturating_sub(ERROR_TAIL)..].to_owned()),
+        validation_problems: row.validation_problems,
+        results: row.results.and_then(|r| serde_json::from_str(&r).ok()),
+    };
+    Ok(Json(reply).into_response())
+}
+
+impl Plan {
+    pub fn from_checked(checked: Checked, upload_id: i64, object_key: String, force: bool) -> Self {
+        let egress = egress(&checked.assignment.environment.network);
+        let isolation = checked
+            .assignment
+            .testing
+            .as_ref()
+            .map(|t| t.isolation.to_string())
+            .unwrap_or_else(|| "process".to_owned());
+        Plan {
+            assignment_id: checked.assignment.id.to_string(),
+            upload_id,
+            tree_hash: checked.tree_hash,
+            object_key,
+            containerfile: checked.containerfile,
+            has_solution: checked.has_solution,
+            isolation,
+            egress,
+            force,
+        }
+    }
+}
+
+/// `environment.network` as validation-pod egress. Host rules need the egress
+/// proxy and aren't enforced yet, so they grant nothing (fail closed).
+fn egress(network: &NetworkSpec) -> Egress {
+    match network {
+        NetworkSpec::Allow => Egress::Internet,
+        NetworkSpec::Deny { allow } => {
+            let cidrs: Vec<(String, Vec<u16>)> = allow
+                .iter()
+                .filter_map(|rule| match &rule.target {
+                    EgressTarget::Cidr(net) => Some((
+                        net.to_string(),
+                        rule.ports.iter().map(|p| p.get()).collect(),
+                    )),
+                    EgressTarget::Host(_) => None,
+                })
+                .collect();
+            if cidrs.is_empty() {
+                Egress::Deny
+            } else {
+                Egress::Cidrs(cidrs)
+            }
+        }
+    }
 }
 
 fn internal(what: &str, e: impl std::fmt::Display) -> Refused {
@@ -271,6 +367,24 @@ mod tests {
             status(&example(&[], Some(unknown_toolchain))),
             StatusCode::UNPROCESSABLE_ENTITY,
             "doesn't resolve against jobs' recipes"
+        );
+    }
+
+    #[test]
+    fn network_maps_to_validation_egress() {
+        let spec = |yaml: &str| serde_yaml::from_str::<NetworkSpec>(yaml).unwrap();
+        assert_eq!(egress(&NetworkSpec::default()), Egress::Deny);
+        assert_eq!(egress(&spec("mode: allow\n")), Egress::Internet);
+        assert_eq!(
+            egress(&spec("mode: deny\nallow:\n  - host: pypi.org\n")),
+            Egress::Deny,
+            "host rules grant nothing yet"
+        );
+        assert_eq!(
+            egress(&spec(
+                "mode: deny\nallow:\n  - cidr: 10.20.0.0/16\n    ports: [5432]\n  - host: a.com\n"
+            )),
+            Egress::Cidrs(vec![("10.20.0.0/16".into(), vec![5432])])
         );
     }
 

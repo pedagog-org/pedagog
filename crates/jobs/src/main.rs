@@ -84,6 +84,22 @@ async fn serve() -> anyhow::Result<()> {
         }
     }
 
+    if let Err(e) = state
+        .builder
+        .apply_validation_policies(&state.config.cluster_cidrs)
+        .await
+    {
+        tracing::error!(error = %e, "installing the validation network policies failed");
+    }
+    // Resume assignment attempts interrupted by a restart (both envs: they're
+    // driven by uploads, not the live recipes checkout).
+    let reconciling = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = assignments::reconcile(&reconciling).await {
+            tracing::error!(error = %e, "assignment reconcile failed");
+        }
+    });
+
     let addr = state.config.listen_addr.clone();
     let listener = TcpListener::bind(&addr).await?;
     tracing::info!(%addr, "listening");

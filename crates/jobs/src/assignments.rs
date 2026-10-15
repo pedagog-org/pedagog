@@ -1,22 +1,29 @@
 //! Assignment builds: decide whether an upload needs a build, supersede an
-//! attempt in flight, and drive the Kaniko Job to completion.
+//! attempt in flight, drive the Kaniko Job, then validate the image by running
+//! the reference solution against the tests, and judge its results.
 //!
-//! Validation (running the reference solution) comes next; until then a
-//! successful build ends its attempt with validation still `pending`.
+//! Each stage can be resumed from the database and the cluster after a restart
+//! ([`reconcile`]).
 
 use std::time::Duration;
 
-use pedagog_k8s::build::{BuildRequest, Context, IfBuilt, JobKey, Outcome, Waited};
-use pedagog_store::ValidationStatus;
+use pedagog_core::results::Results;
+use pedagog_k8s::build::{BuildRequest, Context, IfBuilt, JobKey, JobState, Waited};
+use pedagog_k8s::validate::{Egress, ValidationRequest};
 use pedagog_store::db::assignments as db;
+use pedagog_store::objects::results_key;
+use pedagog_store::{AssignmentBuild, AssignmentBuildStatus, AssignmentUpload, ValidationStatus};
 use serde::Serialize;
 
+use crate::intake;
 use crate::state::AppState;
 
-/// Extra validity for the archive's presigned GET beyond the build deadline.
+/// Extra validity for presigned URLs beyond their Job's deadline.
 const URL_MARGIN: Duration = Duration::from_secs(600);
+/// How much of a failed validation pod's log is kept with its problems.
+const LOG_TAIL: usize = 4000;
 
-/// An upload, rendered and ready to build.
+/// An upload, rendered and ready to build and validate.
 #[derive(Clone, Debug)]
 pub struct Plan {
     pub assignment_id: String,
@@ -24,6 +31,10 @@ pub struct Plan {
     pub tree_hash: String,
     pub object_key: String,
     pub containerfile: String,
+    pub has_solution: bool,
+    /// `process` or `in-process`.
+    pub isolation: String,
+    pub egress: Egress,
     pub force: bool,
 }
 
@@ -67,88 +78,306 @@ pub async fn dispatch(state: &AppState, plan: Plan) -> anyhow::Result<Decision> 
         return Ok(Decision::AlreadyBuilt { build_id });
     }
     if let Some(running) = db::in_flight_for(&state.pool, id).await? {
-        // Latest upload wins: stop the older attempt's Job and mark it superseded.
-        if let Err(e) = state
-            .builder
-            .remove(&JobKey::assignment(id, &running.image_hash))
-            .await
-        {
-            tracing::warn!(assignment = %id, build = running.id, error = %e, "deleting a superseded Job failed");
-        }
-        db::supersede(&state.pool, running.id).await?;
-        tracing::info!(assignment = %id, build = running.id, "superseded");
+        supersede(state, &running).await?;
     }
     let image_ref = plan.image_ref(&state.config.registry);
     let build_id =
         db::start_build(&state.pool, id, plan.upload_id, &image_hash, &image_ref).await?;
     tracing::info!(assignment = %id, build = build_id, image = %image_ref, "build dispatched");
-    let state = state.clone();
-    tokio::spawn(async move {
-        if let Err(e) = run_build(&state, build_id, &plan, &image_hash, &image_ref).await {
-            tracing::error!(build = build_id, error = %e, "build failed to run");
-            let _ = db::finish_build(&state.pool, build_id, false, Some(&e.to_string())).await;
-        }
-    });
+    spawn(state, build_id, plan, Resume::Build);
     Ok(Decision::Dispatched { build_id })
 }
 
-async fn run_build(
-    state: &AppState,
-    build_id: i64,
-    plan: &Plan,
-    image_hash: &str,
-    image_ref: &str,
-) -> anyhow::Result<()> {
-    let deadline = state.config.assignment_build_deadline;
-    let url = state
-        .objects
-        .presign_get(&plan.object_key, deadline + URL_MARGIN)
-        .await?;
-    let key = JobKey::assignment(&plan.assignment_id, image_hash);
-    let request = BuildRequest {
-        dest: image_ref.to_owned(),
-        containerfile: plan.containerfile.clone(),
-        context: Context::Archive {
-            url: url.to_string(),
-            tree_hash: plan.tree_hash.clone(),
-        },
-        deadline: Some(deadline),
-        // A Job that already built this image is reused unless forced.
-        if_built: if plan.force {
-            IfBuilt::Rebuild
-        } else {
-            IfBuilt::Skip
-        },
-    };
-    let outcome = state.builder.ensure(&key, &request).await?;
-    tracing::info!(build = build_id, ?outcome, "build Job ensured");
-    let waited = match outcome {
-        Outcome::Created | Outcome::Retried | Outcome::Skipped => {
-            state.builder.wait(&key, Some(deadline)).await?
+/// Latest upload wins: stop the older attempt's Jobs and mark it superseded.
+async fn supersede(state: &AppState, running: &AssignmentBuild) -> anyhow::Result<()> {
+    let id = &running.assignment_id;
+    for key in [
+        JobKey::assignment(id, &running.image_hash),
+        JobKey::validation(id, running.id),
+    ] {
+        if let Err(e) = state.builder.remove(&key).await {
+            tracing::warn!(build = running.id, error = %e, "deleting a superseded Job failed");
         }
-    };
-    match waited {
-        Waited::Succeeded => {
-            if db::finish_build(&state.pool, build_id, true, None).await? {
-                tracing::info!(build = build_id, "image built");
-                let note = ["validation isn't implemented yet".to_owned()];
-                db::finish_validation(
-                    &state.pool,
-                    build_id,
-                    ValidationStatus::Pending,
-                    None,
-                    &note,
-                )
-                .await?;
+    }
+    db::supersede(&state.pool, running.id).await?;
+    tracing::info!(assignment = %id, build = running.id, "superseded");
+    Ok(())
+}
+
+/// Where an attempt picks up.
+#[derive(Clone, Copy, Debug)]
+enum Resume {
+    /// Ensure the build Job (reusing one that already built this image unless forced).
+    Build,
+    /// The build Job exists; wait for it.
+    AwaitBuild,
+    /// The image is built; start validation.
+    Validate,
+    /// The validation Job exists (or ran); wait for it and judge its results.
+    AwaitValidation,
+}
+
+fn spawn(state: &AppState, build_id: i64, plan: Plan, from: Resume) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = run(&state, build_id, &plan, from).await {
+            tracing::error!(build = build_id, error = %e, "build attempt failed to run");
+            let message = e.to_string();
+            match from {
+                Resume::Build | Resume::AwaitBuild => {
+                    let _ = db::finish_build(&state.pool, build_id, false, Some(&message)).await;
+                }
+                Resume::Validate | Resume::AwaitValidation => {
+                    let problems = [format!("validation couldn't run: {message}")];
+                    let _ = db::finish_validation(
+                        &state.pool,
+                        build_id,
+                        ValidationStatus::Invalid,
+                        None,
+                        &problems,
+                    )
+                    .await;
+                }
             }
         }
-        Waited::Failed { logs } => {
-            if db::finish_build(&state.pool, build_id, false, Some(&logs)).await? {
+    });
+}
+
+async fn run(state: &AppState, build_id: i64, plan: &Plan, from: Resume) -> anyhow::Result<()> {
+    let image_hash = plan.image_hash();
+    let image_ref = plan.image_ref(&state.config.registry);
+    let build_key = JobKey::assignment(&plan.assignment_id, &image_hash);
+    let deadline = state.config.assignment_build_deadline;
+    if let Resume::Build = from {
+        let url = state
+            .objects
+            .presign_get(&plan.object_key, deadline + URL_MARGIN)
+            .await?;
+        let request = BuildRequest {
+            dest: image_ref.clone(),
+            containerfile: plan.containerfile.clone(),
+            context: Context::Archive {
+                url: url.to_string(),
+                tree_hash: plan.tree_hash.clone(),
+            },
+            deadline: Some(deadline),
+            if_built: if plan.force {
+                IfBuilt::Rebuild
+            } else {
+                IfBuilt::Skip
+            },
+        };
+        let outcome = state.builder.ensure(&build_key, &request).await?;
+        tracing::info!(build = build_id, ?outcome, "build Job ensured");
+    }
+    if let Resume::Build | Resume::AwaitBuild = from {
+        match state.builder.wait(&build_key, Some(deadline)).await? {
+            Waited::Succeeded => {
+                if !db::finish_build(&state.pool, build_id, true, None).await? {
+                    return Ok(()); // superseded meanwhile
+                }
+                tracing::info!(build = build_id, "image built");
+            }
+            Waited::Failed { logs } => {
+                db::finish_build(&state.pool, build_id, false, Some(&logs)).await?;
                 tracing::warn!(build = build_id, "image build failed");
+                return Ok(());
+            }
+        }
+    }
+    let validation_key = JobKey::validation(&plan.assignment_id, build_id);
+    if let Resume::Build | Resume::AwaitBuild | Resume::Validate = from {
+        if !plan.has_solution {
+            db::finish_validation(&state.pool, build_id, ValidationStatus::Skipped, None, &[])
+                .await?;
+            tracing::info!(
+                build = build_id,
+                "validation skipped (no reference solution)"
+            );
+            return Ok(());
+        }
+        if !db::start_validation(&state.pool, build_id).await? {
+            return Ok(());
+        }
+        let validation_deadline = state.config.validation.deadline;
+        let results_url = state
+            .objects
+            .presign_put(&results_key(build_id), validation_deadline + URL_MARGIN)
+            .await?;
+        let request = ValidationRequest {
+            image: image_ref,
+            results_url: results_url.to_string(),
+            isolation: plan.isolation.clone(),
+            egress: plan.egress.clone(),
+            deadline: validation_deadline,
+            cpu: state.config.validation.cpu.clone(),
+            memory: state.config.validation.memory.clone(),
+        };
+        let outcome = state
+            .builder
+            .ensure_validation(&validation_key, &request)
+            .await?;
+        tracing::info!(build = build_id, ?outcome, "validation Job ensured");
+    }
+    let waited = state
+        .builder
+        .wait(&validation_key, Some(state.config.validation.deadline))
+        .await?;
+    let uploaded = state.objects.get(&results_key(build_id)).await.ok();
+    let mut verdict = judge(uploaded.as_deref());
+    if uploaded.is_none()
+        && let Waited::Failed { logs } = waited
+    {
+        let tail = &logs[logs.len().saturating_sub(LOG_TAIL)..];
+        verdict
+            .problems
+            .push(format!("validation pod log (tail):\n{tail}"));
+    }
+    db::finish_validation(
+        &state.pool,
+        build_id,
+        verdict.status,
+        verdict.results.as_deref(),
+        &verdict.problems,
+    )
+    .await?;
+    tracing::info!(build = build_id, status = %verdict.status, "validated");
+    Ok(())
+}
+
+/// What a validation run's results.yaml says about the assignment.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Verdict {
+    pub status: ValidationStatus,
+    /// The parsed results as JSON, when they can be trusted.
+    pub results: Option<String>,
+    pub problems: Vec<String>,
+}
+
+/// Missing, unparseable or inconsistent results are `invalid` (untrusted, not
+/// stored); consistent results where the solution disagrees with the tests
+/// are `failed` (stored, with the mismatches); otherwise `passed`.
+pub fn judge(uploaded: Option<&[u8]>) -> Verdict {
+    let invalid = |problems: Vec<String>| Verdict {
+        status: ValidationStatus::Invalid,
+        results: None,
+        problems,
+    };
+    let Some(bytes) = uploaded else {
+        return invalid(vec![
+            "no results.yaml was uploaded (the run crashed or timed out)".into(),
+        ]);
+    };
+    let results: Results = match serde_yaml::from_slice(bytes) {
+        Ok(r) => r,
+        Err(e) => return invalid(vec![format!("results.yaml didn't parse: {e}")]),
+    };
+    let problems = results.problems();
+    if !problems.is_empty() {
+        return invalid(problems);
+    }
+    let json = serde_json::to_string(&results).ok();
+    let mismatches: Vec<String> = results
+        .solution_mismatches()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    Verdict {
+        status: if mismatches.is_empty() {
+            ValidationStatus::Passed
+        } else {
+            ValidationStatus::Failed
+        },
+        results: json,
+        problems: mismatches,
+    }
+}
+
+/// After a restart: resume every attempt in flight from where the cluster says
+/// it is, and dispatch uploads that never got an attempt.
+pub async fn reconcile(state: &AppState) -> anyhow::Result<()> {
+    for build in db::in_flight(&state.pool).await? {
+        let upload = upload_of(state, &build).await?;
+        let plan = match plan_for(state, &upload, false).await {
+            Ok(plan) => plan,
+            Err(e) => {
+                let message = format!("can't resume after a restart: {e}");
+                db::finish_build(&state.pool, build.id, false, Some(&message)).await?;
+                continue;
+            }
+        };
+        let from = match build.build_status {
+            AssignmentBuildStatus::Running => {
+                match state
+                    .builder
+                    .poll(&JobKey::assignment(&build.assignment_id, &build.image_hash))
+                    .await?
+                {
+                    JobState::Gone => {
+                        db::finish_build(&state.pool, build.id, false, Some("interrupted")).await?;
+                        continue;
+                    }
+                    _ => Resume::AwaitBuild,
+                }
+            }
+            AssignmentBuildStatus::Succeeded => match build.validation_status {
+                ValidationStatus::Pending => Resume::Validate,
+                // Even if its Job is gone, the results may have been uploaded.
+                _ => Resume::AwaitValidation,
+            },
+            _ => continue,
+        };
+        tracing::info!(build = build.id, ?from, "resuming");
+        spawn(state, build.id, plan, from);
+    }
+    for upload in db::uploads_without_builds(&state.pool).await? {
+        match plan_for(state, &upload, false).await {
+            Ok(plan) => {
+                let decision = dispatch(state, plan).await?;
+                tracing::info!(
+                    upload = upload.id,
+                    ?decision,
+                    "dispatched an orphaned upload"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(upload = upload.id, error = %e, "orphaned upload can't be planned")
             }
         }
     }
     Ok(())
+}
+
+async fn upload_of(state: &AppState, build: &AssignmentBuild) -> anyhow::Result<AssignmentUpload> {
+    db::get_upload(&state.pool, build.upload_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("build {} has no upload {}", build.id, build.upload_id))
+}
+
+/// Re-derives an upload's plan from its stored archive.
+async fn plan_for(
+    state: &AppState,
+    upload: &AssignmentUpload,
+    force: bool,
+) -> anyhow::Result<Plan> {
+    let bytes = state.objects.get(&upload.object_key).await?;
+    let config = state.config.clone();
+    let checked = tokio::task::spawn_blocking(move || {
+        intake::check_upload(
+            &bytes,
+            &config.limits,
+            &config.recipes_dir,
+            &config.registry,
+        )
+    })
+    .await?
+    .map_err(|r| anyhow::anyhow!(r.error))?;
+    Ok(Plan::from_checked(
+        checked,
+        upload.id,
+        upload.object_key.clone(),
+        force,
+    ))
 }
 
 #[cfg(test)]
@@ -162,6 +391,9 @@ mod tests {
             tree_hash: tree.into(),
             object_key: "assignments/ll/t.tgz".into(),
             containerfile: containerfile.into(),
+            has_solution: true,
+            isolation: "process".into(),
+            egress: Egress::Deny,
             force: false,
         }
     }
@@ -187,5 +419,53 @@ mod tests {
             json,
             serde_json::json!({"status": "already_built", "build_id": 7})
         );
+    }
+
+    const FIXTURE: &[u8] = include_bytes!("../../core/testdata/pedagog-pytest-results.json");
+
+    #[test]
+    fn real_results_pass() {
+        let v = judge(Some(FIXTURE));
+        assert_eq!(v.status, ValidationStatus::Passed, "{:?}", v.problems);
+        assert!(v.problems.is_empty());
+        assert!(v.results.unwrap().contains("\"pop-front\""));
+    }
+
+    #[test]
+    fn mismatches_fail_and_keep_the_results() {
+        // The stretch goal is declared to fail; make the solution pass it.
+        let text = std::str::from_utf8(FIXTURE).unwrap().replacen(
+            "\"status\": \"fail\"",
+            "\"status\": \"pass\"",
+            1,
+        );
+        let v = judge(Some(text.as_bytes()));
+        assert_eq!(v.status, ValidationStatus::Failed);
+        assert!(v.results.is_some());
+        assert_eq!(
+            v.problems,
+            ["reverse: expected the solution to fail, but it passed"]
+        );
+    }
+
+    #[test]
+    fn untrustworthy_results_are_invalid_and_not_kept() {
+        for (bytes, needle) in [
+            (None, "no results.yaml"),
+            (Some(&b"{not yaml"[..]), "didn't parse"),
+        ] {
+            let v = judge(bytes);
+            assert_eq!(v.status, ValidationStatus::Invalid);
+            assert!(v.results.is_none());
+            assert!(v.problems[0].contains(needle), "{:?}", v.problems);
+        }
+        // Consistent shape, inconsistent numbers: the summary doesn't add up.
+        let text =
+            std::str::from_utf8(FIXTURE)
+                .unwrap()
+                .replacen("\"total\": 10.0", "\"total\": 99.0", 1);
+        let v = judge(Some(text.as_bytes()));
+        assert_eq!(v.status, ValidationStatus::Invalid);
+        assert!(v.problems[0].contains("summary"), "{:?}", v.problems);
     }
 }
