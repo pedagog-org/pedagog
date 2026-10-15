@@ -132,18 +132,46 @@ fn render_step(to: &mut String, step: &ResolvedStep) {
     }
 }
 
+/// Where a multi-line step's script is written inside the build.
+const STEP_SCRIPT: &str = "/tmp/pedagog-step.sh";
+
 fn render_run(to: &mut String, cmd: &str) {
-    // Multi-line commands run as a single heredoc script; the quoted delimiter
-    // prevents Dockerfile-level expansion of the body.
+    // Multi-line commands run as one script with `sh -e`. Kaniko doesn't support
+    // heredoc RUNs (it silently runs nothing), so the script travels base64-encoded
+    // and is shown above the RUN as comments.
     if cmd.contains('\n') {
-        let _ = writeln!(to, "RUN <<'EOF'");
         for line in cmd.lines() {
-            let _ = writeln!(to, "{line}");
+            let _ = writeln!(to, "#   {line}");
         }
-        let _ = writeln!(to, "EOF");
+        let script = format!("{}\n", cmd.trim_end_matches('\n'));
+        let _ = writeln!(
+            to,
+            "RUN echo '{}' | base64 -d > {STEP_SCRIPT} && sh -e {STEP_SCRIPT}; s=$?; rm -f {STEP_SCRIPT}; exit $s",
+            base64(script.as_bytes())
+        );
     } else {
         let _ = writeln!(to, "RUN {cmd}");
     }
+}
+
+/// Standard base64 with padding (RFC 4648), as `base64 -d` reads it.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[(n >> (18 - 6 * i) & 0x3f) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 fn render_from(to: &mut String, from: &str) {
@@ -346,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn multiline_command_renders_as_heredoc() {
+    fn multiline_command_runs_as_an_encoded_script() {
         let spec = ImageSpec::Base {
             upstream: "ubuntu:22.04".to_owned(),
             image: "pedagog/ubuntu:22".to_owned(),
@@ -357,9 +385,36 @@ mod tests {
         };
         let out = Containerfile::render(&spec, &opts(None, FromSource::Standalone)).to_string();
         assert!(
-            out.contains("RUN <<'EOF'\nif true; then\n  echo hi\nfi\nEOF"),
+            !out.contains("<<"),
+            "no heredocs (Kaniko skips them): {out}"
+        );
+        assert!(
+            out.contains("#   if true; then\n#     echo hi\n#   fi\n"),
+            "the script is shown as comments: {out}"
+        );
+        let encoded = base64(b"if true; then\n  echo hi\nfi\n");
+        assert!(
+            out.contains(&format!(
+                "RUN echo '{encoded}' | base64 -d > /tmp/pedagog-step.sh && sh -e /tmp/pedagog-step.sh; s=$?; rm -f /tmp/pedagog-step.sh; exit $s"
+            )),
             "{out}"
         );
+    }
+
+    #[test]
+    fn base64_matches_rfc_4648() {
+        for (input, expected) in [
+            (&b""[..], ""),
+            (b"f", "Zg=="),
+            (b"fo", "Zm8="),
+            (b"foo", "Zm9v"),
+            (b"foob", "Zm9vYg=="),
+            (b"fooba", "Zm9vYmE="),
+            (b"foobar", "Zm9vYmFy"),
+            (&[0xff, 0xfe, 0x00][..], "//4A"),
+        ] {
+            assert_eq!(base64(input), expected);
+        }
     }
 
     fn render_with(files: AssignmentFiles) -> String {
