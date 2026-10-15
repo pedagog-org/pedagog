@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE assignment_builds\n            SET validation_status = $2, results = $3::text::jsonb,\n                validation_problems = $4, finished_at = now()\n          WHERE id = $1 AND finished_at IS NULL AND build_status = 'succeeded'\n          RETURNING assignment_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "assignment_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "assignment_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5304861a264fe2c2caf44287762e1409227f1411cec70bf24f02554774847f6c"
+}

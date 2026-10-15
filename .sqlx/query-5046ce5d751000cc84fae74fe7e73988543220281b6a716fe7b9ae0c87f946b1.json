@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.id, u.assignment_id, u.tree_hash, u.object_key, u.size_bytes\n           FROM assignment_uploads u\n          WHERE NOT EXISTS (SELECT 1 FROM assignment_builds b WHERE b.upload_id = u.id)\n          ORDER BY u.uploaded_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignment_uploads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "assignment_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_uploads",
+            "name": "assignment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "tree_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_uploads",
+            "name": "tree_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "object_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_uploads",
+            "name": "object_key"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "size_bytes",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignment_uploads",
+            "name": "size_bytes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "5046ce5d751000cc84fae74fe7e73988543220281b6a716fe7b9ae0c87f946b1"
+}
