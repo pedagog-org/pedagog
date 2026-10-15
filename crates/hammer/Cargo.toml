@@ -14,10 +14,13 @@ workspace = true
 [dependencies]
 anstream = { workspace = true }
 clap = { workspace = true }
+flate2 = { workspace = true }
 miette = { workspace = true }
 pedagog-core = { path = "../core" }
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
+tar = { workspace = true }
 walkdir = { workspace = true }

@@ -18,6 +18,8 @@ pub enum Command {
     Plan(PlanArgs),
     /// Download and cache recipe assets into each recipe directory's ingredients/ folder.
     Vend(VendArgs),
+    /// Check, pack and upload an assignment directory to the jobs service.
+    Upload(UploadArgs),
 }
 
 #[derive(clap::Args)]
@@ -99,6 +101,43 @@ pub struct VendArgs {
 
     /// Additional recipe directory; repeatable, searched after HAMMER_RECIPES.
     #[arg(long, value_name = "DIR", action = clap::ArgAction::Append)]
+    pub recipes: Vec<PathBuf>,
+
+    /// Suppress non-fatal warnings.
+    #[arg(short = 'q', long)]
+    pub quiet: bool,
+}
+
+#[derive(clap::Args)]
+#[command(
+    long_about = "Check, pack and upload an assignment directory to the jobs service.
+
+The directory (the one containing assignment.yml) is checked locally first:
+assignment.yml parses, its files are present, and it resolves against your
+recipes when HAMMER_RECIPES or --recipes is set. jobs then repeats the checks
+against its own recipes, which are authoritative.
+
+What gets uploaded: every regular file under the directory, except VCS metadata
+(.git, .hg, .svn). Symlinks and special files are refused.
+
+jobs refuses an archive over 50 MiB compressed, 200 MiB unpacked, or 10 000
+files (its configured defaults), and identifies uploads by their files' paths,
+executable bits and contents: uploading identical files again is recognized,
+however they were packed.
+
+jobs isn't exposed outside the cluster; `just kind-upload <dir>` port-forwards
+to it and runs this command."
+)]
+pub struct UploadArgs {
+    /// Assignment directory (contains assignment.yml).
+    pub dir: PathBuf,
+
+    /// jobs service URL [env: PEDAGOG_JOBS_URL] [default: http://localhost:18081].
+    #[arg(long, value_name = "URL")]
+    pub jobs_url: Option<String>,
+
+    /// Additional recipe directory for the local check; repeatable, searched after HAMMER_RECIPES.
+    #[arg(short = 'r', long, value_name = "DIR", action = clap::ArgAction::Append)]
     pub recipes: Vec<PathBuf>,
 
     /// Suppress non-fatal warnings.
