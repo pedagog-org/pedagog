@@ -142,6 +142,11 @@ kind-upload DIR *ARGS:
     sleep 2
     HAMMER_RECIPES="{{justfile_directory()}}/recipes" cargo run -q -p hammer -- upload "{{DIR}}" --jobs-url http://localhost:18081 {{ARGS}}
 
+# End-to-end check of the assignment pipeline on kind (upload, build, validate,
+# supersede, restart, egress). Run after kind-load-jobs and kind-deploy.
+kind-e2e:
+    scripts/kind-e2e.sh
+
 # Trigger an OS rebuild through the jobs endpoint (port-forwarded); e.g. `just kind-rebuild force=true`.
 kind-rebuild QUERY="":
     #!/usr/bin/env bash
