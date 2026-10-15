@@ -183,15 +183,32 @@ A Kubernetes Job from the built image, in `pedagog-builds`:
   compatible helper versions like any addon (`python/3.12.yaml`: `addons: { pedagog-pytest:
   ["1"] }`).
 - **Output:** helpers write `/pedagog/results/results.yaml` directly, in ARCHITECTURE.md's
-  results format, with metadata from decorators:
+  results format, with metadata from typed decorators (enums, defaults shown in the
+  signatures, `py.typed`, checked with `mypy --strict`):
 
   ```python
-  @weight(10)
-  @number("1.1")
-  @visibility(score="visible", output="after_end")
-  @solution_expect("fail")      # optional; validation expects the reference solution to fail
+  @weight(10)                   # default 1; all-or-nothing
+  @number("1.1")                # label, and results are ordered by it
+  @visibility(AFTER_END)        # both parts; or score=VISIBLE, output=AFTER_END (the defaults)
+  @solution_expect(Expect.FAIL) # optional; validation expects the reference solution to fail
+  @timeout(10)                  # seconds (the default); 0 disables
   def test_append(): ...
   ```
+
+  - **`AFTER_END`** means once the student can no longer submit: the late deadline if late
+    submissions are allowed, otherwise the due date.
+  - **Partial credit (rubrics)** replaces `@weight` on a test:
+    - one item: `@rubric_item("name", points=4)` with the `score` fixture;
+    - several items: a `Rubric` subclass whose attributes are `item("name", points=...,
+      extra_credit=False)`, applied with `@rubric(MyRubric)`; the `scores` fixture is an
+      instance of it;
+    - `score.award(points=FULL)` sets an item's points and `score.nil()` resets them; an item
+      never awarded scores 0, and awards stand if the test fails afterwards;
+    - `with score.check(): ...` awards the item if the block completes; if it raises, the
+      item scores 0, the failure is recorded on the item, and the test continues but ends as
+      failed;
+    - extra-credit items add to the score, not the max; items appear under the test's
+      `items:` in results.yaml.
 
 - **Process isolation (pytest), on by default.** An import hook makes student modules
   resolve to **RPyC** proxies connected to the `runner` process, so tests stay native:
@@ -202,8 +219,13 @@ A Kubernetes Job from the built image, in `pedagog-builds`:
 
   - RPyC runs in a restricted configuration that is **one-way**: values passed into student
     code cross as copies, never as proxies back into the grader process, so student code
-    can't walk from an argument to the test's globals. This configuration gets its own
-    adversarial tests in the helper repo.
+    can't walk from an argument to the test's globals. Student objects stay in the runner
+    behind integer handles, so RPyC's object proxies are never used. This configuration gets
+    its own adversarial tests in the helper repo.
+  - The runner starts a fresh process per test, kills and reaps everything left from the
+    previous test, and caps the runner user's process count (64). The launcher discards
+    student output, and it reaps the runner's leftovers itself, because a container's PID 1
+    may never reap them.
   - `isolation: in-process` opts out (faster; student code shares the harness process).
 
 ### Isolation per framework (recorded)

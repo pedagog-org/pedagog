@@ -483,8 +483,8 @@ The platform writes (and reads) a standard results file at `/pedagog/results/res
 submission-id: ~           # UUID, or null for test runs
 run-id: ~                  # UUID, or null for test runs
 summary:
-  score: 85
-  total: 100
+  score: 13
+  total: 32
 tests:
   - number: 1
     id: test_null_ptr
@@ -506,6 +506,29 @@ tests:
     visibility:
       score: visible
       output: after_end
+  - number: 3
+    id: test_design
+    name: Design
+    status: fail
+    score: 3               # sum of its items' scores
+    max: 2                 # sum of its non-extra-credit items' maxes
+    output: "1 rubric item failed"
+    visibility:
+      score: visible
+      output: after_end
+    items:                 # only on tests scored by a rubric
+      - id: memory_safe
+        name: No leaks
+        score: 2
+        max: 2
+        extra-credit: false
+        output: ""
+      - id: recursion
+        name: Uses recursion
+        score: 1
+        max: 1
+        extra-credit: true # adds to the score, not to the max
+        output: ""
 artifacts:
   - id: core_dump
     label: Core dump
@@ -516,6 +539,9 @@ artifacts:
 ```
 
 Default per-test visibility is defined in the test suite source code. The `visibility` field is required on every test entry in the results file.
+
+- **Visibility levels:** `visible` (immediately), `hidden` (never to students), `after_end` (once the student can no longer submit: the late deadline if late submissions are allowed, otherwise the due date), `after_publish` (when the instructor publishes results).
+- **Partial credit:** a test scored by a rubric lists its `items`. Its score is the sum of the item scores, and its max is the sum of the non-extra-credit item maxes, so extra credit can lift a test's score (and the summary score) above its max (and the total).
 
 ---
 
