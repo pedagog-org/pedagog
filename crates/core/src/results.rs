@@ -42,6 +42,38 @@ pub struct TestResult {
     /// What the reference solution is expected to do on this test (default: pass).
     #[serde(default)]
     pub solution_expect: Option<Expect>,
+    /// Rubric items the test was scored by; empty for all-or-nothing tests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<RubricItem>,
+}
+
+/// One rubric item of a test. Extra-credit items add to the test's score but
+/// not to its max.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct RubricItem {
+    pub id: String,
+    pub name: String,
+    pub score: f64,
+    pub max: f64,
+    #[serde(default)]
+    pub extra_credit: bool,
+    #[serde(default)]
+    pub output: String,
+}
+
+// Scores are sums of floats written by another program.
+const EPSILON: f64 = 1e-9;
+
+impl TestResult {
+    /// Points the test can earn beyond its max (from extra-credit items).
+    pub fn extra_credit(&self) -> f64 {
+        self.items
+            .iter()
+            .filter(|i| i.extra_credit)
+            .map(|i| i.max)
+            .sum()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,16 +151,21 @@ impl Results {
             if !ids.insert(t.id.as_str()) {
                 problems.push(format!("duplicate test id {:?}", t.id));
             }
-            if t.score < 0.0 || t.max < 0.0 || t.score > t.max {
+            if t.score < 0.0 || t.max < 0.0 || t.score > t.max + t.extra_credit() + EPSILON {
                 problems.push(format!(
-                    "test {:?}: score {} outside 0..={}",
-                    t.id, t.score, t.max
+                    "test {:?}: score {} outside 0..={} (+{} extra credit)",
+                    t.id,
+                    t.score,
+                    t.max,
+                    t.extra_credit()
                 ));
             }
+            problems.extend(item_problems(t));
         }
-        if self.summary.score > self.summary.total {
+        let extra: f64 = self.tests.iter().map(TestResult::extra_credit).sum();
+        if self.summary.score > self.summary.total + extra + EPSILON {
             problems.push(format!(
-                "summary score {} exceeds total {}",
+                "summary score {} exceeds total {} (+{extra} extra credit)",
                 self.summary.score, self.summary.total
             ));
         }
@@ -155,6 +192,39 @@ impl Results {
             })
             .collect()
     }
+}
+
+fn item_problems(t: &TestResult) -> Vec<String> {
+    let mut problems = Vec::new();
+    if t.items.is_empty() {
+        return problems;
+    }
+    let mut ids = HashSet::new();
+    for i in &t.items {
+        if !ids.insert(i.id.as_str()) {
+            problems.push(format!("test {:?}: duplicate item id {:?}", t.id, i.id));
+        }
+        if i.score < 0.0 || i.max < 0.0 || i.score > i.max + EPSILON {
+            problems.push(format!(
+                "test {:?}, item {:?}: score {} outside 0..={}",
+                t.id, i.id, i.score, i.max
+            ));
+        }
+    }
+    let score: f64 = t.items.iter().map(|i| i.score).sum();
+    let max: f64 = t
+        .items
+        .iter()
+        .filter(|i| !i.extra_credit)
+        .map(|i| i.max)
+        .sum();
+    if (score - t.score).abs() > EPSILON || (max - t.max).abs() > EPSILON {
+        problems.push(format!(
+            "test {:?}: score {}/{} doesn't match its items' {score}/{max}",
+            t.id, t.score, t.max
+        ));
+    }
+    problems
 }
 
 fn number_or_string<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
@@ -264,15 +334,76 @@ artifacts:
         assert_eq!(p.len(), 3, "{p:?}");
     }
 
+    const RUBRIC_TEST: &str = "\
+id: test_design
+name: Design
+status: fail
+score: 3
+max: 2
+visibility:
+  score: visible
+  output: after_end
+items:
+  - id: memory_safe
+    name: No leaks
+    score: 2
+    max: 2
+  - id: recursion
+    name: Uses recursion
+    score: 1
+    max: 1
+    extra-credit: true
+    output: assert False
+";
+
+    fn with_rubric_test() -> Results {
+        let mut r = example();
+        r.tests.push(serde_yaml::from_str(RUBRIC_TEST).unwrap());
+        r.summary.score = 13.0;
+        r.summary.total = 32.0;
+        r
+    }
+
+    #[test]
+    fn extra_credit_may_exceed_the_max() {
+        let mut r = with_rubric_test();
+        assert!(r.problems().is_empty(), "{:?}", r.problems());
+        assert_eq!(r.tests[2].extra_credit(), 1.0);
+        r.summary.score = 33.0;
+        assert!(r.problems().is_empty(), "{:?}", r.problems());
+        r.summary.score = 33.5;
+        assert_eq!(r.problems().len(), 1);
+    }
+
+    #[test]
+    fn rubric_items_must_add_up() {
+        let mut r = with_rubric_test();
+        r.tests[2].items[0].score = 1.0;
+        assert_eq!(r.problems().len(), 1, "score mismatch");
+        let mut r = with_rubric_test();
+        r.tests[2].items[1].extra_credit = false;
+        assert_eq!(r.problems().len(), 2, "max mismatch, and over the max");
+    }
+
+    #[test]
+    fn rubric_item_problems_are_reported() {
+        let mut r = with_rubric_test();
+        r.tests[2].items[1].id = "memory_safe".into();
+        r.tests[2].items[1].score = 2.0;
+        r.tests[2].score = 4.0;
+        let p = r.problems();
+        assert_eq!(p.len(), 3, "{p:?}");
+    }
+
     #[test]
     fn round_trips_through_json() {
-        let r = example();
+        let r = with_rubric_test();
         let json = serde_json::to_string(&r).unwrap();
         assert_eq!(serde_json::from_str::<Results>(&json).unwrap(), r);
     }
 
     /// Real output of the pedagog-pytest helper (examples/linked-list-python
-    /// validated against its solution), so the Python and Rust sides of the
+    /// run against its solution), so the Python and Rust sides of the
     /// results format can't drift apart unnoticed.
     #[test]
     fn parses_real_pedagog_pytest_output() {
@@ -282,13 +413,21 @@ artifacts:
         assert_eq!(
             r.summary,
             Summary {
-                score: 7.0,
-                total: 8.0
+                score: 10.0,
+                total: 10.0
             }
         );
-        assert_eq!(r.tests.len(), 4);
-        assert_eq!(r.tests[2].visibility.output, Visibility::Hidden);
+        assert_eq!(r.tests.len(), 5);
+        let pop_front = &r.tests[2];
+        assert_eq!(pop_front.visibility.output, Visibility::Hidden);
+        assert_eq!((pop_front.score, pop_front.max), (4.0, 3.0));
+        assert_eq!(pop_front.items.len(), 3);
+        assert!(pop_front.items[2].extra_credit);
         assert_eq!(r.tests[3].solution_expect, Some(Expect::Fail));
+        assert!(
+            r.tests[4].items.is_empty(),
+            "a single rubric item is the test itself"
+        );
         assert!(r.solution_mismatches().is_empty(), "the example validates");
     }
 }
