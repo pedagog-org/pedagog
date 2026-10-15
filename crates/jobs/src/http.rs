@@ -5,7 +5,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
-use axum::routing::post;
+use axum::routing::{get, post};
 use serde::Deserialize;
 
 use crate::dispatch::dispatch;
@@ -19,6 +19,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/internal/assignments",
             post(intake::upload).layer(DefaultBodyLimit::max(max_upload)),
+        )
+        .route(
+            "/internal/assignments/{id}/builds/{build}",
+            get(intake::build_status),
         )
         .with_state(state)
 }

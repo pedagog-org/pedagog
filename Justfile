@@ -114,16 +114,33 @@ kind-load-jobs:
 # Apply the kind overlay (full base, dev-mode jobs, local-path storage).
 kind-deploy:
     kubectl --context {{KIND_CTX}} apply -k deploy/overlays/kind
+    just kind-registry
+
+# Let the kind node pull from the in-cluster registry by its service name (plain
+# HTTP), e.g. assignment images for validation pods. Idempotent; enables
+# containerd's per-registry config on clusters created before cluster.yaml did.
+kind-registry:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ip=$(kubectl --context {{KIND_CTX}} -n pedagog-data get svc registry-service -o jsonpath='{.spec.clusterIP}')
+    dir=/etc/containerd/certs.d/registry-service.pedagog-data.svc:5000
+    podman exec pedagog-control-plane sh -c '
+      grep -q config_path /etc/containerd/config.toml || {
+        printf "\n[plugins.\"io.containerd.grpc.v1.cri\".registry]\n  config_path = \"/etc/containerd/certs.d\"\n" >> /etc/containerd/config.toml
+        systemctl restart containerd
+      }'
+    podman exec pedagog-control-plane sh -c "mkdir -p '$dir' && printf 'server = \"http://$ip:5000\"\n\n[host.\"http://$ip:5000\"]\n  capabilities = [\"pull\", \"resolve\"]\n' > '$dir/hosts.toml'"
+    echo "kind node pulls registry-service.pedagog-data.svc:5000 from http://$ip:5000"
 
 # Upload an assignment directory to jobs (port-forwarded), e.g.
-# `just kind-upload recipes/examples/linked-list-python`.
-kind-upload DIR:
+# `just kind-upload recipes/examples/linked-list-python --wait`.
+kind-upload DIR *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     kubectl --context {{KIND_CTX}} -n pedagog-builds port-forward svc/pedagog-jobs 18081:8080 >/dev/null &
     trap 'kill $!' EXIT
     sleep 2
-    HAMMER_RECIPES="{{justfile_directory()}}/recipes" cargo run -q -p hammer -- upload "{{DIR}}" --jobs-url http://localhost:18081
+    HAMMER_RECIPES="{{justfile_directory()}}/recipes" cargo run -q -p hammer -- upload "{{DIR}}" --jobs-url http://localhost:18081 {{ARGS}}
 
 # Trigger an OS rebuild through the jobs endpoint (port-forwarded); e.g. `just kind-rebuild force=true`.
 kind-rebuild QUERY="":

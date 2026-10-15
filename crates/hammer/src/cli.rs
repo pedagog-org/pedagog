@@ -142,6 +142,10 @@ pub struct UploadArgs {
     #[arg(long)]
     pub force: bool,
 
+    /// Wait for the build and validation, print the outcome, and fail if either fails.
+    #[arg(short = 'w', long)]
+    pub wait: bool,
+
     /// Additional recipe directory for the local check; repeatable, searched after HAMMER_RECIPES.
     #[arg(short = 'r', long, value_name = "DIR", action = clap::ArgAction::Append)]
     pub recipes: Vec<PathBuf>,

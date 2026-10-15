@@ -205,6 +205,13 @@ Until `api` exists, instructors (and developers) upload with `hammer upload <dir
   - The build context is the archive: an initContainer (`pedagog-jobs fetch-context`) downloads it through a short-lived presigned URL, unpacks it with the same checks as intake, and refuses files that don't match the tree hash.
   - An image already built and validated isn't rebuilt (`hammer upload --force` overrides); a newer upload supersedes an attempt still in flight, deleting its Job.
   - Builds have a deadline (`PEDAGOG_ASSIGNMENT_BUILD_DEADLINE`, 30 min by default).
+- **Validation:** after a successful build, a Job from the image runs `/pedagog/bin/run-tests --code /pedagog/solution` (isolation from `testing:`), which uploads `results.yaml` to a presigned PUT; no solution means validation is `skipped`.
+  - The pod starts as root with every capability dropped except SETUID, SETGID, CHOWN, FOWNER, DAC_OVERRIDE and KILL (what the launcher uses to drop to `grader`/`runner`), no privilege escalation, the default seccomp profile, and no service account token. This fits Pod Security "baseline", the ceiling for `pedagog-builds`.
+  - Egress follows `environment.network`: label-selected policies that `jobs` installs at startup allow DNS and Garage for every validation pod, plus everything outside the cluster's ranges (`PEDAGOG_CLUSTER_CIDRS`) for `mode: allow`; `cidr` rules get a per-run policy owned by the Job. No ingress.
+  - `jobs` judges the results: missing, unparseable or inconsistent results are `invalid` (not stored); consistent results where the solution disagrees with the tests are `failed` (stored, with the mismatches); otherwise `passed`. A `passed` or `skipped` build becomes the assignment's current build; a failure never replaces it.
+  - Deadline `PEDAGOG_VALIDATION_DEADLINE` (10 min), resources `PEDAGOG_VALIDATION_CPU`/`PEDAGOG_VALIDATION_MEMORY` (1 CPU, 1 GiB).
+- **Status:** `GET /internal/assignments/<id>/builds/<build>`; `hammer upload --wait` follows it and fails on a failed build or validation.
+- **Restarts:** at startup `jobs` resumes attempts in flight from what the cluster shows (a vanished build Job fails as "interrupted"; a validation is judged from whatever results were uploaded) and dispatches uploads that never got an attempt.
 
 ### `hammer` — Build Tool
 

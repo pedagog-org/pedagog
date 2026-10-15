@@ -142,6 +142,23 @@ differ from the parent plan, this plan wins.
 - **Garage in `jobs`:** S3 config (`PEDAGOG_S3_*`) and the `garage-s3-key` Secret wired into
   the Deployment (missed in step 1).
 
+## Implementation notes (PR d)
+
+Deviations found while implementing, recorded here:
+
+- **`KILL` capability:** the launcher kills `runner`'s process group as root, which needs
+  `CAP_KILL`; without it the launcher dies before uploading results (checked on kind). The
+  pod gets six capabilities, not five.
+- **Base policies are applied by `jobs` at startup** (server-side apply), not shipped as
+  manifests, because `validate-internet` excludes `PEDAGOG_CLUSTER_CIDRS`, which is `jobs`
+  configuration.
+- **Assignment reconcile runs at startup** (both envs), not before every dispatch; an upload
+  supersedes any attempt in flight anyway. It re-derives an attempt's plan from the stored
+  archive.
+- **kind registry pulls:** validation pods pull the built image through the node's
+  containerd, which can't resolve the in-cluster registry; `just kind-registry` (run by
+  `kind-deploy`) maps the registry's service name to its ClusterIP over HTTP.
+
 ## Dependencies
 
 All approved in review:

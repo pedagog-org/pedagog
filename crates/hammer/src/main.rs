@@ -228,7 +228,34 @@ fn run_upload(args: UploadArgs) -> Result<()> {
     for warning in &uploaded.warnings {
         emit_warning(warning, "", args.quiet);
     }
-    Ok(())
+    if !args.wait {
+        return Ok(());
+    }
+    let status = upload::wait(
+        &url,
+        &uploaded.assignment_id,
+        uploaded.build.build_id,
+        |s| {
+            let stage = match (s.build_status.as_str(), s.validation_status.as_str()) {
+                ("running", _) => "building",
+                ("succeeded", "pending" | "running") => "validating",
+                _ => return,
+            };
+            println!("{stage}...");
+        },
+    )
+    .map_err(|e| miette!("{e}"))?;
+    let (ok, line) = upload::outcome(&status);
+    if ok {
+        println!("{line}");
+        println!("image: {}", status.image_ref);
+        return Ok(());
+    }
+    let mut details: Vec<String> = status.validation_problems.clone();
+    if let Some(error) = &status.error {
+        details.push(error.clone());
+    }
+    Err(miette!("{line}\n{}", details.join("\n")))
 }
 
 fn emit_warning(message: &str, help: &str, quiet: bool) {

@@ -275,6 +275,18 @@ pub async fn uploads_without_builds(pool: &PgPool) -> sqlx::Result<Vec<Assignmen
     Ok(rows)
 }
 
+/// One upload by id.
+pub async fn get_upload(pool: &PgPool, upload: i64) -> sqlx::Result<Option<AssignmentUpload>> {
+    sqlx::query_as!(
+        AssignmentUpload,
+        "SELECT id, assignment_id, tree_hash, object_key, size_bytes
+           FROM assignment_uploads WHERE id = $1",
+        upload
+    )
+    .fetch_optional(pool)
+    .await
+}
+
 /// The assignment's current (usable) build, if any.
 pub async fn current_build_id(pool: &PgPool, assignment_id: &str) -> sqlx::Result<Option<i64>> {
     let row = sqlx::query!(
@@ -345,6 +357,8 @@ mod tests {
         let again = uploaded(&pool, "ll", "tree-a").await?;
         let b = uploaded(&pool, "ll", "tree-b").await?;
         assert_eq!(a.id, again.id);
+        assert_eq!(get_upload(&pool, b.id).await?.as_ref(), Some(&b));
+        assert_eq!(get_upload(&pool, 999).await?, None);
         assert_ne!(a.id, b.id);
         assert_eq!(uploads_without_builds(&pool).await?.len(), 2);
         start_build(&pool, "ll", a.id, "img-a", "reg/a:1").await?;
