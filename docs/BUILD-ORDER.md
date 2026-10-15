@@ -15,6 +15,7 @@ Every assignment image is built in this order. Each phase is one or more `RUN` l
 | 3 | **TOOLCHAIN** | Each toolchain in the order listed, each followed by its addons | Toolchain recipes `steps` |
 | 4 | **ASSIGNMENT** | The assignment's own build steps | Assignment `environment.steps` |
 | 5 | **OS CLEANUP** | Package caches and other build leftovers removed | OS recipe `hooks.build.cleanup` |
+| 6 | **ASSIGNMENT FILES** | `starter/` → `/pedagog/starter` (root, read-only); `tests/` and `solution/` → `/pedagog/tests`, `/pedagog/solution` (`grader:grader`, `0700`) | The archive's directories (`files:` in `assignment.yml` names them) |
 | — | **RUNTIME** | `EXPOSE` ports, `USER student`, exec-form `ENTRYPOINT` | Platform recipe `entrypoint` / `ports` |
 
 Phases with no steps are skipped.
@@ -30,8 +31,20 @@ Phases with no steps are skipped.
   parent is already installed.
 - **ASSIGNMENT after toolchains:** assignment steps can use every compiler and tool the
   assignment selected.
-- **OS CLEANUP last:** it sweeps up after every earlier phase, so caches from any phase
-  don't end up in the image.
+- **OS CLEANUP after the installs:** it sweeps up after every earlier phase, so caches
+  from any phase don't end up in the image.
+- **ASSIGNMENT FILES last:** they change most often, so editing tests or the solution
+  rebuilds only these layers (the in-cluster build cache reuses everything before them).
+  A directory that's missing under its default name just isn't baked; environment-only
+  renders (`hammer plan` without an archive's files) skip the phase.
+
+### How steps run
+
+A single-line command is one `RUN`. A multi-line command runs as one script with
+`sh -e`, so any failing command fails the step; it's shown in the Containerfile as
+comments, followed by a `RUN` that decodes it from base64 (Kaniko doesn't support
+heredoc `RUN`s). The in-cluster build cache keys a `RUN` layer by this text, so a step
+whose inputs change (e.g. a bumped ingredient) must change its script too.
 
 ### Pre-built base images
 
@@ -102,8 +115,9 @@ help: use gdb:14 everywhere, or set `coexist: true` in the gdb:15, gdb:13 recipe
 ## Network
 
 `environment.network` does **not** change the image. It is policy the platform enforces
-at runtime with a Kubernetes NetworkPolicy, and it can change without a rebuild. Build
-steps always have network access.
+with Kubernetes NetworkPolicies (validation runs now; sessions and grading later), and it
+can change without a rebuild. Omitted, it denies all egress. Build steps always have
+network access.
 
 ## Debugging
 

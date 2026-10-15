@@ -68,6 +68,8 @@ just kind-up           # (re)create the cluster, recipes/ mounted into the node
 just kind-load-jobs    # build the jobs image with podman, load it into the node
 just kind-deploy       # apply deploy/overlays/kind (local-path storage, dev-mode jobs)
 just kind-rebuild      # POST /internal/recipes/rebuild; `just kind-rebuild force=true`
+just kind-upload <dir> # upload an assignment (add --wait to follow build and validation)
+just kind-e2e          # end-to-end check of the assignment pipeline
 just kind-down         # delete the cluster
 ```
 
@@ -75,6 +77,14 @@ The kind overlay generates dev-only secrets (password `pedagog`) and runs `jobs`
 mode: no build at startup, Kaniko reads the recipes mounted into the node, and
 `kind-rebuild` is the trigger. Results land in the in-cluster registry
 (`registry-service.pedagog-data.svc:5000`) and in the `os_builds` / `build_runs` tables.
+
+Assignments: build the OS image first (`just kind-rebuild`), then
+`just kind-upload recipes/examples/linked-list-python --wait` checks, packs and uploads
+the example; `jobs` stores it in Garage, builds it with Kaniko, validates the reference
+solution, and `--wait` prints the verdict. `kind-deploy` also runs `just kind-registry`,
+which lets the node pull images from the in-cluster registry (validation pods run the
+built image); clusters created by `kind-up` already have containerd's per-registry config
+enabled, and older ones get it (with a containerd restart) on the first run.
 
 ---
 
@@ -327,6 +337,44 @@ insecure. Create `/etc/containers/registries.conf.d/pedagog-registry.conf`:
 location = "<registry-ip>:5000"
 insecure = true
 ```
+
+---
+
+## Phase 5 — Assignment Builds
+
+`jobs` takes assignment uploads, builds them with Kaniko and validates them; the defaults
+suit a small cluster. Set these on the `pedagog-jobs` Deployment when they don't:
+
+| Env var | Default | Notes |
+| --- | --- | --- |
+| `PEDAGOG_CLUSTER_CIDRS` | `10.42.0.0/16,10.43.0.0/16` | The cluster's pod and service ranges (k3s defaults), excluded from `mode: allow` egress |
+| `PEDAGOG_BUILD_CACHE` | `true` | Kaniko layer cache in `<registry>/pedagog/cache` |
+| `PEDAGOG_ASSIGNMENT_BUILD_DEADLINE` | `1800` | Seconds |
+| `PEDAGOG_VALIDATION_DEADLINE` | `600` | Seconds |
+| `PEDAGOG_VALIDATION_CPU` / `_MEMORY` | `1` / `1Gi` | Per validation pod |
+| `PEDAGOG_MAX_UPLOAD_BYTES` / `PEDAGOG_MAX_UNPACKED_BYTES` / `PEDAGOG_MAX_UPLOAD_FILES` | 50 MiB / 200 MiB / 10 000 | Upload limits |
+
+- **Pod Security:** validation pods start as root with a few added capabilities (see
+  ARCHITECTURE.md, Assignment Uploads), which fits the `baseline` profile. If you label
+  `pedagog-builds` for Pod Security, use `baseline`; `restricted` would refuse them.
+- **Network policies:** `jobs` installs the validation policies itself at startup (RBAC
+  in `deploy/base/jobs/rbac.yaml`); the cluster's CNI must enforce NetworkPolicy (k3s
+  does).
+- **Registry pulls:** validation pods pull the built image by its in-cluster name
+  (`registry-service.pedagog-data.svc:5000/...`) through each node's containerd, which
+  can't resolve cluster DNS. Add that name to each node's
+  `/etc/rancher/k3s/registries.yaml` (Phase 4), pointing at the registry's IP, and
+  restart k3s:
+
+  ```yaml
+  mirrors:
+    "registry-service.pedagog-data.svc:5000":
+      endpoint:
+        - "http://<registry-ip>:5000"
+  ```
+- **Uploading:** until the web UI exists, upload from your machine through a
+  port-forward: `kubectl -n pedagog-builds port-forward svc/pedagog-jobs 18081:8080`, then
+  `hammer upload <dir> --wait` (with `HAMMER_RECIPES` set for the local check).
 
 ---
 
