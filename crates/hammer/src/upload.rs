@@ -36,6 +36,92 @@ pub struct Build {
     pub build_id: i64,
 }
 
+/// An attempt's progress and outcome (`GET .../builds/<id>`).
+#[derive(Debug, Deserialize)]
+pub struct Status {
+    pub build_status: String,
+    pub validation_status: String,
+    pub finished: bool,
+    pub image_ref: String,
+    pub error: Option<String>,
+    #[serde(default)]
+    pub validation_problems: Vec<String>,
+    pub results: Option<serde_json::Value>,
+}
+
+const POLL_INTERVAL: Duration = Duration::from_secs(3);
+
+/// Polls until the attempt finishes, calling `progress` whenever its stage changes.
+pub fn wait(
+    jobs_url: &str,
+    assignment: &str,
+    build: i64,
+    mut progress: impl FnMut(&Status),
+) -> Result<Status, String> {
+    let url = format!(
+        "{}/internal/assignments/{assignment}/builds/{build}",
+        jobs_url.trim_end_matches('/')
+    );
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut last = String::new();
+    loop {
+        let reply = client
+            .get(&url)
+            .send()
+            .map_err(|e| format!("cannot reach jobs at {url}: {e}"))?;
+        if !reply.status().is_success() {
+            return Err(format!("jobs answered {} for {url}", reply.status()));
+        }
+        let body = reply.text().map_err(|e| e.to_string())?;
+        let status: Status = serde_json::from_str(&body)
+            .map_err(|e| format!("unexpected reply from jobs: {e}: {body}"))?;
+        let stage = format!("{}/{}", status.build_status, status.validation_status);
+        if stage != last {
+            progress(&status);
+            last = stage;
+        }
+        if status.finished {
+            return Ok(status);
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// One line for a finished attempt, and whether it succeeded.
+pub fn outcome(status: &Status) -> (bool, String) {
+    let summary = status
+        .results
+        .as_ref()
+        .and_then(|r| {
+            let s = r.get("summary")?;
+            let tests = r.get("tests")?.as_array()?.len();
+            Some(format!(
+                "{} / {} ({tests} tests)",
+                s.get("score")?,
+                s.get("total")?
+            ))
+        })
+        .unwrap_or_default();
+    match (
+        status.build_status.as_str(),
+        status.validation_status.as_str(),
+    ) {
+        ("superseded", _) => (false, "superseded by a newer upload".into()),
+        ("failed", _) => (false, "build failed".into()),
+        (_, "passed") => (true, format!("validation passed: {summary}")),
+        (_, "skipped") => (
+            true,
+            "built; validation skipped (no reference solution)".into(),
+        ),
+        (_, "failed") => (false, format!("validation failed: {summary}")),
+        (_, "invalid") => (false, "validation produced no trustworthy results".into()),
+        (b, v) => (false, format!("finished as {b}/{v}")),
+    }
+}
+
 /// A `.tgz` of `dir`'s regular files, rooted at `dir`. Deterministic: sorted
 /// entries, zero timestamps and owners, and modes reduced to 0644/0755.
 pub fn pack(dir: &Path) -> Result<Vec<u8>, String> {
@@ -171,6 +257,32 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    fn status(build: &str, validation: &str, results: Option<serde_json::Value>) -> Status {
+        Status {
+            build_status: build.into(),
+            validation_status: validation.into(),
+            finished: true,
+            image_ref: "reg/x:1".into(),
+            error: None,
+            validation_problems: vec![],
+            results,
+        }
+    }
+
+    #[test]
+    fn outcomes_read_like_a_verdict() {
+        let results =
+            serde_json::json!({"summary": {"score": 10.0, "total": 10.0}, "tests": [{}, {}]});
+        assert_eq!(
+            outcome(&status("succeeded", "passed", Some(results))),
+            (true, "validation passed: 10.0 / 10.0 (2 tests)".to_string())
+        );
+        assert!(outcome(&status("succeeded", "skipped", None)).0);
+        assert!(!outcome(&status("succeeded", "invalid", None)).0);
+        assert!(!outcome(&status("failed", "pending", None)).0);
+        assert!(!outcome(&status("superseded", "running", None)).0);
     }
 
     #[test]
