@@ -19,9 +19,7 @@ static HOST_RE: LazyLock<Regex> =
 #[serde(try_from = "RawNetworkSpec")]
 pub enum NetworkSpec {
     Allow,
-    Deny {
-        allow: Vec<AllowRule>,
-    },
+    Deny { allow: Vec<AllowRule> },
 }
 
 impl Default for NetworkSpec {
