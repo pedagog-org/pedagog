@@ -851,16 +851,35 @@ mod tests {
             }
         }
 
+        // Flat examples (examples/*.yaml) and archive-style ones
+        // (examples/<name>/assignment.yml with starter/tests/solution beside it).
         let examples = dir.join("examples");
         if examples.exists() {
             for entry in std::fs::read_dir(examples).unwrap() {
                 let path = entry.unwrap().path();
-                if path.extension().is_some_and(|e| e == "yaml") {
-                    let a: AssignmentYaml =
-                        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-                    resolve(&a, &store)
-                        .unwrap_or_else(|e| panic!("{} failed to resolve: {e}", path.display()));
+                let file = if path.is_dir() {
+                    path.join("assignment.yml")
+                } else {
+                    path.clone()
+                };
+                if !(path.is_dir() || path.extension().is_some_and(|e| e == "yaml"))
+                    || !file.exists()
+                {
+                    continue;
                 }
+                let a: AssignmentYaml =
+                    serde_yaml::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+                let base = file.parent().unwrap();
+                let present = |src: &str| base.join(src).is_dir().then(|| src.to_owned());
+                let files = AssignmentFiles {
+                    starter: present(a.files.starter.as_str()),
+                    tests: present(a.files.tests.as_str()),
+                    solution: present(a.files.solution.as_str()),
+                };
+                let problems = files.problems(&a);
+                assert!(problems.is_empty(), "{}: {problems:?}", file.display());
+                resolve(&a, &store)
+                    .unwrap_or_else(|e| panic!("{} failed to resolve: {e}", file.display()));
             }
         }
     }

@@ -483,21 +483,27 @@ The platform writes (and reads) a standard results file at `/pedagog/results/res
 submission-id: ~           # UUID, or null for test runs
 run-id: ~                  # UUID, or null for test runs
 summary:
-  score: 85
-  total: 100
+  score: 12                # sum of the tests' scores
+  total: 32                # sum of the tests' maxes
 tests:
   - number: 1
-    id: test_null_ptr
+    id: null-ptr           # stable id; only when the test declares one
+    node: test_null_ptr.py::test_null_ptr   # the framework's own identifier
     name: Null pointer check
     status: pass           # pass | fail | error | skip
     score: 10
     max: 10
-    output: "All assertions passed"
+    output: ""             # the framework's failure text
+    feedback: "✓ +10 handles NULL"   # what the student is told about the score
+    trace: "..."           # how the score was calculated; instructors only
     visibility:
       score: visible       # visible | hidden | after_end | after_publish
-      output: after_end
+      output: after_end    # also governs feedback
+    clamp: [0, 10]         # single-item tests: score bounds (null = unbounded)
+    extra-credit: none     # none | bonus | attempted-work
+    attempted: true
   - number: 2
-    id: test_memory_leak
+    node: test_leak.py::test_memory_leak
     name: Memory leak check
     status: fail
     score: 0
@@ -506,6 +512,41 @@ tests:
     visibility:
       score: visible
       output: after_end
+  - number: 3
+    id: design
+    node: test_design.py::test_design
+    name: Design
+    status: pass
+    score: 2               # sum of its items' scores
+    max: 2                 # sum of the maxes of its items that count (see extra-credit)
+    visibility:
+      score: visible
+      output: after_end
+    items:                 # only on tests scored by a multi-item rubric
+      - id: memory_safe
+        name: No leaks
+        score: 2
+        max: 2
+        clamp: [0, 2]
+        extra-credit: none
+        attempted: true
+        feedback: "✓ +2 no leaks"
+      - id: recursion
+        name: Uses recursion
+        score: 1
+        max: 1
+        clamp: [0, 1]
+        extra-credit: bonus        # adds to the score, never to the max
+        attempted: true
+        feedback: ""
+      - id: late
+        name: Late-file penalty
+        score: -1
+        max: 0
+        clamp: [null, 0]           # deductions only
+        extra-credit: none
+        attempted: false
+        feedback: "-1 one file late"
 artifacts:
   - id: core_dump
     label: Core dump
@@ -516,6 +557,13 @@ artifacts:
 ```
 
 Default per-test visibility is defined in the test suite source code. The `visibility` field is required on every test entry in the results file.
+
+- **Visibility levels:** `visible` (immediately), `hidden` (never to students), `after_end` (once the student can no longer submit: the late deadline if late submissions are allowed, otherwise the due date), `after_publish` (when the instructor publishes results). `feedback` follows the output visibility; `trace` is never shown to students.
+- **Rubric scoring:** a test is either a single rubric item (with `clamp`, `extra-credit`, `attempted`) or lists its `items`.
+  - Each item's score lies within its `clamp`.
+  - A multi-item test's score is the sum of its item scores. Its max sums the items that count: `none` items, plus `attempted-work` items once attempted. `bonus` items never count in the max.
+  - With unbounded clamps or extra credit, a score can fall below 0 or exceed its max; the summary is always the plain sum of the tests.
+- **Checks the platform runs:** unique `node`s, declared `id`s and item ids; scores within their bounds (tests with neither items nor a clamp must lie in 0..=max); tests and the summary that add up.
 
 ---
 

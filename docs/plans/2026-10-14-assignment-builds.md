@@ -183,15 +183,25 @@ A Kubernetes Job from the built image, in `pedagog-builds`:
   compatible helper versions like any addon (`python/3.12.yaml`: `addons: { pedagog-pytest:
   ["1"] }`).
 - **Output:** helpers write `/pedagog/results/results.yaml` directly, in ARCHITECTURE.md's
-  results format, with metadata from decorators:
+  results format, with metadata from typed decorators (enums, defaults shown in the
+  signatures, `py.typed`, checked with `mypy --strict`):
 
   ```python
-  @weight(10)
-  @number("1.1")
-  @visibility(score="visible", output="after_end")
-  @solution_expect("fail")      # optional; validation expects the reference solution to fail
-  def test_append(): ...
+  @rubric_item("appends", points=10, id="append")  # the test's points come from score.award()/check()
+  @number("1.1")                # label, and results are ordered by it
+  @visibility(AFTER_END)        # both parts; or score=VISIBLE, output=AFTER_END (the defaults)
+  @solution_expect(Expect.FAIL) # optional; validation expects the reference solution to fail
+  @timeout(10)                  # seconds (the default); 0 disables
+  def test_append(score): ...
   ```
+
+  - **`AFTER_END`** means once the student can no longer submit: the late deadline if late
+    submissions are allowed, otherwise the due date.
+  - **Scoring is rubric-only** (`@rubric_item` for one item, `@rubric(MyRubric)` for
+    several): points come from explicit `award()` (adds), `set()`, and `check()` calls, with
+    per-item clamps, extra-credit modes, checklist feedback for students and a grading trace
+    for instructors. Undecorated tests are pass/fail with 0 points. Design and details:
+    `docs/plans/2026-10-15-rubric-scoring-v2.md`.
 
 - **Process isolation (pytest), on by default.** An import hook makes student modules
   resolve to **RPyC** proxies connected to the `runner` process, so tests stay native:
@@ -202,8 +212,13 @@ A Kubernetes Job from the built image, in `pedagog-builds`:
 
   - RPyC runs in a restricted configuration that is **one-way**: values passed into student
     code cross as copies, never as proxies back into the grader process, so student code
-    can't walk from an argument to the test's globals. This configuration gets its own
-    adversarial tests in the helper repo.
+    can't walk from an argument to the test's globals. Student objects stay in the runner
+    behind integer handles, so RPyC's object proxies are never used. This configuration gets
+    its own adversarial tests in the helper repo.
+  - The runner starts a fresh process per test, kills and reaps everything left from the
+    previous test, and caps the runner user's process count (64). The launcher discards
+    student output, and it reaps the runner's leftovers itself, because a container's PID 1
+    may never reap them.
   - `isolation: in-process` opts out (faster; student code shares the harness process).
 
 ### Isolation per framework (recorded)
