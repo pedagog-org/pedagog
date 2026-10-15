@@ -9,7 +9,7 @@ use pedagog_core::recipe::render::containerfile::Containerfile;
 use pedagog_core::recipe::render::{FromSource, ImageSpec, Render, RenderOptions};
 use pedagog_core::recipe::resolve::resolve_base;
 use pedagog_core::recipe::store::RecipeStore;
-use pedagog_k8s::build::{IfBuilt, JobState, Outcome, Waited};
+use pedagog_k8s::build::{BuildRequest, Context, IfBuilt, JobKey, JobState, Outcome, Waited};
 use pedagog_store::{BuildRun, BuildStatus, db};
 use serde::Serialize;
 use sqlx::PgPool;
@@ -70,9 +70,16 @@ pub async fn dispatch(
     };
     let mut dispatched = Vec::new();
     for p in planned {
+        let request = BuildRequest {
+            dest: p.dest.clone(),
+            containerfile: p.containerfile.clone(),
+            context: Context::Containerfile,
+            deadline: None,
+            if_built,
+        };
         match state
             .builder
-            .ensure(&p.os_id, &p.hash, &p.dest, &p.containerfile, if_built)
+            .ensure(&JobKey::os(&p.os_id, &p.hash), &request)
             .await?
         {
             Outcome::Skipped => {}
@@ -142,7 +149,7 @@ fn spawn_build(state: &AppState, run: i64, os_id: String, hash: String, dest: St
     let pool = state.pool.clone();
     let builder = state.builder.clone();
     tokio::spawn(async move {
-        match builder.wait(&os_id, &hash).await {
+        match builder.wait(&JobKey::os(&os_id, &hash), None).await {
             Ok(waited) => finalize(&pool, run, &os_id, &hash, &dest, waited).await,
             Err(e) => {
                 tracing::error!(%os_id, error = %e, "build wait failed; row left running for reconcile")
@@ -155,10 +162,11 @@ fn spawn_adopt(state: &AppState, run: BuildRun) {
     let pool = state.pool.clone();
     let builder = state.builder.clone();
     tokio::spawn(async move {
-        let waited = match builder.poll(&run.os_id, &run.hash).await {
+        let key = JobKey::os(&run.os_id, &run.hash);
+        let waited = match builder.poll(&key).await {
             Ok(JobState::Succeeded) => Some(Waited::Succeeded),
             Ok(JobState::Failed { logs }) => Some(Waited::Failed { logs }),
-            Ok(JobState::Active) => builder.wait(&run.os_id, &run.hash).await.ok(),
+            Ok(JobState::Active) => builder.wait(&key, None).await.ok(),
             Ok(JobState::Gone) => Some(Waited::Failed {
                 logs: "interrupted".into(),
             }),

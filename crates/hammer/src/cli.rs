@@ -123,7 +123,9 @@ What gets uploaded: every regular file under the directory, except VCS metadata
 jobs refuses an archive over 50 MiB compressed, 200 MiB unpacked, or 10 000
 files (its configured defaults), and identifies uploads by their files' paths,
 executable bits and contents: uploading identical files again is recognized,
-however they were packed.
+however they were packed. An upload whose image (its rendered Containerfile and
+files) was already built and validated isn't rebuilt unless --force is given; a
+newer upload supersedes a build still in progress.
 
 jobs isn't exposed outside the cluster; `just kind-upload <dir>` port-forwards
 to it and runs this command."
@@ -135,6 +137,10 @@ pub struct UploadArgs {
     /// jobs service URL [env: PEDAGOG_JOBS_URL] [default: http://localhost:18081].
     #[arg(long, value_name = "URL")]
     pub jobs_url: Option<String>,
+
+    /// Rebuild even if this exact image was already built and validated.
+    #[arg(long)]
+    pub force: bool,
 
     /// Additional recipe directory for the local check; repeatable, searched after HAMMER_RECIPES.
     #[arg(short = 'r', long, value_name = "DIR", action = clap::ArgAction::Append)]

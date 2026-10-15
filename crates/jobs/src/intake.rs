@@ -1,21 +1,23 @@
-//! `POST /internal/assignments`: accept an assignment archive, check it, and
-//! store it in Garage. Dispatching its build comes with the build flow.
+//! `POST /internal/assignments[?force=true]`: accept an assignment archive,
+//! check it, store it in Garage, and dispatch its build.
 
 use std::path::Path;
 
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use pedagog_core::recipe::assignment::AssignmentYaml;
-use pedagog_core::recipe::render::AssignmentFiles;
+use pedagog_core::recipe::render::containerfile::Containerfile;
+use pedagog_core::recipe::render::{AssignmentFiles, FromSource, Render, RenderOptions};
 use pedagog_core::recipe::resolve::resolve;
 use pedagog_core::recipe::store::RecipeStore;
-use pedagog_store::db::assignments;
+use pedagog_store::db::assignments as db;
 use pedagog_store::objects::archive_key;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, ArchiveError, Limits};
+use crate::assignments::{self, Decision, Plan};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -26,6 +28,14 @@ pub struct Uploaded {
     pub size_bytes: i64,
     /// Things the uploader should know that don't block the upload.
     pub warnings: Vec<String>,
+    pub build: Decision,
+}
+
+#[derive(Deserialize)]
+pub struct UploadQuery {
+    /// Rebuild even if this exact image was already built and validated.
+    #[serde(default)]
+    force: bool,
 }
 
 /// An upload that passed every check and is ready to store.
@@ -33,6 +43,8 @@ pub struct Uploaded {
 pub struct Checked {
     pub assignment: AssignmentYaml,
     pub tree_hash: String,
+    /// Rendered FROM the prebuilt OS image in `registry`.
+    pub containerfile: String,
     pub warnings: Vec<String>,
 }
 
@@ -60,7 +72,12 @@ fn refused(status: StatusCode, error: impl Into<String>) -> Refused {
 /// Everything about an upload that needs no database or object store: the
 /// archive's shape, `assignment.yml`, the files it names, and resolution
 /// against jobs' recipes (authoritative over hammer's local check).
-pub fn check_upload(bytes: &[u8], limits: &Limits, recipes: &Path) -> Result<Checked, Refused> {
+pub fn check_upload(
+    bytes: &[u8],
+    limits: &Limits,
+    recipes: &Path,
+    registry: &str,
+) -> Result<Checked, Refused> {
     let inspected = archive::inspect(bytes, limits).map_err(|e| match e {
         ArchiveError::TooLarge(m) => refused(StatusCode::PAYLOAD_TOO_LARGE, m),
         ArchiveError::Invalid(m) => refused(StatusCode::BAD_REQUEST, m),
@@ -79,7 +96,17 @@ pub fn check_upload(bytes: &[u8], limits: &Limits, recipes: &Path) -> Result<Che
             format!("jobs' recipes failed to load ({} errors)", errs.len()),
         )
     })?;
-    resolve(&assignment, &store).map_err(|e| unprocessable(e.to_string()))?;
+    let spec = resolve(&assignment, &store)
+        .map_err(|e| unprocessable(e.to_string()))?
+        .with_files(files.clone());
+    let containerfile = Containerfile::render(
+        &spec,
+        &RenderOptions {
+            registry: Some(registry.to_owned()),
+            from: FromSource::PrebuiltBase,
+        },
+    )
+    .to_string();
 
     let mut warnings = Vec::new();
     let hosts: Vec<String> = assignment
@@ -101,17 +128,24 @@ pub fn check_upload(bytes: &[u8], limits: &Limits, recipes: &Path) -> Result<Che
     Ok(Checked {
         assignment,
         tree_hash: inspected.tree_hash,
+        containerfile,
         warnings,
     })
 }
 
-pub async fn upload(State(state): State<AppState>, body: Bytes) -> Result<Response, Refused> {
+pub async fn upload(
+    State(state): State<AppState>,
+    Query(query): Query<UploadQuery>,
+    body: Bytes,
+) -> Result<Response, Refused> {
     let limits = state.config.limits;
     let recipes = state.config.recipes_dir.clone();
+    let registry = state.config.registry.clone();
     let bytes = body.clone();
-    let checked = tokio::task::spawn_blocking(move || check_upload(&bytes, &limits, &recipes))
-        .await
-        .map_err(|e| internal("checking the upload", e))??;
+    let checked =
+        tokio::task::spawn_blocking(move || check_upload(&bytes, &limits, &recipes, &registry))
+            .await
+            .map_err(|e| internal("checking the upload", e))??;
 
     let id = checked.assignment.id.to_string();
     let key = archive_key(&id, &checked.tree_hash);
@@ -120,14 +154,26 @@ pub async fn upload(State(state): State<AppState>, body: Bytes) -> Result<Respon
         .put(&key, body.to_vec())
         .await
         .map_err(|e| internal("storing the archive", e))?;
-    assignments::upsert_assignment(&state.pool, &id, &checked.assignment.name)
+    db::upsert_assignment(&state.pool, &id, &checked.assignment.name)
         .await
         .map_err(|e| internal("recording the assignment", e))?;
     let size = i64::try_from(body.len()).unwrap_or(i64::MAX);
-    let upload = assignments::record_upload(&state.pool, &id, &checked.tree_hash, &key, size)
+    let upload = db::record_upload(&state.pool, &id, &checked.tree_hash, &key, size)
         .await
         .map_err(|e| internal("recording the upload", e))?;
     tracing::info!(assignment = %id, upload = upload.id, tree = %checked.tree_hash, "upload stored");
+
+    let plan = Plan {
+        assignment_id: id.clone(),
+        upload_id: upload.id,
+        tree_hash: checked.tree_hash.clone(),
+        object_key: key,
+        containerfile: checked.containerfile,
+        force: query.force,
+    };
+    let build = assignments::dispatch(&state, plan)
+        .await
+        .map_err(|e| internal("dispatching the build", e))?;
 
     let reply = Uploaded {
         assignment_id: id,
@@ -135,6 +181,7 @@ pub async fn upload(State(state): State<AppState>, body: Bytes) -> Result<Respon
         tree_hash: checked.tree_hash,
         size_bytes: size,
         warnings: checked.warnings,
+        build,
     };
     Ok((StatusCode::CREATED, Json(reply)).into_response())
 }
@@ -154,6 +201,8 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::archive::tests::{Item, LIMITS, tgz};
+
+    const REGISTRY: &str = "registry.test:5000";
 
     fn recipes() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../recipes")
@@ -181,19 +230,33 @@ mod tests {
 
     #[test]
     fn accepts_the_example_assignment() {
-        let checked = check_upload(&example(&[], None), &LIMITS, &recipes()).unwrap();
+        let checked = check_upload(&example(&[], None), &LIMITS, &recipes(), REGISTRY).unwrap();
         assert_eq!(checked.assignment.id.to_string(), "linked-list-python");
+        assert!(
+            checked
+                .containerfile
+                .starts_with("FROM registry.test:5000/pedagog/ubuntu:22\n")
+        );
+        assert!(
+            checked
+                .containerfile
+                .contains("COPY --chown=grader:grader tests/ /pedagog/tests/")
+        );
         assert!(checked.warnings.is_empty(), "{:?}", checked.warnings);
     }
 
     #[test]
     fn refusals_carry_the_right_status() {
-        let status = |bytes: &[u8]| check_upload(bytes, &LIMITS, &recipes()).unwrap_err().status;
+        let status = |bytes: &[u8]| {
+            check_upload(bytes, &LIMITS, &recipes(), REGISTRY)
+                .unwrap_err()
+                .status
+        };
         assert_eq!(status(b"junk"), StatusCode::BAD_REQUEST);
         let mut tiny = LIMITS;
         tiny.max_compressed_bytes = 10;
         assert_eq!(
-            check_upload(&example(&[], None), &tiny, &recipes())
+            check_upload(&example(&[], None), &tiny, &recipes(), REGISTRY)
                 .unwrap_err()
                 .status,
             StatusCode::PAYLOAD_TOO_LARGE
@@ -214,7 +277,8 @@ mod tests {
     #[test]
     fn testing_without_tests_is_refused() {
         let yml = "id: x\nname: X\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: interactive\n  toolchains: [python:3.12]\ntesting:\n  framework: pytest:1\nfiles:\n  tests: hidden\n";
-        let err = check_upload(&example(&[], Some(yml)), &LIMITS, &recipes()).unwrap_err();
+        let err =
+            check_upload(&example(&[], Some(yml)), &LIMITS, &recipes(), REGISTRY).unwrap_err();
         assert_eq!(err.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(err.error.contains("hidden/ not found"), "{}", err.error);
     }
@@ -223,7 +287,7 @@ mod tests {
     fn host_rules_and_missing_solution_are_warnings() {
         let yml = "id: x\nname: X\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: interactive\n  network:\n    mode: deny\n    allow:\n      - host: pypi.org\n        ports: [443]\n";
         let bytes = tgz(&[Item::File("assignment.yml", yml.as_bytes(), 0o644)]);
-        let checked = check_upload(&bytes, &LIMITS, &recipes()).unwrap();
+        let checked = check_upload(&bytes, &LIMITS, &recipes(), REGISTRY).unwrap();
         assert_eq!(checked.warnings.len(), 2, "{:?}", checked.warnings);
         assert!(checked.warnings[0].contains("pypi.org:443"));
         assert!(checked.warnings[1].contains("validation will be skipped"));

@@ -89,15 +89,59 @@ pub fn inspect(bytes: &[u8], limits: &Limits) -> Result<Inspected, ArchiveError>
             "no {ASSIGNMENT_FILE} at the archive's root (pack the assignment directory itself)"
         ))
     })?;
-    let mut tree = blake3::Hasher::new();
-    for (path, (executable, digest)) in &hashes {
-        tree.update(format!("{path}\0{}\0{digest}\n", u8::from(*executable)).as_bytes());
-    }
     Ok(Inspected {
-        tree_hash: tree.finalize().to_hex().to_string(),
+        tree_hash: tree_hash(&hashes),
         assignment_yaml,
         dirs,
     })
+}
+
+/// Unpack into `dest` (which must exist), with the same checks as [`inspect`];
+/// returns the tree hash of what was written. Files are 0755 if executable,
+/// else 0644.
+pub fn extract(bytes: &[u8], limits: &Limits, dest: &Path) -> Result<String, ArchiveError> {
+    let io = |path: &str, e: std::io::Error| ArchiveError::Invalid(format!("{path}: {e}"));
+    let mut hashes = BTreeMap::new();
+    walk(bytes, limits, |path, entry| {
+        let target = dest.join(path);
+        match entry {
+            Entry::Dir => std::fs::create_dir_all(&target).map_err(|e| io(path, e)),
+            Entry::File {
+                executable,
+                content,
+            } => {
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| io(path, e))?;
+                }
+                std::fs::write(&target, content).map_err(|e| io(path, e))?;
+                set_mode(&target, if executable { 0o755 } else { 0o644 })
+                    .map_err(|e| io(path, e))?;
+                let digest = blake3::hash(content).to_hex().to_string();
+                hashes.insert(path.to_owned(), (executable, digest));
+                Ok(())
+            }
+        }
+    })?;
+    Ok(tree_hash(&hashes))
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+}
+
+#[cfg(not(unix))]
+fn set_mode(_: &Path, _: u32) -> std::io::Result<()> {
+    Ok(())
+}
+
+fn tree_hash(files: &BTreeMap<String, (bool, String)>) -> String {
+    let mut tree = blake3::Hasher::new();
+    for (path, (executable, digest)) in files {
+        tree.update(format!("{path}\0{}\0{digest}\n", u8::from(*executable)).as_bytes());
+    }
+    tree.finalize().to_hex().to_string()
 }
 
 pub enum Entry<'a> {
@@ -325,6 +369,32 @@ pub mod tests {
             inspect(b"not a tarball", &LIMITS),
             Err(ArchiveError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn extract_writes_the_tree_inspect_hashed() {
+        let bytes = tgz(&[
+            Item::File("assignment.yml", YML, 0o644),
+            Item::File("solution/run.sh", b"#!/bin/sh\n", 0o700),
+            Item::Dir("starter"),
+        ]);
+        let dest = std::env::temp_dir().join(format!("jobs-extract-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dest);
+        std::fs::create_dir_all(&dest).unwrap();
+        let tree = extract(&bytes, &LIMITS, &dest).unwrap();
+        assert_eq!(tree, inspect(&bytes, &LIMITS).unwrap().tree_hash);
+        assert_eq!(std::fs::read(dest.join("assignment.yml")).unwrap(), YML);
+        assert!(dest.join("starter").is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dest.join("solution/run.sh"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o755);
+        }
+        let _ = std::fs::remove_dir_all(&dest);
     }
 
     #[test]
