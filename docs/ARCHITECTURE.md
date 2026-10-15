@@ -189,6 +189,19 @@ Building happens in two stages:
 
 All builds run in-cluster via **Kaniko** — no Docker daemon required. `core` renders the Containerfile from resolved recipes; the `k8s` crate submits it as a Kubernetes Job (`jobs` for OS base images, `api` for instructor images later). Recipes are **pinned to the installation and baked** into the `jobs` image (with `hammer vend` ingredients) — not git-synced in-cluster.
 
+### Assignment Uploads
+
+Until `api` exists, instructors (and developers) upload with `hammer upload <dir>` to `jobs`' internal `POST /internal/assignments` (`just kind-upload <dir>` port-forwards to it on kind). The archive is the assignment directory itself, `assignment.yml` at its root.
+
+- **`hammer upload`** checks the directory locally (parses, files present, resolves when `HAMMER_RECIPES`/`--recipes` is set), then packs every regular file except VCS metadata (`.git`, `.hg`, `.svn`). Symlinks and special files are refused.
+- **`jobs` is authoritative.** It opens every upload and refuses it when:
+  - it isn't a gzipped tar, or `assignment.yml` isn't at its root (400);
+  - an entry is absolute, contains `..`, is duplicated, or isn't a regular file or directory (400);
+  - it's over 50 MiB compressed, 200 MiB unpacked, or 10 000 entries (413; `PEDAGOG_MAX_UPLOAD_BYTES`, `PEDAGOG_MAX_UNPACKED_BYTES`, `PEDAGOG_MAX_UPLOAD_FILES`);
+  - `assignment.yml` doesn't parse, a configured `files:` directory is missing, `testing:` has no tests, or it doesn't resolve against `jobs`' own recipes (422).
+- **Identity:** an upload is identified by its *tree hash*, a blake3 over each file's path, executable bit and content. Timestamps, owners, entry order and other mode bits don't count, so uploading identical files again is recognized however they were packed. Archives are stored in Garage at `assignments/<id>/<tree-hash>.tgz`, one `assignment_uploads` row per distinct tree.
+- **Warnings** (accepted, but reported): `host` network rules that can't be enforced yet, and a missing reference solution (validation will be skipped).
+
 ### `hammer` — Build Tool
 
 `hammer` is a CLI tool (`crates/hammer/`) — a thin wrapper over `core`'s recipe resolution and Containerfile rendering — for local inspection (`plan`) and ingredient vending (`vend`). Recipe resolution/rendering itself lives in `core`, so the `jobs` service renders in-process rather than shelling out. Recipes live in a separate `recipes` repo, pointed to via `HAMMER_RECIPES`.

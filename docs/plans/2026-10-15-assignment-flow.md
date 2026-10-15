@@ -111,21 +111,19 @@ differ from the parent plan, this plan wins.
   The launcher needs exactly these to copy grader-only files and drop to `grader`/`runner`.
   This fits Pod Security "baseline", recorded as `pedagog-builds`' ceiling ("restricted"
   would break the launcher).
-- **Network:** a new `environment.network` in `assignment.yml`:
-
-  ```yaml
-  environment:
-    network: none            # default | internet | { allow: [10.20.0.0/16, ...] }
-  ```
-
-  - Static NetworkPolicies select validation pods by label
-    (`pedagog.io/role=validate`, `pedagog.io/network=none|internet|allow`):
-    `validate-base` (DNS, `garage-service:3900`) for all, `validate-internet` (0.0.0.0/0
-    minus `PEDAGOG_CLUSTER_CIDRS`) when labeled `internet`.
-  - `allow: [cidrs]` gets a per-run NetworkPolicy, owned by the Job (deleted with it); the
-    jobs Role gains `networkpolicies` create/delete.
+- **Network:** the existing `environment.network` (`mode: allow | deny`, `allow:` rules of
+  `host` or `cidr` with optional `ports`). Revised during PR (b), when it turned out the
+  schema already existed:
+  - its default changes from `allow` to **`deny`** (no egress beyond DNS and Garage);
+  - static NetworkPolicies select validation pods by label
+    (`pedagog.io/role=validate`, `pedagog.io/network=deny|allow|rules`): `validate-base`
+    (DNS, `garage-service:3900`) for all, `validate-internet` (0.0.0.0/0 minus
+    `PEDAGOG_CLUSTER_CIDRS`) for `mode: allow`;
+  - `cidr` rules (with their ports) get a per-run NetworkPolicy, owned by the Job (deleted
+    with it); the jobs Role gains `networkpolicies` create/delete;
+  - `host` rules are accepted but **not enforced** until the egress proxy exists: those
+    hosts stay unreachable, and uploads warn about them;
   - Kaniko build pods keep their egress (package installs).
-  - Hostname allowlists are a separate plan (below).
 - **Results check:** `jobs` reads `results.yaml` from Garage, parses it with
   `core::results`, and sets `validation_status` and `validation_problems` as above.
 
@@ -197,7 +195,7 @@ All approved in review:
 
 - Each PR is additive and revertable on its own: new tables (down migrations), new routes
   and code paths, new manifests (policies), an optional schema field (`environment.network`
-  absent means `none`), and an optional ingredient field.
+  absent now means `deny`), and an optional ingredient field.
 - PR 0 changes OS builds' mounts; reverting it restores the network fallback behavior.
 
 ## Implementation steps
@@ -216,7 +214,7 @@ All approved in review:
    - Garage wiring in `jobs` (config, Deployment env, Secret);
    - archive inspection (limits, path safety, tree hash), storage, upload rows;
    - `POST /internal/assignments` with the dispatch rules (dispatch itself stubbed until c);
-   - `environment.network` in the schema (core) with validation;
+   - `environment.network` defaults to `deny`; host-rule warnings;
    - `hammer upload` (local checks, packing, `--jobs-url`, `--force`), `just kind-upload`;
    - documentation of the dedupe and rejection rules; tests.
 3. **(c) Assignment build:**
