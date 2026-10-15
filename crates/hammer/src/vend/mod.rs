@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use miette::{Result, miette};
+use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use pedagog_core::recipe::os::OsDef;
@@ -41,7 +42,11 @@ pub fn run_vend(args: VendArgs, dirs: Vec<PathBuf>) -> Result<()> {
                 .map_err(|e| miette!("failed to create {}: {}", out_dir.display(), e))?;
             let out_path = out_dir.join(&ingredient.output);
             print!("Vending {} ... {} ", target.label, ingredient.output);
-            match fetch(ingredient, &out_path) {
+            let fetched = fetch(ingredient, &out_path).and_then(|()| match &ingredient.sha256 {
+                Some(expected) => verify_sha256(&out_path, expected),
+                None => Ok(()),
+            });
+            match fetched {
                 Ok(()) => println!("✓"),
                 Err(e) => {
                     println!("✗");
@@ -71,6 +76,23 @@ fn fetch(ingredient: &Ingredient, out_path: &Path) -> Result<(), String> {
                 return Err(format!("curl failed for {url}"));
             }
         }
+    }
+    Ok(())
+}
+
+/// Refuses (and deletes) a download whose SHA-256 isn't the recipe's.
+fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected {
+        let _ = std::fs::remove_file(path);
+        return Err(format!(
+            "checksum mismatch: expected sha256 {expected}, got {actual}"
+        ));
     }
     Ok(())
 }
@@ -202,4 +224,38 @@ fn no_filter(args: &VendArgs) -> bool {
         && args.platform.is_none()
         && args.os.is_none()
         && args.toolchain.is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch_file(name: &str, content: &[u8]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("hammer-vend-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("file");
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    // sha256("hello")
+    const HELLO: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+
+    #[test]
+    fn matching_checksum_keeps_the_file() {
+        let path = scratch_file("ok", b"hello");
+        verify_sha256(&path, HELLO).unwrap();
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn mismatched_checksum_deletes_the_file() {
+        let path = scratch_file("bad", b"tampered");
+        let err = verify_sha256(&path, HELLO).unwrap_err();
+        assert!(
+            err.contains("checksum mismatch") && err.contains(HELLO),
+            "{err}"
+        );
+        assert!(!path.exists());
+    }
 }
