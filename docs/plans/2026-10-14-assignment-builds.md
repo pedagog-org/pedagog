@@ -187,28 +187,21 @@ A Kubernetes Job from the built image, in `pedagog-builds`:
   signatures, `py.typed`, checked with `mypy --strict`):
 
   ```python
-  @weight(10)                   # default 1; all-or-nothing
+  @rubric_item("appends", points=10, id="append")  # the test's points come from score.award()/check()
   @number("1.1")                # label, and results are ordered by it
   @visibility(AFTER_END)        # both parts; or score=VISIBLE, output=AFTER_END (the defaults)
   @solution_expect(Expect.FAIL) # optional; validation expects the reference solution to fail
   @timeout(10)                  # seconds (the default); 0 disables
-  def test_append(): ...
+  def test_append(score): ...
   ```
 
   - **`AFTER_END`** means once the student can no longer submit: the late deadline if late
     submissions are allowed, otherwise the due date.
-  - **Partial credit (rubrics)** replaces `@weight` on a test:
-    - one item: `@rubric_item("name", points=4)` with the `score` fixture;
-    - several items: a `Rubric` subclass whose attributes are `item("name", points=...,
-      extra_credit=False)`, applied with `@rubric(MyRubric)`; the `scores` fixture is an
-      instance of it;
-    - `score.award(points=FULL)` sets an item's points and `score.nil()` resets them; an item
-      never awarded scores 0, and awards stand if the test fails afterwards;
-    - `with score.check(): ...` awards the item if the block completes; if it raises, the
-      item scores 0, the failure is recorded on the item, and the test continues but ends as
-      failed;
-    - extra-credit items add to the score, not the max; items appear under the test's
-      `items:` in results.yaml.
+  - **Scoring is rubric-only** (`@rubric_item` for one item, `@rubric(MyRubric)` for
+    several): points come from explicit `award()` (adds), `set()`, and `check()` calls, with
+    per-item clamps, extra-credit modes, checklist feedback for students and a grading trace
+    for instructors. Undecorated tests are pass/fail with 0 points. Design and details:
+    `docs/plans/2026-10-15-rubric-scoring-v2.md`.
 
 - **Process isolation (pytest), on by default.** An import hook makes student modules
   resolve to **RPyC** proxies connected to the `runner` process, so tests stay native:

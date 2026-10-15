@@ -3,42 +3,63 @@
   "run-id": null,
   "summary": {
     "score": 10.0,
-    "total": 11.0
+    "total": 10.0
   },
   "tests": [
     {
-      "id": "test_linked_list.py::test_append_and_to_list",
+      "id": "append",
+      "node": "test_linked_list.py::test_append_and_to_list",
       "name": "append keeps insertion order",
       "status": "pass",
       "score": 2.0,
       "max": 2.0,
       "output": "",
+      "feedback": "",
+      "trace": "append \u2014 append keeps insertion order (rubric item: points 2, clamp [0, 2], none)\n  award FULL (+2)  = 2\n  final 2  -> 2 / 2\n  status: pass",
       "visibility": {
         "score": "visible",
         "output": "after_end"
       },
-      "number": "1"
+      "number": "1",
+      "clamp": [
+        0.0,
+        2.0
+      ],
+      "extra-credit": "none",
+      "attempted": true
     },
     {
-      "id": "test_linked_list.py::test_len",
+      "id": "len",
+      "node": "test_linked_list.py::test_len",
       "name": "len counts elements",
       "status": "pass",
       "score": 2.0,
       "max": 2.0,
       "output": "",
+      "feedback": "+1 empty list\n+1 two elements",
+      "trace": "len \u2014 len counts elements (rubric item: points 2, clamp [0, 2], none)\n  award +1  empty list  = 1\n  award +1  two elements  = 2\n  final 2  -> 2 / 2\n  status: pass",
       "visibility": {
         "score": "visible",
         "output": "after_end"
       },
-      "number": "2"
+      "number": "2",
+      "clamp": [
+        0.0,
+        2.0
+      ],
+      "extra-credit": "none",
+      "attempted": true
     },
     {
-      "id": "test_linked_list.py::test_pop_front",
+      "id": "pop-front",
+      "node": "test_linked_list.py::test_pop_front",
       "name": "pop_front",
       "status": "pass",
       "score": 4.0,
       "max": 4.0,
       "output": "",
+      "feedback": "",
+      "trace": "pop-front \u2014 pop_front (rubric PopFront)\n  returns_front  points 2, clamp [0, 2], none\n    check \u2713 +2  returns 1, then 2  = 2\n    final 2  -> 2 / 2\n  raises_when_empty  points 1, clamp [0, 1], none\n    check \u2713 +1  raises IndexError once empty  = 1\n    final 1  -> 1 / 1\n  reusable  points 1, clamp [0, 1], none\n    check \u2713 +1  append and to_list work after emptying  = 1\n    final 1  -> 1 / 1\n  test: 2 + 1 + 1 = 4;  max 2 + 1 + 1 = 4  -> 4 / 4\n  status: pass",
       "visibility": {
         "score": "visible",
         "output": "hidden"
@@ -50,53 +71,86 @@
           "name": "returns values from the front",
           "score": 2.0,
           "max": 2.0,
-          "extra-credit": false,
-          "output": ""
+          "clamp": [
+            0.0,
+            2.0
+          ],
+          "extra-credit": "none",
+          "attempted": true,
+          "feedback": "\u2713 +2 returns 1, then 2"
         },
         {
           "id": "raises_when_empty",
           "name": "raises IndexError when empty",
           "score": 1.0,
           "max": 1.0,
-          "extra-credit": false,
-          "output": ""
+          "clamp": [
+            0.0,
+            1.0
+          ],
+          "extra-credit": "none",
+          "attempted": true,
+          "feedback": "\u2713 +1 raises IndexError once empty"
         },
         {
           "id": "reusable",
           "name": "the list still works after being emptied",
           "score": 1.0,
           "max": 1.0,
-          "extra-credit": false,
-          "output": ""
+          "clamp": [
+            0.0,
+            1.0
+          ],
+          "extra-credit": "none",
+          "attempted": true,
+          "feedback": "\u2713 +1 append and to_list work after emptying"
         }
       ]
     },
     {
-      "id": "test_linked_list.py::test_reverse_stretch_goal",
-      "name": "stretch goal: reverse() (the reference solution doesn't implement it)",
+      "id": "reverse",
+      "node": "test_linked_list.py::test_reverse_stretch_goal",
+      "name": "stretch goal: reverse()",
       "status": "fail",
       "score": 0.0,
-      "max": 1.0,
-      "output": "@weight(1)\n    @number(4)\n    @solution_expect(Expect.FAIL)\n    def test_reverse_stretch_goal():\n        \"\"\"stretch goal: reverse() (the reference solution doesn't implement it)\"\"\"\n        items = LinkedList()\n        items.append(1)\n        items.append(2)\n>       items.reverse()\n        ^^^^^^^^^^^^^\nE       AttributeError: 'LinkedList' object has no attribute 'reverse'\n\n/pedagog/tests/test_linked_list.py:63: AttributeError",
+      "max": 0.0,
+      "output": "score = <pedagog_pytest.scoring.Score object at 0xffff8363e3f0>\n\n    @rubric_item(\"stretch goal: reverse()\", points=1, id=\"reverse\", extra_credit=ExtraCredit.ATTEMPTED_WORK)\n    @number(4)\n    @solution_expect(Expect.FAIL)\n    def test_reverse_stretch_goal(score: Score):\n        \"\"\"Counts toward the total only for students who attempt it; the reference\n        solution doesn't.\"\"\"\n        items = LinkedList()\n        items.append(1)\n        items.append(2)\n        if hasattr(items, \"reverse\"):\n            score.attempt()\n>       items.reverse()\n        ^^^^^^^^^^^^^\nE       AttributeError: 'LinkedList' object has no attribute 'reverse'\n\n/pedagog/tests/test_linked_list.py:66: AttributeError",
+      "feedback": "\u2717 test_linked_list.py:66: AttributeError: 'LinkedList' object has no attribute 'reverse'",
+      "trace": "reverse \u2014 stretch goal: reverse() (rubric item: points 1, clamp [0, 1], attempted-work)\n  (never awarded)\n  final 0; not attempted: not in max  -> 0 / 0\n  status: fail (test_linked_list.py:66: AttributeError: 'LinkedList' object has no attribute 'reverse')",
       "visibility": {
         "score": "visible",
         "output": "after_end"
       },
       "number": "4",
-      "solution-expect": "fail"
+      "solution-expect": "fail",
+      "clamp": [
+        0.0,
+        1.0
+      ],
+      "extra-credit": "attempted-work",
+      "attempted": false
     },
     {
-      "id": "test_linked_list.py::test_many_elements",
+      "id": "many",
+      "node": "test_linked_list.py::test_many_elements",
       "name": "handles a thousand elements",
       "status": "pass",
       "score": 2.0,
       "max": 2.0,
       "output": "",
+      "feedback": "+1 first 10 elements correct\n+1 all 1000 elements correct",
+      "trace": "many \u2014 handles a thousand elements (rubric item: points 2, clamp [0, 2], none)\n  award +1  first 10 elements correct  = 1\n  award FULL (+1)  all 1000 elements correct  = 2\n  final 2  -> 2 / 2\n  status: pass",
       "visibility": {
         "score": "visible",
         "output": "after_end"
       },
-      "number": "5"
+      "number": "5",
+      "clamp": [
+        0.0,
+        2.0
+      ],
+      "extra-credit": "none",
+      "attempted": true
     }
   ],
   "artifacts": []
