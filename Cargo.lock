@@ -2059,6 +2059,7 @@ dependencies = [
  "pedagog-core",
  "pedagog-k8s",
  "pedagog-store",
+ "reqwest",
  "rustls",
  "serde",
  "serde_json",
