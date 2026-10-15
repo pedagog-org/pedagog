@@ -1,13 +1,16 @@
 //! Kubernetes client wrapper and Kaniko build orchestration.
 //!
 //! The only crate that touches `kube`/`k8s-openapi`. `build` owns image builds;
-//! `run` (session/submission pods) will land later.
+//! `validate` runs assignment validation Jobs; `run` (session/submission pods)
+//! will land later.
 
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::{ConfigMap, Pod};
+use k8s_openapi::api::networking::v1::NetworkPolicy;
 use kube::{Api, Client};
 
 pub mod build;
+pub mod validate;
 
 /// Thin wrapper over [`kube::Client`] pinned to a namespace, shared by build/run.
 #[derive(Clone)]
@@ -38,6 +41,10 @@ impl KubeClient {
     }
 
     pub(crate) fn configmaps(&self) -> Api<ConfigMap> {
+        Api::namespaced(self.client.clone(), &self.namespace)
+    }
+
+    pub(crate) fn network_policies(&self) -> Api<NetworkPolicy> {
         Api::namespaced(self.client.clone(), &self.namespace)
     }
 }

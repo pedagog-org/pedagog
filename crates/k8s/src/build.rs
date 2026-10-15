@@ -55,6 +55,7 @@ pub struct BuildEnv {
 pub enum JobKind {
     OsBuild,
     AssignmentBuild,
+    AssignmentValidate,
 }
 
 impl JobKind {
@@ -62,6 +63,7 @@ impl JobKind {
         match self {
             JobKind::OsBuild => "os-build",
             JobKind::AssignmentBuild => "assignment-build",
+            JobKind::AssignmentValidate => "assignment-validate",
         }
     }
 
@@ -69,6 +71,7 @@ impl JobKind {
         match self {
             JobKind::OsBuild => "pedagog-os-build",
             JobKind::AssignmentBuild => "pedagog-assignment-build",
+            JobKind::AssignmentValidate => "pedagog-assignment-validate",
         }
     }
 }
@@ -95,6 +98,15 @@ impl JobKey {
             kind: JobKind::AssignmentBuild,
             id: id.into(),
             hash: hash.into(),
+        }
+    }
+
+    /// One validation run per build attempt.
+    pub fn validation(id: &str, build_id: i64) -> Self {
+        Self {
+            kind: JobKind::AssignmentValidate,
+            id: id.into(),
+            hash: build_id.to_string(),
         }
     }
 
@@ -197,7 +209,7 @@ enum Phase {
 
 /// Groups all build logic over a [`KubeClient`] + environment.
 pub struct Builder {
-    client: KubeClient,
+    pub(crate) client: KubeClient,
     env: BuildEnv,
 }
 
@@ -285,6 +297,15 @@ impl Builder {
                 },
                 Phase::Active => JobState::Active,
             }),
+        }
+    }
+
+    pub(crate) async fn create_job(&self, job: &Job) -> kube::Result<Option<Job>> {
+        match self.client.jobs().create(&PostParams::default(), job).await {
+            Ok(created) => Ok(Some(created)),
+            // race backstop: another pass created it first
+            Err(kube::Error::Api(e)) if e.code == 409 => Ok(None),
+            Err(e) => Err(e),
         }
     }
 
