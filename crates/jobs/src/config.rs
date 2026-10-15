@@ -24,6 +24,7 @@ pub const VALIDATION_DEADLINE: &str = "PEDAGOG_VALIDATION_DEADLINE";
 pub const VALIDATION_CPU: &str = "PEDAGOG_VALIDATION_CPU";
 pub const VALIDATION_MEMORY: &str = "PEDAGOG_VALIDATION_MEMORY";
 pub const CLUSTER_CIDRS: &str = "PEDAGOG_CLUSTER_CIDRS";
+pub const BUILD_CACHE: &str = "PEDAGOG_BUILD_CACHE";
 
 const DEFAULT_RECIPES_DIR: &str = "/opt/pedagog/recipes";
 const DEFAULT_NAMESPACE: &str = "pedagog-builds";
@@ -62,6 +63,8 @@ pub struct Config {
     pub validation: ValidationConfig,
     /// The cluster's own pod and service ranges, excluded from `mode: allow` egress.
     pub cluster_cidrs: Vec<String>,
+    /// Kaniko's layer cache in the registry (`PEDAGOG_BUILD_CACHE=false` turns it off).
+    pub build_cache: bool,
 }
 
 pub struct ValidationConfig {
@@ -105,6 +108,7 @@ impl Config {
                 cpu: var_or(VALIDATION_CPU, DEFAULT_VALIDATION_CPU),
                 memory: var_or(VALIDATION_MEMORY, DEFAULT_VALIDATION_MEMORY),
             },
+            build_cache: var_or(BUILD_CACHE, "true") != "false",
             cluster_cidrs: var_or(CLUSTER_CIDRS, DEFAULT_CLUSTER_CIDRS)
                 .split(',')
                 .map(|c| c.trim().to_owned())
@@ -118,6 +122,9 @@ impl Config {
             kind: self.env,
             jobs_image: self.jobs_image.clone(),
             recipes_hostpath: self.recipes_hostpath.clone(),
+            cache_repo: self
+                .build_cache
+                .then(|| format!("{}/pedagog/cache", self.registry)),
         }
     }
 }

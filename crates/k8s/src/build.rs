@@ -48,6 +48,9 @@ pub struct BuildEnv {
     pub jobs_image: String,
     /// dev: node path to the recipes checkout mounted straight into kaniko.
     pub recipes_hostpath: Option<String>,
+    /// Repository for Kaniko's layer cache (e.g. `<registry>/pedagog/cache`);
+    /// `None` builds without a cache.
+    pub cache_repo: Option<String>,
 }
 
 /// What a Job builds, for its name and labels.
@@ -492,15 +495,20 @@ fn kaniko_job(env: &BuildEnv, name: &str, kind: JobKind, req: &BuildRequest, cm:
     let kaniko = Container {
         name: "kaniko".into(),
         image: Some(KANIKO_IMAGE.into()),
-        args: Some(vec![
-            format!("--dockerfile={DOCKERFILE_DIR}/{DOCKERFILE_NAME}"),
-            format!("--context=dir://{context_dir}"),
-            format!("--destination={}", req.dest),
-            "--insecure".into(),
-            "--insecure-pull".into(),
-            format!("--ignore-path={RECIPES_PATH}"),
-            format!("--ignore-path={INGREDIENTS_PATH}"),
-        ]),
+        args: Some(
+            vec![
+                format!("--dockerfile={DOCKERFILE_DIR}/{DOCKERFILE_NAME}"),
+                format!("--context=dir://{context_dir}"),
+                format!("--destination={}", req.dest),
+                "--insecure".into(),
+                "--insecure-pull".into(),
+                format!("--ignore-path={RECIPES_PATH}"),
+                format!("--ignore-path={INGREDIENTS_PATH}"),
+            ]
+            .into_iter()
+            .chain(cache_args(env))
+            .collect(),
+        ),
         volume_mounts: Some(mounts),
         ..Default::default()
     };
@@ -527,6 +535,21 @@ fn kaniko_job(env: &BuildEnv, name: &str, kind: JobKind, req: &BuildRequest, cm:
         }),
         ..Default::default()
     }
+}
+
+/// Unchanged layers (toolchains, platform, ...) come from the cache, so an
+/// upload that only changes its files rebuilds just the ASSIGNMENT FILES phase.
+/// The cache lives in the same plain-HTTP in-cluster registry as the images.
+fn cache_args(env: &BuildEnv) -> Vec<String> {
+    let Some(repo) = &env.cache_repo else {
+        return Vec::new();
+    };
+    let registry = repo.split('/').next().unwrap_or(repo);
+    vec![
+        "--cache=true".into(),
+        format!("--cache-repo={repo}"),
+        format!("--insecure-registry={registry}"),
+    ]
 }
 
 fn volume_mount(name: &str, path: &str, read_only: bool) -> VolumeMount {
@@ -575,6 +598,7 @@ mod tests {
             kind: Env::Dev,
             jobs_image: "unused".into(),
             recipes_hostpath: Some("/srv/recipes".into()),
+            cache_repo: None,
         }
     }
 
@@ -583,6 +607,7 @@ mod tests {
             kind: Env::Prod,
             jobs_image: "registry/pedagog/jobs:1".into(),
             recipes_hostpath: None,
+            cache_repo: Some("registry:5000/pedagog/cache".into()),
         }
     }
 
@@ -698,6 +723,27 @@ mod tests {
             assert_eq!(mount.sub_path.as_deref(), Some("ingredients"));
             assert_eq!(mount.read_only, Some(true));
         }
+    }
+
+    #[test]
+    fn layer_cache_is_on_when_a_cache_repo_is_set() {
+        let args = |env: &BuildEnv| {
+            os_job(env, "reg/x:1")
+                .spec
+                .unwrap()
+                .template
+                .spec
+                .unwrap()
+                .containers[0]
+                .args
+                .clone()
+                .unwrap()
+        };
+        let cached = args(&prod_env());
+        assert!(cached.contains(&"--cache=true".to_string()));
+        assert!(cached.contains(&"--cache-repo=registry:5000/pedagog/cache".to_string()));
+        assert!(cached.contains(&"--insecure-registry=registry:5000".to_string()));
+        assert!(!args(&dev_env()).iter().any(|a| a.starts_with("--cache")));
     }
 
     #[test]
