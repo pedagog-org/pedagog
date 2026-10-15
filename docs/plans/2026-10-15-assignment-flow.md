@@ -207,6 +207,13 @@ All approved in review:
 - `hammer vend` path collision: platform ingredients are labeled by kind only, so two OSes
   with the same platform kind vend to the same path.
 - Ingredient checksums required (not just optional) once every recipe has one.
+- Network policies take a few seconds to apply to a new pod (seen with kindnet), so egress
+  is briefly open; harmless for the reference solution, but must be closed (e.g. the
+  launcher waits until egress is blocked) before student code runs in these pods.
+- Kaniko caches `RUN` layers by their script text, not by mounted ingredients: put each
+  layer's ingredient checksums in its `ENV` so a changed ingredient invalidates the cache
+  even if the script doesn't change.
+- Kaniko upstream is archived; BuildKit is the likely long-term builder.
 
 ## Rollback
 
