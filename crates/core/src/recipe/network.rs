@@ -14,14 +14,32 @@ static HOST_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(&format!(r"^{LABEL}(\.{LABEL})*$")).expect("valid host pattern"));
 
 /// Egress policy, enforced by the platform at runtime (not baked into the image).
-#[derive(Debug, Clone, Default, Deserialize)]
+/// Omitted, it denies all egress.
+#[derive(Debug, Clone, Deserialize)]
 #[serde(try_from = "RawNetworkSpec")]
 pub enum NetworkSpec {
-    #[default]
     Allow,
-    Deny {
-        allow: Vec<AllowRule>,
-    },
+    Deny { allow: Vec<AllowRule> },
+}
+
+impl Default for NetworkSpec {
+    fn default() -> Self {
+        NetworkSpec::Deny { allow: Vec::new() }
+    }
+}
+
+impl NetworkSpec {
+    /// Rules naming hosts, which need the egress proxy to be enforced; until it
+    /// exists, those hosts stay unreachable.
+    pub fn host_rules(&self) -> Vec<&AllowRule> {
+        match self {
+            NetworkSpec::Allow => Vec::new(),
+            NetworkSpec::Deny { allow } => allow
+                .iter()
+                .filter(|r| matches!(r.target, EgressTarget::Host(_)))
+                .collect(),
+        }
+    }
 }
 
 // Serde ignores unknown keys on unit variants of tagged enums, so an `allow:`
@@ -282,6 +300,20 @@ mod tests {
         let err = host("10.0.0.1").unwrap_err();
         assert!(err.contains("cidr"), "{err}");
         assert!(host("2001:db8::1").is_err());
+    }
+
+    #[test]
+    fn default_denies_all_egress() {
+        assert!(matches!(NetworkSpec::default(), NetworkSpec::Deny { allow } if allow.is_empty()));
+    }
+
+    #[test]
+    fn host_rules_are_listed_for_warnings() {
+        let s = spec("mode: deny\nallow:\n  - host: '*.github.com'\n    ports: [443]\n  - cidr: 10.0.0.0/8\n")
+            .unwrap();
+        let hosts: Vec<String> = s.host_rules().iter().map(ToString::to_string).collect();
+        assert_eq!(hosts, ["*.github.com:443"]);
+        assert!(NetworkSpec::Allow.host_rules().is_empty());
     }
 
     #[test]

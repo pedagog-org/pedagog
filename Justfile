@@ -115,6 +115,16 @@ kind-load-jobs:
 kind-deploy:
     kubectl --context {{KIND_CTX}} apply -k deploy/overlays/kind
 
+# Upload an assignment directory to jobs (port-forwarded), e.g.
+# `just kind-upload recipes/examples/linked-list-python`.
+kind-upload DIR:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubectl --context {{KIND_CTX}} -n pedagog-builds port-forward svc/pedagog-jobs 18081:8080 >/dev/null &
+    trap 'kill $!' EXIT
+    sleep 2
+    HAMMER_RECIPES="{{justfile_directory()}}/recipes" cargo run -q -p hammer -- upload "{{DIR}}" --jobs-url http://localhost:18081
+
 # Trigger an OS rebuild through the jobs endpoint (port-forwarded); e.g. `just kind-rebuild force=true`.
 kind-rebuild QUERY="":
     #!/usr/bin/env bash

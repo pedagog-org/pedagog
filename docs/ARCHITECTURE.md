@@ -62,7 +62,7 @@ environment:
       install: [cpptools]        # pre-installed at image build time; always in allowlist
       allow: [vim]               # in allowlist only; student may install from marketplace
   network:                 # runtime egress policy; enforced by the platform, not the image
-    mode: deny             # allow (default, unrestricted) | deny
+    mode: deny             # deny (default: no egress) | allow (unrestricted)
     allow:
       - host: mirror.internal
         ports: [80]
@@ -159,10 +159,11 @@ The `assignment:` block is treated as a **suggestion**. When an instructor publi
 ### Network: Build-Time and Runtime
 
 - `environment.network` serves as the **default** for both build time and runtime. It never changes the image: no firewall rules are baked in, and containers never need `NET_ADMIN`.
-- At build time: intended to apply when the builder runs the solution validation step (deferred until the builder exists; image build steps currently have network access).
+- At build time: it applies to the validation run (the reference solution against the tests); image build steps themselves keep network access for package installs.
+- Omitted, it denies all egress (`mode: deny` with no rules).
 - At runtime: the YAML value is the starting point, but the platform UI can override it independently. The current runtime policy is fetched from the platform and applied as a Kubernetes network policy just before handing off the container to the student. It can be updated without a rebuild.
 - Schema: `mode: allow | deny`. Under `deny`, each `allow` entry is exactly one of `host` (RFC 1123 hostname, optionally with a single leading `*.`) or `cidr` (IPv4/IPv6), plus optional `ports` (TCP; omitted = all ports). `hammer` validates the policy and shows it in `describe`.
-- Open: standard NetworkPolicy matches CIDRs and ports only. `host` entries need an FQDN-aware CNI (e.g. Cilium) or an egress proxy, and the cluster's CNI must actually enforce NetworkPolicy.
+- Enforcement: `allow` and `cidr` entries map to Kubernetes NetworkPolicies (k3s and kind both enforce them). `host` entries need an egress proxy (a planned follow-up); until it exists they're accepted but **not enforced**, so those hosts stay unreachable, and `hammer upload` warns about them.
 
 ### Assignment Updates
 
@@ -187,6 +188,19 @@ Building happens in two stages:
 2. **Instructor image** — built when the instructor uploads the assignment archive. Starts FROM the OS base image; installs toolchains, addons, platform components (code-server for interactive), and locked extensions declared in `assignment.yml`. The solution is run against the test suite at this step to validate the assignment. Build-time network policy is applied during this step only.
 
 All builds run in-cluster via **Kaniko** — no Docker daemon required. `core` renders the Containerfile from resolved recipes; the `k8s` crate submits it as a Kubernetes Job (`jobs` for OS base images, `api` for instructor images later). Recipes are **pinned to the installation and baked** into the `jobs` image (with `hammer vend` ingredients) — not git-synced in-cluster.
+
+### Assignment Uploads
+
+Until `api` exists, instructors (and developers) upload with `hammer upload <dir>` to `jobs`' internal `POST /internal/assignments` (`just kind-upload <dir>` port-forwards to it on kind). The archive is the assignment directory itself, `assignment.yml` at its root.
+
+- **`hammer upload`** checks the directory locally (parses, files present, resolves when `HAMMER_RECIPES`/`--recipes` is set), then packs every regular file except VCS metadata (`.git`, `.hg`, `.svn`). Symlinks and special files are refused.
+- **`jobs` is authoritative.** It opens every upload and refuses it when:
+  - it isn't a gzipped tar, or `assignment.yml` isn't at its root (400);
+  - an entry is absolute, contains `..`, is duplicated, or isn't a regular file or directory (400);
+  - it's over 50 MiB compressed, 200 MiB unpacked, or 10 000 entries (413; `PEDAGOG_MAX_UPLOAD_BYTES`, `PEDAGOG_MAX_UNPACKED_BYTES`, `PEDAGOG_MAX_UPLOAD_FILES`);
+  - `assignment.yml` doesn't parse, a configured `files:` directory is missing, `testing:` has no tests, or it doesn't resolve against `jobs`' own recipes (422).
+- **Identity:** an upload is identified by its *tree hash*, a blake3 over each file's path, executable bit and content. Timestamps, owners, entry order and other mode bits don't count, so uploading identical files again is recognized however they were packed. Archives are stored in Garage at `assignments/<id>/<tree-hash>.tgz`, one `assignment_uploads` row per distinct tree.
+- **Warnings** (accepted, but reported): `host` network rules that can't be enforced yet, and a missing reference solution (validation will be skipped).
 
 ### `hammer` — Build Tool
 

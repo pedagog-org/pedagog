@@ -1,4 +1,5 @@
 mod cli;
+mod upload;
 mod vend;
 
 use std::io::Write;
@@ -7,8 +8,8 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use miette::{GraphicalReportHandler, MietteDiagnostic, Report, Result, Severity, miette};
 
-use cli::{Cli, Command, Format, PlanArgs, VendArgs};
-use pedagog_core::recipe::assignment::{ArchivePath, AssignmentYaml, FileSources};
+use cli::{Cli, Command, Format, PlanArgs, UploadArgs, VendArgs};
+use pedagog_core::recipe::assignment::{AssignmentYaml, FileSources};
 use pedagog_core::recipe::primitives::Id;
 use pedagog_core::recipe::render::containerfile::Containerfile;
 use pedagog_core::recipe::render::describe::Describe;
@@ -25,6 +26,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Plan(args) => run_plan(args),
         Command::Vend(args) => run_vend(args),
+        Command::Upload(args) => run_upload(args),
     }
 }
 
@@ -115,24 +117,8 @@ fn run_plan(args: PlanArgs) -> Result<()> {
 /// baked; a missing directory the assignment configured is an error (likely a typo).
 fn detect_files(assignment_path: &Path, sources: &FileSources) -> Result<AssignmentFiles> {
     let dir = assignment_path.parent().unwrap_or(Path::new("."));
-    let defaults = FileSources::default();
-    let find = |src: &ArchivePath, default: &ArchivePath| -> Result<Option<String>> {
-        if dir.join(src.as_str()).is_dir() {
-            Ok(Some(src.to_string()))
-        } else if src == default {
-            Ok(None)
-        } else {
-            Err(miette!(
-                "files: {src}/ not found next to {}",
-                assignment_path.display()
-            ))
-        }
-    };
-    Ok(AssignmentFiles {
-        starter: find(&sources.starter, &defaults.starter)?,
-        tests: find(&sources.tests, &defaults.tests)?,
-        solution: find(&sources.solution, &defaults.solution)?,
-    })
+    AssignmentFiles::detect(sources, |src| dir.join(src).is_dir())
+        .map_err(|e| miette!("{e} ({})", assignment_path.display()))
 }
 
 fn resolve_report(err: ResolveError) -> Report {
@@ -195,13 +181,57 @@ fn run_vend(args: VendArgs) -> Result<()> {
     vend::run_vend(args, dirs)
 }
 
+fn run_upload(args: UploadArgs) -> Result<()> {
+    let dir = expand_tilde(args.dir.clone());
+    let assignment_path = dir.join("assignment.yml");
+    let src = std::fs::read_to_string(&assignment_path)
+        .map_err(|e| miette!("cannot read {}: {}", assignment_path.display(), e))?;
+    let assignment: AssignmentYaml = serde_yaml::from_str(&src).map_err(|e| miette!("{}", e))?;
+    let files = detect_files(&assignment_path, &assignment.files)?;
+    if let Some(problem) = files.problems(&assignment).into_iter().next() {
+        return Err(miette!("{problem}"));
+    }
+    let configured = std::env::var_os("HAMMER_RECIPES").is_some() || !args.recipes.is_empty();
+    if configured {
+        let dirs = recipe_dirs(&args.recipes, args.quiet)?;
+        let store = RecipeStore::load(&dirs)
+            .map_err(|errs| miette!("failed to load {} recipe file(s)", errs.len()))?;
+        resolve(&assignment, &store).map_err(resolve_report)?;
+    } else {
+        emit_warning(
+            "skipping the local resolve check (no recipes configured)",
+            "Set HAMMER_RECIPES or pass --recipes <dir> to check before uploading; jobs checks either way.",
+            args.quiet,
+        );
+    }
+
+    let url = args
+        .jobs_url
+        .or_else(|| std::env::var(upload::JOBS_URL_ENV).ok())
+        .unwrap_or_else(|| upload::DEFAULT_JOBS_URL.to_owned());
+    let archive = upload::pack(&dir).map_err(|e| miette!("{e}"))?;
+    let uploaded = upload::send(&url, archive).map_err(|e| miette!("{e}"))?;
+    println!(
+        "uploaded {} (tree {}, {} bytes) as upload {}",
+        uploaded.assignment_id,
+        &uploaded.tree_hash[..12.min(uploaded.tree_hash.len())],
+        uploaded.size_bytes,
+        uploaded.upload_id
+    );
+    for warning in &uploaded.warnings {
+        emit_warning(warning, "", args.quiet);
+    }
+    Ok(())
+}
+
 fn emit_warning(message: &str, help: &str, quiet: bool) {
     if quiet {
         return;
     }
-    let diag = MietteDiagnostic::new(message)
-        .with_severity(Severity::Warning)
-        .with_help(help.to_string());
+    let mut diag = MietteDiagnostic::new(message).with_severity(Severity::Warning);
+    if !help.is_empty() {
+        diag = diag.with_help(help.to_string());
+    }
     let report = Report::from(diag);
     let handler = GraphicalReportHandler::new();
     let mut buf = String::new();

@@ -437,10 +437,10 @@ mod tests {
     }
 
     #[test]
-    fn network_defaults_to_allow() {
+    fn network_defaults_to_deny() {
         let yaml = "os: ubuntu-22\nplatform:\n  kind: interactive\n";
         let env: Environment = serde_yaml::from_str(yaml).unwrap();
-        assert!(matches!(env.network, NetworkSpec::Allow));
+        assert!(matches!(env.network, NetworkSpec::Deny { allow } if allow.is_empty()));
         assert!(env.toolchains.is_empty());
         assert!(env.steps.is_empty());
     }

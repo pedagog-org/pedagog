@@ -6,16 +6,24 @@ publish.workspace = true
 
 [dependencies]
 pedagog-core = { path = "../core" }
-pedagog-store = { path = "../store", features = ["db"] }
+pedagog-store = { path = "../store", features = ["db", "objects"] }
 pedagog-k8s = { path = "../k8s" }
 anyhow = { workspace = true }
 axum = { workspace = true }
 blake3 = { workspace = true }
+flate2 = { workspace = true }
+rustls = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 sqlx = { workspace = true }
+tar = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+kube = { workspace = true }
 
 [lints]
 workspace = true
