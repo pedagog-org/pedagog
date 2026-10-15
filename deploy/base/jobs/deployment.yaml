@@ -34,6 +34,21 @@ spec:
             # prod initContainer image (the jobs image); overlay sets the pushed ref.
             - name: PEDAGOG_JOBS_IMAGE
               value: pedagog-jobs
+            # Garage: assignment archives and run results.
+            - name: PEDAGOG_S3_ENDPOINT
+              value: http://garage-service.pedagog-data.svc:3900
+            - name: PEDAGOG_S3_BUCKET
+              value: pedagog
+            - name: PEDAGOG_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: garage-s3-key
+                  key: access-key-id
+            - name: PEDAGOG_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-s3-key
+                  key: secret-access-key
           ports:
             - containerPort: 8080
           resources:
@@ -42,4 +57,5 @@ spec:
               memory: 128Mi
             limits:
               cpu: 500m
-              memory: 256Mi
+              # uploads (up to 50 MiB) are held in memory while checked and stored
+              memory: 512Mi
