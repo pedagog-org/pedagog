@@ -5,8 +5,10 @@
 //! serving the rebuild endpoint. Dev waits for the endpoint (live checkout).
 
 mod archive;
+mod assignments;
 mod config;
 mod dispatch;
+mod fetch;
 mod http;
 mod intake;
 mod state;
@@ -33,9 +35,22 @@ fn install_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     install_crypto_provider();
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("fetch-context") {
+        let [_, _, url, dir, tree] = args.as_slice() else {
+            anyhow::bail!("usage: pedagog-jobs fetch-context <url> <dir> <tree-hash>");
+        };
+        return fetch::fetch_context(url, std::path::Path::new(dir), tree);
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(serve())
+}
+
+async fn serve() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),

@@ -187,7 +187,7 @@ Building happens in two stages:
 1. **OS base image** — platform-managed. Contains the OS and any platform-level configuration. Built in-cluster by the `jobs` service (Kaniko) from the recipes pinned into the installation and pushed to the cluster registry (e.g. `pedagog/ubuntu:22`). Rebuilt when the pinned recipes change (detected at `jobs` startup / via its rebuild endpoint). Locally, `hammer plan --os <os-id>` (or `just build-base`) renders the same Containerfile for podman.
 2. **Instructor image** — built when the instructor uploads the assignment archive. Starts FROM the OS base image; installs toolchains, addons, platform components (code-server for interactive), and locked extensions declared in `assignment.yml`. The solution is run against the test suite at this step to validate the assignment. Build-time network policy is applied during this step only.
 
-All builds run in-cluster via **Kaniko** — no Docker daemon required. `core` renders the Containerfile from resolved recipes; the `k8s` crate submits it as a Kubernetes Job (`jobs` for OS base images, `api` for instructor images later). Recipes are **pinned to the installation and baked** into the `jobs` image (with `hammer vend` ingredients) — not git-synced in-cluster.
+All builds run in-cluster via **Kaniko** — no Docker daemon required. `core` renders the Containerfile from resolved recipes; the `k8s` crate submits it as a Kubernetes Job; `jobs` builds both OS base images and assignment images. Recipes are **pinned to the installation and baked** into the `jobs` image (with `hammer vend` ingredients) — not git-synced in-cluster.
 
 ### Assignment Uploads
 
@@ -201,6 +201,10 @@ Until `api` exists, instructors (and developers) upload with `hammer upload <dir
   - `assignment.yml` doesn't parse, a configured `files:` directory is missing, `testing:` has no tests, or it doesn't resolve against `jobs`' own recipes (422).
 - **Identity:** an upload is identified by its *tree hash*, a blake3 over each file's path, executable bit and content. Timestamps, owners, entry order and other mode bits don't count, so uploading identical files again is recognized however they were packed. Archives are stored in Garage at `assignments/<id>/<tree-hash>.tgz`, one `assignment_uploads` row per distinct tree.
 - **Warnings** (accepted, but reported): `host` network rules that can't be enforced yet, and a missing reference solution (validation will be skipped).
+- **Builds:** each accepted upload is rendered FROM the prebuilt OS image and built by Kaniko as `pedagog/assignments/<id>:<image-hash>`, where the image hash covers the rendered Containerfile and the tree hash.
+  - The build context is the archive: an initContainer (`pedagog-jobs fetch-context`) downloads it through a short-lived presigned URL, unpacks it with the same checks as intake, and refuses files that don't match the tree hash.
+  - An image already built and validated isn't rebuilt (`hammer upload --force` overrides); a newer upload supersedes an attempt still in flight, deleting its Job.
+  - Builds have a deadline (`PEDAGOG_ASSIGNMENT_BUILD_DEADLINE`, 30 min by default).
 
 ### `hammer` — Build Tool
 

@@ -210,7 +210,7 @@ fn run_upload(args: UploadArgs) -> Result<()> {
         .or_else(|| std::env::var(upload::JOBS_URL_ENV).ok())
         .unwrap_or_else(|| upload::DEFAULT_JOBS_URL.to_owned());
     let archive = upload::pack(&dir).map_err(|e| miette!("{e}"))?;
-    let uploaded = upload::send(&url, archive).map_err(|e| miette!("{e}"))?;
+    let uploaded = upload::send(&url, archive, args.force).map_err(|e| miette!("{e}"))?;
     println!(
         "uploaded {} (tree {}, {} bytes) as upload {}",
         uploaded.assignment_id,
@@ -218,6 +218,13 @@ fn run_upload(args: UploadArgs) -> Result<()> {
         uploaded.size_bytes,
         uploaded.upload_id
     );
+    match uploaded.build.status.as_str() {
+        "already_built" => println!(
+            "already built and validated as build {}; nothing to do (--force rebuilds)",
+            uploaded.build.build_id
+        ),
+        _ => println!("build {} dispatched", uploaded.build.build_id),
+    }
     for warning in &uploaded.warnings {
         emit_warning(warning, "", args.quiet);
     }

@@ -25,6 +25,15 @@ pub struct Uploaded {
     pub size_bytes: i64,
     #[serde(default)]
     pub warnings: Vec<String>,
+    pub build: Build,
+}
+
+/// What jobs did about building the upload.
+#[derive(Debug, Deserialize)]
+pub struct Build {
+    /// `dispatched` or `already_built`.
+    pub status: String,
+    pub build_id: i64,
 }
 
 /// A `.tgz` of `dir`'s regular files, rooted at `dir`. Deterministic: sorted
@@ -98,8 +107,12 @@ fn is_executable(_: &Path) -> bool {
 }
 
 /// POSTs the archive; jobs' refusals come back as their message.
-pub fn send(jobs_url: &str, archive: Vec<u8>) -> Result<Uploaded, String> {
-    let url = format!("{}/internal/assignments", jobs_url.trim_end_matches('/'));
+pub fn send(jobs_url: &str, archive: Vec<u8>, force: bool) -> Result<Uploaded, String> {
+    let url = format!(
+        "{}/internal/assignments{}",
+        jobs_url.trim_end_matches('/'),
+        if force { "?force=true" } else { "" }
+    );
     let client = reqwest::blocking::Client::builder()
         .timeout(UPLOAD_TIMEOUT)
         .build()

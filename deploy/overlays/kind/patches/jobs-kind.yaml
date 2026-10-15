@@ -20,6 +20,9 @@ spec:
             # node path handed to Kaniko pods as their /pedagog/recipes hostPath
             - name: PEDAGOG_RECIPES_HOSTPATH
               value: /srv/pedagog/recipes
+            # Kaniko initContainers (fetch-context) run the jobs image, loaded into the node.
+            - name: PEDAGOG_JOBS_IMAGE
+              value: localhost/pedagog/jobs:dev
           volumeMounts:
             - name: recipes-src
               mountPath: /host/recipes

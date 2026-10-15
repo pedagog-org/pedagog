@@ -19,12 +19,15 @@ pub const LISTEN_ADDR: &str = "PEDAGOG_LISTEN_ADDR";
 pub const MAX_UPLOAD_BYTES: &str = "PEDAGOG_MAX_UPLOAD_BYTES";
 pub const MAX_UNPACKED_BYTES: &str = "PEDAGOG_MAX_UNPACKED_BYTES";
 pub const MAX_UPLOAD_FILES: &str = "PEDAGOG_MAX_UPLOAD_FILES";
+pub const ASSIGNMENT_BUILD_DEADLINE: &str = "PEDAGOG_ASSIGNMENT_BUILD_DEADLINE";
 
 const DEFAULT_RECIPES_DIR: &str = "/opt/pedagog/recipes";
 const DEFAULT_NAMESPACE: &str = "pedagog-builds";
 const DEFAULT_REGISTRY: &str = "registry-service.pedagog-data.svc:5000";
 const DEFAULT_LISTEN: &str = "0.0.0.0:8080";
-const DEFAULT_LIMITS: Limits = Limits {
+/// Fallback until assignments can set their own (seconds).
+const DEFAULT_ASSIGNMENT_BUILD_DEADLINE: u64 = 1800;
+pub const DEFAULT_LIMITS: Limits = Limits {
     max_compressed_bytes: 50 << 20,
     max_unpacked_bytes: 200 << 20,
     max_files: 10_000,
@@ -45,6 +48,8 @@ pub struct Config {
     pub objects: ObjectsConfig,
     /// Upload limits (compressed, unpacked, file count).
     pub limits: Limits,
+    /// An assignment build Job's `activeDeadlineSeconds`.
+    pub assignment_build_deadline: std::time::Duration,
 }
 
 impl Config {
@@ -69,6 +74,10 @@ impl Config {
                 max_unpacked_bytes: num_or(MAX_UNPACKED_BYTES, DEFAULT_LIMITS.max_unpacked_bytes)?,
                 max_files: num_or(MAX_UPLOAD_FILES, DEFAULT_LIMITS.max_files)?,
             },
+            assignment_build_deadline: std::time::Duration::from_secs(num_or(
+                ASSIGNMENT_BUILD_DEADLINE,
+                DEFAULT_ASSIGNMENT_BUILD_DEADLINE,
+            )?),
         })
     }
 
