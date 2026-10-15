@@ -1,8 +1,9 @@
 //! Kaniko build orchestration: Job construction, `ensure`/`wait`/`poll`.
 //!
 //! Recipes are mounted at `/pedagog/recipes` (dev: hostPath checkout; prod:
-//! emptyDir filled by a jobs-image initContainer) and excluded from the built
-//! image via kaniko `--ignore-path`. The rendered Containerfile arrives in a
+//! emptyDir filled by a jobs-image initContainer); their vended `ingredients/`
+//! are also mounted at `/pedagog/ingredients`, where recipes' `vend` looks. Both
+//! are excluded from the built image via kaniko `--ignore-path`. The rendered Containerfile arrives in a
 //! per-build ConfigMap. `k8s` speaks a Containerfile *string*, never recipe types.
 
 use std::collections::BTreeMap;
@@ -25,6 +26,7 @@ use crate::KubeClient;
 const KANIKO_IMAGE: &str = "gcr.io/kaniko-project/executor:v1.24.0";
 const RECIPES_PATH: &str = "/pedagog/recipes";
 const RECIPES_SRC: &str = "/opt/pedagog/recipes"; // baked path inside the jobs image
+const INGREDIENTS_PATH: &str = "/pedagog/ingredients";
 const DOCKERFILE_DIR: &str = "/kaniko/dockerfile";
 const DOCKERFILE_NAME: &str = "Containerfile";
 const APP_LABEL: &str = "pedagog-os-build";
@@ -347,9 +349,14 @@ fn kaniko_job(env: &BuildEnv, name: &str, dest: &str, cm: &str) -> Job {
             "--insecure".into(),
             "--insecure-pull".into(),
             format!("--ignore-path={RECIPES_PATH}"),
+            format!("--ignore-path={INGREDIENTS_PATH}"),
         ]),
         volume_mounts: Some(vec![
             volume_mount("recipes", RECIPES_PATH, true),
+            VolumeMount {
+                sub_path: Some("ingredients".into()),
+                ..volume_mount("recipes", INGREDIENTS_PATH, true)
+            },
             volume_mount("dockerfile", DOCKERFILE_DIR, true),
         ]),
         ..Default::default()
@@ -490,8 +497,27 @@ mod tests {
         let kaniko = &spec.template.spec.unwrap().containers[0];
         let args = kaniko.args.clone().unwrap();
         assert!(args.contains(&"--ignore-path=/pedagog/recipes".to_string()));
+        assert!(args.contains(&"--ignore-path=/pedagog/ingredients".to_string()));
         assert!(args.contains(&"--destination=reg/pedagog/ubuntu-22:latest".to_string()));
         assert!(args.iter().any(|a| a.starts_with("--dockerfile=")));
+    }
+
+    #[test]
+    fn vended_ingredients_are_mounted_where_vend_looks() {
+        for env in [dev_env(), prod_env()] {
+            let job = kaniko_job(&env, "j", "reg/x:1", "j-cf");
+            let kaniko = &job.spec.unwrap().template.spec.unwrap().containers[0];
+            let mount = kaniko
+                .volume_mounts
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|m| m.mount_path == "/pedagog/ingredients")
+                .expect("ingredients mount");
+            assert_eq!(mount.name, "recipes");
+            assert_eq!(mount.sub_path.as_deref(), Some("ingredients"));
+            assert_eq!(mount.read_only, Some(true));
+        }
     }
 
     #[test]
