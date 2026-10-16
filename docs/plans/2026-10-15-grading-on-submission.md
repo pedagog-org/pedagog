@@ -116,6 +116,8 @@ submission:
 
 - **Postgres FIFO queue** (option A, Kueue-ready): runs are rows in `queued`, ordered by
   `(priority, queued_at)`; a run's position is visible in its status.
+- **Submissions before regrades:** submission runs get priority 0, regrade runs 1, so a
+  regrade batch drains behind new submissions (a Kueue `WorkloadPriorityClass` later).
 - **Capacity gate:** a release loop (every 2 s) in each `jobs` replica:
   1. takes a transaction-level advisory lock, so only one replica releases at a time;
   2. counts grading pods cluster-wide by label that are `Pending`, plus released runs
@@ -165,9 +167,11 @@ submission:
 - Indexes: queued runs by `(priority, queued_at)`; submissions by
   `(assignment_id, student_id, created_at)`.
 
-## Dependencies (need approval)
+## Dependencies
 
-- `zip`: unpack `.zip` submissions in `jobs` (approved in review).
+All approved in review:
+
+- `zip`: unpack `.zip` submissions in `jobs`.
 - `globset`: `include`/`exclude` matching in `core` (rules are validated at upload) and
   `jobs`.
 - `axum` feature `multipart` (pulls in `multer`): the intake endpoint.
@@ -192,15 +196,14 @@ submission:
   - a fixed concurrency limit: wrong after a node goes down or one is added;
   - Kueue now: fair sharing, priorities and preemption, but another controller on the Pis
     before there's more than one course.
+- **Plain FIFO for regrades:** simpler, but a large batch delays every new submission
+  behind it.
 - **Skipping identical resubmissions:** students expect every submit to produce a result.
 - **Waiting for egress inside the launcher, or a fixed delay:** a new helper release (and a
   rule every future helper must follow), or a guess.
 
 ## Open questions
 
-- **Regrade priority:** a batch of 200 regrades queued ahead of new submissions delays
-  students' feedback. Proposed: submissions priority 0, regrades 1 (submissions go first);
-  plain FIFO is the alternative.
 - Multiple platforms, or mixed sources, per assignment.
 - Does `await-egress`' probe (connection to the API server fails) hold on k3s's network
   policy controller as on kindnet? Checked on kind first, then on the Pis.
