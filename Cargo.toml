@@ -17,6 +17,7 @@ axum = "0.8"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 flate2 = "1"
+globset = "0.4"
 ipnet = "2"
 k8s-openapi = { version = "0.28", features = ["v1_32"] } # nearest offered ≥ cluster k3s 1.31 (see docs/SETUP.md)
 kube = { version = "4", features = ["client", "runtime", "rustls-tls"] }

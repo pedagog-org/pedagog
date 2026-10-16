@@ -6,4 +6,5 @@ pub mod primitives;
 pub mod render;
 pub mod resolve;
 pub mod store;
+pub mod submission;
 pub mod toolchain;

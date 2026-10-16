@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 anstyle = { workspace = true }
+globset = { workspace = true }
 ipnet = { workspace = true }
 regex = { workspace = true }
 semver = { workspace = true }

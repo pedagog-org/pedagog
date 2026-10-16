@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT notify, runs FROM regrade_batches WHERE build_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "notify",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "regrade_batches",
+            "name": "notify"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "runs",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "regrade_batches",
+            "name": "runs"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "564222721efcf6458e1cf61457757ce5a24222f04fad4ee0ca2d49c9a41bfcf3"
+}

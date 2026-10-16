@@ -3,6 +3,11 @@ use std::collections::HashMap;
 use serde::Deserialize;
 
 use super::primitives::{Ingredient, OsId, ParamHook, ParamVal, deserialize_one_or_many};
+use super::submission::RelPath;
+
+/// The `workspace` param naming the folder submitted from a session, relative
+/// to `/home/student/workspace` (`.` for all of it).
+pub const SUBMISSION_DIR: &str = "submission_dir";
 
 #[derive(Debug, Deserialize)]
 pub struct PlatformRecipe {
@@ -58,6 +63,18 @@ impl<'de> Deserialize<'de> for PlatformKind {
 impl std::fmt::Display for PlatformKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// `submission_dir`, when resolved, must stay inside the workspace.
+pub fn check_submission_dir(params: &HashMap<String, ParamVal>) -> Result<(), String> {
+    match params.get(SUBMISSION_DIR) {
+        Some(ParamVal::Str(dir)) if dir != "." => {
+            RelPath::try_from(dir.trim_end_matches('/').to_owned())
+                .map(|_| ())
+                .map_err(|e| format!("{SUBMISSION_DIR}: {e}"))
+        }
+        _ => Ok(()),
     }
 }
 

@@ -11,6 +11,7 @@ use super::platform::PlatformSpec;
 use super::primitives::{
     AssignmentId, Id, OsId, Step, ToolchainId, ToolchainRef, Version, Versioned,
 };
+use super::submission::SubmissionRules;
 
 #[derive(Debug, Deserialize)]
 pub struct AssignmentYaml {
@@ -21,6 +22,9 @@ pub struct AssignmentYaml {
     pub testing: Option<Testing>,
     #[serde(default)]
     pub files: FileSources,
+    /// Which files make up a submission (the platform decides where they come from).
+    #[serde(default)]
+    pub submission: SubmissionRules,
 }
 
 /// Where the archive keeps the directories baked into the image. Only the

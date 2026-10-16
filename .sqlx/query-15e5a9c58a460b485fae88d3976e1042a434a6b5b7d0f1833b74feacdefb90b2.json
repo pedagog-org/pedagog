@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE run_queue SET priority = 1 WHERE grading_run_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "15e5a9c58a460b485fae88d3976e1042a434a6b5b7d0f1833b74feacdefb90b2"
+}

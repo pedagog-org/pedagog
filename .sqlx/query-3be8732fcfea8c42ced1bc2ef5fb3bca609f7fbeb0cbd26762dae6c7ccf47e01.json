@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE grading_runs\n            SET status = $2, score = $3, total = $4, results = $5::text::jsonb, problems = $6,\n                error = $7, log_tail = $8, changes = $9::text::jsonb, notify = $10,\n                finished_at = now()\n          WHERE id = $1 AND status = 'grading'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Float8",
+        "Float8",
+        "Text",
+        "TextArray",
+        "Text",
+        "Text",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3be8732fcfea8c42ced1bc2ef5fb3bca609f7fbeb0cbd26762dae6c7ccf47e01"
+}

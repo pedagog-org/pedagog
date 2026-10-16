@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO run_queue (grading_run_id, priority)\n         SELECT id, $2 FROM grading_runs WHERE regrade_batch_id = $1 ORDER BY id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "473579840673ab3a550a31d3beee841b5ebb4d9e8eaabc9de417d1987b7b3272"
+}

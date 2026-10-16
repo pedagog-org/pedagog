@@ -10,7 +10,10 @@ use std::str::FromStr;
 
 use sqlx::PgPool;
 
-use crate::{AssignmentBuild, AssignmentBuildStatus, AssignmentUpload, ValidationStatus};
+use crate::db::submissions::REGRADE_PRIORITY;
+use crate::{
+    AssignmentBuild, AssignmentBuildStatus, AssignmentUpload, Notify, RunReason, ValidationStatus,
+};
 
 /// Create the assignment, or update its name.
 pub async fn upsert_assignment(pool: &PgPool, id: &str, name: &str) -> sqlx::Result<()> {
@@ -147,8 +150,9 @@ pub async fn start_validation(pool: &PgPool, build: i64) -> sqlx::Result<bool> {
 
 /// Record validation's outcome and end the attempt. `results` is the parsed
 /// results as JSON text (`None` for skipped and invalid). A usable outcome
-/// (passed or skipped) makes this the assignment's current build, atomically.
-/// Returns false if the attempt is no longer in flight.
+/// (passed or skipped) makes this the assignment's current build and, if the
+/// upload asked for a regrade, queues one for every student's latest
+/// submission, atomically. Returns false if the attempt is no longer in flight.
 pub async fn finish_validation(
     pool: &PgPool,
     build: i64,
@@ -162,7 +166,7 @@ pub async fn finish_validation(
             SET validation_status = $2, results = $3::text::jsonb,
                 validation_problems = $4, finished_at = now()
           WHERE id = $1 AND finished_at IS NULL AND build_status = 'succeeded'
-          RETURNING assignment_id",
+          RETURNING assignment_id, regrade_notify",
         build,
         status.to_string(),
         results,
@@ -181,22 +185,96 @@ pub async fn finish_validation(
         )
         .execute(&mut *tx)
         .await?;
+        if let Some(notify) = row.regrade_notify {
+            queue_regrades(&mut tx, &row.assignment_id, build, &notify).await?;
+        }
     }
     tx.commit().await?;
     Ok(true)
 }
 
-/// Cancel an in-flight attempt because a newer upload replaces it.
-/// Returns false if it had already finished.
+/// A regrade batch: a new run against `build` for each student's latest
+/// submission, queued behind new submissions.
+async fn queue_regrades(
+    tx: &mut sqlx::PgConnection,
+    assignment_id: &str,
+    build: i64,
+    notify: &str,
+) -> sqlx::Result<()> {
+    let batch = sqlx::query!(
+        "INSERT INTO regrade_batches (assignment_id, build_id, notify, runs)
+         VALUES ($1, $2, $3, 0) RETURNING id",
+        assignment_id,
+        build,
+        notify
+    )
+    .fetch_one(&mut *tx)
+    .await?
+    .id;
+    let runs = sqlx::query!(
+        "INSERT INTO grading_runs (submission_id, build_id, reason, regrade_batch_id)
+         SELECT DISTINCT ON (student_id) id, $2, $3, $4
+           FROM submissions WHERE assignment_id = $1
+          ORDER BY student_id, id DESC",
+        assignment_id,
+        build,
+        RunReason::Regrade.to_string(),
+        batch
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    sqlx::query!(
+        "INSERT INTO run_queue (grading_run_id, priority)
+         SELECT id, $2 FROM grading_runs WHERE regrade_batch_id = $1 ORDER BY id",
+        batch,
+        REGRADE_PRIORITY
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "UPDATE regrade_batches SET runs = $2 WHERE id = $1",
+        batch,
+        i32::try_from(runs).unwrap_or(i32::MAX)
+    )
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
+}
+
+/// Ask for every student's latest submission to be regraded once this build
+/// becomes current. Returns false if the attempt is no longer in flight.
+pub async fn request_regrade(pool: &PgPool, build: i64, notify: Notify) -> sqlx::Result<bool> {
+    let done = sqlx::query!(
+        "UPDATE assignment_builds SET regrade_notify = $2 WHERE id = $1 AND finished_at IS NULL",
+        build,
+        notify.to_string()
+    )
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Cancel an in-flight attempt because a newer upload replaces it, dropping
+/// its validation from the queue if it's waiting there. Returns false if it
+/// had already finished.
 pub async fn supersede(pool: &PgPool, build: i64) -> sqlx::Result<bool> {
+    let mut tx = pool.begin().await?;
     let done = sqlx::query!(
         "UPDATE assignment_builds SET build_status = $2, finished_at = now()
           WHERE id = $1 AND finished_at IS NULL",
         build,
         AssignmentBuildStatus::Superseded.to_string()
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    sqlx::query!(
+        "DELETE FROM run_queue WHERE build_id = $1 AND released_at IS NULL",
+        build
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok(done.rows_affected() == 1)
 }
 
@@ -452,6 +530,86 @@ mod tests {
 
         let second = start_build(&pool, "ll", up.id, "img-b", "reg/a:2").await?;
         assert_eq!(in_flight(&pool).await?[0].id, second);
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn a_usable_regrade_build_queues_each_students_latest(pool: PgPool) -> sqlx::Result<()> {
+        use crate::db::queue::{claim_next, enqueue_validation};
+        use crate::db::submissions::runs_for_submission;
+        use crate::db::submissions::tests::{current_build, submit};
+        use crate::{QueuedRun, RunReason};
+
+        let old = current_build(&pool, "ll", "img-a").await?;
+        submit(&pool, "ll", "s1", old).await?;
+        let s1_latest = submit(&pool, "ll", "s1", old).await?;
+        let s2 = submit(&pool, "ll", "s2", old).await?;
+        let mut conn = pool.acquire().await?;
+        while claim_next(&mut conn).await?.is_some() {}
+
+        let up = uploaded(&pool, "ll", "tree-b").await?;
+        let new = start_build(&pool, "ll", up.id, "img-b", "reg/a:2").await?;
+        assert!(request_regrade(&pool, new, Notify::Changed).await?);
+        finish_build(&pool, new, true, None).await?;
+        enqueue_validation(&pool, new).await?;
+        assert_eq!(
+            claim_next(&mut conn).await?,
+            Some(QueuedRun::Validation(new))
+        );
+        start_validation(&pool, new).await?;
+        finish_validation(&pool, new, ValidationStatus::Passed, Some("{}"), &[]).await?;
+
+        let mut regraded = vec![];
+        while let Some(QueuedRun::Grading(run)) = claim_next(&mut conn).await? {
+            regraded.push(run);
+        }
+        assert_eq!(regraded.len(), 2, "one per student");
+        for sub in [s1_latest.submission_id, s2.submission_id] {
+            let runs = runs_for_submission(&pool, sub).await?;
+            assert_eq!(runs[0].reason, RunReason::Regrade);
+            assert_eq!(runs[0].build_id, new);
+            assert_eq!(runs.len(), 2, "the first run stays as history");
+        }
+        let batch = sqlx::query!(
+            "SELECT notify, runs FROM regrade_batches WHERE build_id = $1",
+            new
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!((batch.notify.as_str(), batch.runs), ("changed", 2));
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn failed_or_superseded_builds_never_regrade(pool: PgPool) -> sqlx::Result<()> {
+        use crate::QueuedRun;
+        use crate::db::queue::{enqueue_validation, position};
+        use crate::db::submissions::tests::{current_build, submit};
+
+        let old = current_build(&pool, "ll", "img-a").await?;
+        submit(&pool, "ll", "s1", old).await?;
+        let up = uploaded(&pool, "ll", "tree-b").await?;
+
+        let failing = start_build(&pool, "ll", up.id, "img-b", "reg/a:2").await?;
+        request_regrade(&pool, failing, Notify::Always).await?;
+        finish_build(&pool, failing, true, None).await?;
+        finish_validation(&pool, failing, ValidationStatus::Failed, Some("{}"), &[]).await?;
+
+        let superseded = start_build(&pool, "ll", up.id, "img-c", "reg/a:3").await?;
+        request_regrade(&pool, superseded, Notify::Always).await?;
+        finish_build(&pool, superseded, true, None).await?;
+        enqueue_validation(&pool, superseded).await?;
+        assert!(supersede(&pool, superseded).await?);
+        assert_eq!(
+            position(&pool, QueuedRun::Validation(superseded)).await?,
+            None,
+            "dropped from the queue"
+        );
+
+        let batches = sqlx::query!("SELECT count(*) AS \"n!\" FROM regrade_batches")
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(batches.n, 0);
         Ok(())
     }
 

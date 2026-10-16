@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE grading_runs\n            SET status = $2, job_name = $3, isolation = $4, started_at = now()\n          WHERE id = $1 AND status = 'queued'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "93a0f8cf9140ac389d423f44f12e6bb28d10eee84a4541390e26d36aae1e1fa1"
+}

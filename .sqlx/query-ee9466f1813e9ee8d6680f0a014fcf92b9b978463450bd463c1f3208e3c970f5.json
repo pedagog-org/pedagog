@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (SELECT count(*) FROM run_queue o\n                    WHERE o.released_at IS NULL\n                      AND (o.priority, o.queued_at, o.id) <= (q.priority, q.queued_at, q.id))\n                  AS \"position!\"\n             FROM run_queue q\n            WHERE q.released_at IS NULL\n              AND (q.build_id = $1 OR q.grading_run_id = $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "position!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ee9466f1813e9ee8d6680f0a014fcf92b9b978463450bd463c1f3208e3c970f5"
+}
