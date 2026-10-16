@@ -87,6 +87,7 @@ async fn release_once(state: &AppState) -> anyhow::Result<Option<QueuedRun>> {
             .config
             .max_running
             .is_some_and(|max| backlog.unfinished >= max)
+        || !state.builder.run_fits(&state.config.run_sizes()).await?
     {
         return Ok(None);
     }

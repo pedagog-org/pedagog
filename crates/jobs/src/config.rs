@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use pedagog_core::env::Env;
 use pedagog_k8s::build::BuildEnv;
+use pedagog_k8s::grade::RunSize;
 use pedagog_store::objects::ObjectsConfig;
 
 use crate::archive::Limits;
@@ -154,6 +155,15 @@ impl Config {
                 .map(|c| c.trim().to_owned())
                 .filter(|c| !c.is_empty())
                 .collect(),
+        })
+    }
+
+    /// A validation's and a grading run's sizes: the next released run may be
+    /// either, so admission checks that both would fit.
+    pub fn run_sizes(&self) -> [RunSize; 2] {
+        [&self.validation, &self.grading].map(|c| RunSize {
+            cpu: c.cpu.clone(),
+            memory: c.memory.clone(),
         })
     }
 

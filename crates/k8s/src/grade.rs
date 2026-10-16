@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use k8s_openapi::api::batch::v1::Job;
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::api::core::v1::{Pod, ResourceQuota};
 use kube::api::ListParams;
 
 use crate::build::{Builder, JobKey, Outcome};
@@ -66,6 +66,14 @@ pub struct Backlog {
     pub unfinished: usize,
 }
 
+/// One test run's CPU and memory requests (and limits: test runs set both
+/// the same), as Kubernetes quantities (`1`, `500m`, `1Gi`).
+#[derive(Clone, Debug)]
+pub struct RunSize {
+    pub cpu: String,
+    pub memory: String,
+}
+
 impl Builder {
     /// Create the grading Job for `key` unless it exists, with its CIDR policy
     /// if the run has CIDR allowances.
@@ -94,6 +102,21 @@ impl Builder {
         Ok(Outcome::Created)
     }
 
+    /// Whether one more test run of each of `sizes` would fit every
+    /// ResourceQuota in the run namespace (no quota: it fits). Releasing a run
+    /// that doesn't fit would leave its Job without a pod, retrying with backoff.
+    pub async fn run_fits(&self, sizes: &[RunSize]) -> kube::Result<bool> {
+        let quotas = self
+            .runs
+            .resource_quotas()
+            .list(&ListParams::default())
+            .await?;
+        Ok(quotas
+            .items
+            .iter()
+            .all(|q| sizes.iter().all(|s| fits(q, s))))
+    }
+
     /// How many test runs are waiting for a node, across the run namespace.
     pub async fn run_backlog(&self) -> kube::Result<Backlog> {
         let jobs = self
@@ -112,6 +135,56 @@ impl Builder {
             .await?;
         Ok(backlog(&jobs.items, &pods.items))
     }
+}
+
+fn fits(quota: &ResourceQuota, size: &RunSize) -> bool {
+    let Some(status) = &quota.status else {
+        return true;
+    };
+    let (Some(hard), used) = (&status.hard, status.used.clone().unwrap_or_default()) else {
+        return true;
+    };
+    let needs = [
+        ("requests.cpu", &size.cpu),
+        ("limits.cpu", &size.cpu),
+        ("cpu", &size.cpu),
+        ("requests.memory", &size.memory),
+        ("limits.memory", &size.memory),
+        ("memory", &size.memory),
+        ("pods", &"1".to_owned()),
+        ("count/pods", &"1".to_owned()),
+    ];
+    needs.iter().all(|(key, need)| {
+        let Some(limit) = hard.get(*key).and_then(|q| quantity(&q.0)) else {
+            return true;
+        };
+        let in_use = used.get(*key).and_then(|q| quantity(&q.0)).unwrap_or(0.0);
+        quantity(need).is_none_or(|need| in_use + need <= limit + 1e-9)
+    })
+}
+
+/// A Kubernetes quantity in base units (cores, bytes, counts): `3500m`,
+/// `0.5`, `4Gi`, `128M`, `2`.
+fn quantity(text: &str) -> Option<f64> {
+    let text = text.trim();
+    let split = text
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(text.len());
+    let (number, suffix) = text.split_at(split);
+    let scale = match suffix {
+        "" => 1.0,
+        "m" => 1e-3,
+        "k" => 1e3,
+        "M" => 1e6,
+        "G" => 1e9,
+        "T" => 1e12,
+        "Ki" => 1024.0,
+        "Mi" => 1024.0 * 1024.0,
+        "Gi" => 1024.0 * 1024.0 * 1024.0,
+        "Ti" => 1024.0_f64.powi(4),
+        _ => return None,
+    };
+    Some(number.parse::<f64>().ok()? * scale)
 }
 
 fn backlog(jobs: &[Job], pending_pods: &[Pod]) -> Backlog {
@@ -229,6 +302,70 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    fn quota(hard: &[(&str, &str)], used: &[(&str, &str)]) -> ResourceQuota {
+        use k8s_openapi::api::core::v1::ResourceQuotaStatus;
+        use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+        let map = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), Quantity((*v).to_owned())))
+                .collect()
+        };
+        ResourceQuota {
+            status: Some(ResourceQuotaStatus {
+                hard: Some(map(hard)),
+                used: Some(map(used)),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_run_fits_only_within_every_limit() {
+        let size = RunSize {
+            cpu: "1".into(),
+            memory: "1Gi".into(),
+        };
+        let hard = [("requests.cpu", "3500m"), ("requests.memory", "4Gi")];
+        assert!(fits(
+            &quota(&hard, &[("requests.cpu", "2"), ("requests.memory", "2Gi")]),
+            &size
+        ));
+        assert!(
+            !fits(
+                &quota(&hard, &[("requests.cpu", "3"), ("requests.memory", "3Gi")]),
+                &size
+            ),
+            "3 + 1 CPU > 3.5"
+        );
+        assert!(
+            !fits(
+                &quota(
+                    &hard,
+                    &[("requests.cpu", "0"), ("requests.memory", "3584Mi")]
+                ),
+                &size
+            ),
+            "memory"
+        );
+        assert!(fits(&quota(&hard, &[]), &size), "nothing used yet");
+        assert!(fits(&ResourceQuota::default(), &size), "no status yet");
+    }
+
+    #[test]
+    fn quantities_parse_in_base_units() {
+        assert_eq!(quantity("3500m"), Some(3.5));
+        assert_eq!(quantity("1"), Some(1.0));
+        assert_eq!(quantity("0.5"), Some(0.5));
+        assert_eq!(quantity("4Gi"), Some(4.0 * 1024.0 * 1024.0 * 1024.0));
+        assert_eq!(quantity("128M"), Some(128e6));
+        assert_eq!(
+            quantity("1e3"),
+            None,
+            "exponents aren't used by our manifests"
+        );
     }
 
     #[test]

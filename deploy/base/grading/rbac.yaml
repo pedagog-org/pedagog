@@ -16,6 +16,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  # the namespace's quota, so admission releases only runs that fit
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list"]
   # label-selected base policies (server-side apply) and per-run CIDR policies
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
