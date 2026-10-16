@@ -20,6 +20,7 @@ pub enum Command {
     Vend(VendArgs),
     /// Check, pack and upload an assignment directory to the jobs service.
     Upload(UploadArgs),
+    Submit(SubmitArgs),
 }
 
 #[derive(clap::Args)]
@@ -153,6 +154,42 @@ pub struct UploadArgs {
     /// Suppress non-fatal warnings.
     #[arg(short = 'q', long)]
     pub quiet: bool,
+}
+
+#[derive(clap::Args)]
+#[command(
+    long_about = "Submit files to an upload assignment as a student, for grading.
+
+Give files, directories, or one archive. A directory sends every regular file
+under it, by its path relative to the directory (VCS metadata skipped); a file
+is sent by its name. A single .zip, .tar.gz or .tgz is unpacked by jobs unless
+the assignment says `archives: keep`.
+
+jobs applies the assignment's submission rules (include/exclude, required
+files, size), drops OS clutter such as .DS_Store and __MACOSX, and drops a
+folder that wraps everything (`strip: auto`), then prints what it kept and
+ignored. The submission is graded against the assignment's current build;
+it's refused if there's none yet.
+
+The student id is an opaque string until accounts exist. `just kind-submit`
+port-forwards to jobs on the kind cluster and runs this command."
+)]
+pub struct SubmitArgs {
+    /// Files, directories, or one archive to submit.
+    #[arg(required = true)]
+    pub paths: Vec<PathBuf>,
+
+    /// Assignment id (from its assignment.yml).
+    #[arg(short = 'a', long, value_name = "ID")]
+    pub assignment: String,
+
+    /// Student id.
+    #[arg(short = 's', long, value_name = "ID")]
+    pub student: String,
+
+    /// jobs service URL [env: PEDAGOG_JOBS_URL] [default: http://localhost:18081].
+    #[arg(long, value_name = "URL")]
+    pub jobs_url: Option<String>,
 }
 
 #[derive(ValueEnum, Clone, PartialEq)]

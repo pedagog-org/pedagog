@@ -142,6 +142,16 @@ kind-upload DIR *ARGS:
     sleep 2
     HAMMER_RECIPES="{{justfile_directory()}}/recipes" cargo run -q -p hammer -- upload "{{DIR}}" --jobs-url http://localhost:18081 {{ARGS}}
 
+# Submit files to an assignment on the kind cluster as a student:
+# `just kind-submit linked-list-python-upload alice recipes/examples/linked-list-python-upload/solution`.
+kind-submit ASSIGNMENT STUDENT +PATHS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubectl --context {{KIND_CTX}} -n pedagog-builds port-forward svc/pedagog-jobs 18081:8080 >/dev/null &
+    trap 'kill $!' EXIT
+    sleep 2
+    cargo run -q -p hammer -- submit {{PATHS}} --assignment "{{ASSIGNMENT}}" --student "{{STUDENT}}" --jobs-url http://localhost:18081
+
 # End-to-end check of the assignment pipeline on kind (upload, build, validate,
 # supersede, restart, egress). Run after kind-load-jobs and kind-deploy.
 kind-e2e:

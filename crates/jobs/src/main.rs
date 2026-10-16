@@ -12,6 +12,7 @@ mod fetch;
 mod http;
 mod intake;
 mod state;
+mod submissions;
 
 use std::sync::Arc;
 

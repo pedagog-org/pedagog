@@ -1,4 +1,5 @@
-//! HTTP surface: the dispatch-and-return rebuild endpoint and assignment uploads.
+//! HTTP surface: the dispatch-and-return rebuild endpoint, assignment uploads
+//! and submissions.
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -11,9 +12,16 @@ use serde::Deserialize;
 use crate::dispatch::dispatch;
 use crate::intake;
 use crate::state::AppState;
+use crate::submissions;
+
+/// Room for multipart framing on top of a submission's content.
+const MULTIPART_OVERHEAD: usize = 1 << 20;
 
 pub fn router(state: AppState) -> Router {
     let max_upload = state.config.limits.max_compressed_bytes;
+    let max_submission = usize::try_from(state.config.submission_limits.max_bytes)
+        .unwrap_or(usize::MAX)
+        .saturating_add(MULTIPART_OVERHEAD);
     Router::new()
         .route("/internal/recipes/rebuild", post(rebuild))
         .route(
@@ -23,6 +31,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/internal/assignments/{id}/builds/{build}",
             get(intake::build_status),
+        )
+        .route(
+            "/internal/assignments/{id}/submissions",
+            post(submissions::submit).layer(DefaultBodyLimit::max(max_submission)),
         )
         .with_state(state)
 }
