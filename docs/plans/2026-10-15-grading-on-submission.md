@@ -2,7 +2,7 @@
 
 The next milestone after assignment builds: a student submits code, `jobs` grades it in the
 assignment's image, and the result is stored. Decisions here come from a design review on
-2026-10-15/16.
+2026-10-15/16 (and a follow-up round on its open questions).
 
 ## Rationale
 
@@ -90,11 +90,13 @@ submission:
 
 ### Grading runs
 
-- A Job from the pinned build's image, in `pedagog-builds`, labeled
+- A Job from the pinned build's image, in **`pedagog-grading`**, labeled
   `pedagog.io/role=grade` and `pedagog.io/network=<mode>`:
   - **initContainer `await-egress`** (jobs image, `pedagog-jobs await-egress`): connects to
-    `kubernetes.default.svc:443`, which no policy ever allows, until the connection fails;
-    gives up (pod fails) after 30 s. Added to validation pods too.
+    `kube-dns.kube-system.svc:9153` (CoreDNS metrics: always up, in the pod range, and
+    blocked in every mode since `validate-base` allows only port 53) until the connection
+    fails; gives up (pod fails) after 30 s. Added to validation pods too. (The API server
+    doesn't work as a target: it resolves to a node IP, which `mode: allow` permitted.)
   - **initContainer `fetch-context`:** the submission into an emptyDir at
     `/pedagog/submission` (same safety checks as intake).
   - **main:** `/pedagog/bin/run-tests --code /pedagog/submission --isolation <mode>`, results
@@ -112,16 +114,43 @@ submission:
 - **Reconcile at startup:** `grading` runs with an active Job keep waiting; Job gone →
   `error` ("interrupted"); `queued` runs stay queued.
 
+### Namespace: `pedagog-grading`
+
+- Validation and grading runs (the "test runs") move to a new `pedagog-grading` namespace;
+  `pedagog-builds` keeps only Kaniko builds, which keep their egress.
+- It gets its own ResourceQuota and LimitRange (a submission burst can't starve builds, a
+  big build can't stall grading), the validate/grade NetworkPolicies, Pod Security
+  `baseline`, a copy of the `garage-s3-key` Secret, and a jobs Role.
+- A full quota makes pod creation fail; the admission gate sees a released run without a
+  pod and pauses, which is the backpressure we want.
+
+### Egress: "internet" means public addresses
+
+- Closes a gap in the existing policies: `validate-internet` allowed everything except
+  `PEDAGOG_CLUSTER_CIDRS` (pod and service ranges), so `mode: allow` code could reach node
+  IPs (kubelet `:10250`, the API server `:6443`) and the LAN.
+- `validate-internet` now always excludes `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+  `169.254.0.0/16`, and on IPv6 `fc00::/7` and `fe80::/10`.
+- `PEDAGOG_CLUSTER_CIDRS` becomes `PEDAGOG_BLOCKED_CIDRS`, an optional extra list; kind's and
+  k3s's ranges fall inside `10/8`, so both overlays drop it.
+- Private hosts are reachable only through a `cidr` rule (its own policy).
+- Loopback is never filtered, in any mode: tests can start student servers and connect to
+  them on `127.0.0.1`/`::1` within the pod, even under `deny`.
+- Lands first as its own fix PR (step 0a).
+
 ### Admission
 
-- **Postgres FIFO queue** (option A, Kueue-ready): runs are rows in `queued`, ordered by
+- **Postgres FIFO queue** (option A, Kueue-ready): a `run_queue` table holds every test run
+  waiting for admission, **validation and grading alike**, ordered by
   `(priority, queued_at)`; a run's position is visible in its status.
-- **Submissions before regrades:** submission runs get priority 0, regrade runs 1, so a
-  regrade batch drains behind new submissions (a Kueue `WorkloadPriorityClass` later).
+- **Priorities:** submissions and validations 0, regrades 1, so a regrade batch drains
+  behind new submissions and can't starve an instructor's validation (a Kueue
+  `WorkloadPriorityClass` later).
+- Validation status gains `queued` (between build success and `running`).
 - **Capacity gate:** a release loop (every 2 s) in each `jobs` replica:
   1. takes a transaction-level advisory lock, so only one replica releases at a time;
-  2. counts grading pods cluster-wide by label that are `Pending`, plus released runs
-     whose pod doesn't exist yet;
+  2. counts test-run pods in `pedagog-grading` that are `Pending`, plus released runs whose
+     pod doesn't exist yet;
   3. if zero (and under the optional ceiling `PEDAGOG_GRADING_MAX_RUNNING`, unset by
      default), claims the next run (`FOR UPDATE SKIP LOCKED`), marks it `grading` and creates
      its Job.
@@ -162,9 +191,11 @@ submission:
 | `submissions` | `assignment_id`, `student_id`, `build_id` (pinned), `source` (`upload` \| `workspace`), `tree_hash`, `object_key`, `size_bytes`, `receipt` (JSONB) |
 | `grading_runs` | `submission_id`, `build_id`, `reason` (`submission` \| `regrade`), `regrade_batch_id`, `priority`, `status`, `isolation`, `job_name`, `queued_at`, `started_at`, `finished_at`, `score`, `total`, `results` (JSONB), `problems` (TEXT[]), `error`, `log_tail`, `changes` (JSONB), `notify` |
 | `regrade_batches` | `assignment_id`, `build_id`, `notify`, `runs` |
+| `run_queue` | `kind` (`validate` \| `grade`), `ref_id` (build or grading run), `priority`, `queued_at`, `released_at` |
 
-- `assignment_builds` gains `regrade_notify` (null = no regrade requested).
-- Indexes: queued runs by `(priority, queued_at)`; submissions by
+- `assignment_builds` gains `regrade_notify` (null = no regrade requested); its
+  `validation_status` gains `queued`.
+- Indexes: unreleased queue entries by `(priority, queued_at)`; submissions by
   `(assignment_id, student_id, created_at)`.
 
 ## Dependencies
@@ -182,7 +213,7 @@ All approved in review:
 - **`sources: [upload, workspace]` in the `submission:` block:** the source belongs to the
   platform, which decides whether a session exists at all.
 - **Workspace assignments that also accept uploads** (`params.uploads`): convenient, but
-  mixes two sources with different trust and timing; deferred (open question).
+  mixes two sources with different trust and timing; revisited with sessions.
 - **A list of platforms per assignment:** a lean grading image and a code-server image, but
   two builds with little shared cache, and tests running in a different image than students
   used.
@@ -198,16 +229,25 @@ All approved in review:
     before there's more than one course.
 - **Plain FIFO for regrades:** simpler, but a large batch delays every new submission
   behind it.
+- **Grading in `pedagog-builds`:** no new namespace, Secret or Role, but builds and test runs
+  share one quota.
+- **Validation bypassing admission:** simpler, but during a burst it sits `Pending` behind
+  students and can time out.
+- **Per-cluster lists of blocked ranges instead of always excluding private ranges:**
+  precise, but easy to get wrong on a new cluster.
+- **Egress probe targets:** the `jobs` service (a false "blocked" when `jobs` is down) or a
+  sentinel Deployment (another workload to keep up).
 - **Skipping identical resubmissions:** students expect every submit to produce a result.
 - **Waiting for egress inside the launcher, or a fixed delay:** a new helper release (and a
   rule every future helper must follow), or a guess.
 
 ## Open questions
 
-- Multiple platforms, or mixed sources, per assignment.
-- Does `await-egress`' probe (connection to the API server fails) hold on k3s's network
-  policy controller as on kindnet? Checked on kind first, then on the Pis.
-- Should grading pods get their own namespace (separate ResourceQuota from builds)?
+None left; the follow-up round resolved them (see Namespace, Egress, and the follow-ups).
+Facts still to confirm while implementing:
+
+- On kind and then on the Pis (k3s's network policy controller): `await-egress` passes
+  only once policies apply, and `mode: allow` pods can't reach node IPs or the LAN.
 
 ## Follow-ups (recorded, out of scope)
 
@@ -217,17 +257,28 @@ All approved in review:
 - Notification delivery (api).
 - Kueue for multi-course fair sharing.
 - Retention of submissions, results and logs; rate limits per student.
+- Multiple platforms, or mixed sources (e.g. workspace with an upload fallback), per
+  assignment: revisit with sessions, when instructors' needs are known; an optional param
+  adds it without breaking anything.
+- Networking labs across pods (a client and server on separate hosts); same-pod networking
+  over loopback already works.
 
 ## Rollback
 
 - PR 0 is a rename; reverting it restores `interactive` (recipes and pedagog revert
   together).
+- Step 0a (egress) is a policy change; reverting it restores the old exclusions.
 - PRs a–d are additive: new tables (down migration), new routes, new Job kind, an optional
   schema block, new `hammer` flags. The `await-egress` initContainer on validation pods can
   be reverted on its own.
 
 ## Implementation steps
 
+0a. **Egress fix** (`fix/egress-private-ranges`, before everything else):
+   - always exclude the private and link-local ranges (v4 and v6) in `validate-internet`;
+   - `PEDAGOG_CLUSTER_CIDRS` → optional `PEDAGOG_BLOCKED_CIDRS`; overlays and docs;
+   - tests; a `kind-e2e` check that a `mode: allow` pod reaches the internet but not a node
+     IP.
 0. **Platforms** (pedagog + recipes):
    - rename `interactive` → `workspace` in the schema, recipes, examples, tests and docs;
    - `upload` platform kind; optional `entrypoint`; `platforms/ubuntu-22/upload.yaml`;
@@ -242,10 +293,13 @@ All approved in review:
    - `POST /internal/assignments/<id>/submissions`; refusal reasons;
    - `hammer submit`, `just kind-submit`; tests.
 3. **(c) Grading runs and admission:**
+   - the `pedagog-grading` namespace (quota, limits, policies, Pod Security, Secret, Role);
+     validation moves there;
    - `pedagog-jobs await-egress`; added to validation pods (verify on kind it closes the gap
      the e2e probe works around);
    - the grading Job, results check, statuses, reconcile;
-   - the queue and capacity gate behind `Admission`; tests.
+   - `run_queue` and the capacity gate behind `Admission`, for validation and grading; tests;
+   - confirm the egress behavior on the Pis.
 4. **(d) Regrades and status:**
    - `hammer upload --regrade --notify`; batch creation when the build becomes current;
    - change summaries and notification intent;
