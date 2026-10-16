@@ -7,7 +7,7 @@ use std::num::NonZeroU16;
 
 use crate::recipe::assignment::{AssignmentYaml, Testing, ToolchainPick, ToolchainSelection};
 use crate::recipe::os::PkgArg;
-use crate::recipe::platform::PlatformSpec;
+use crate::recipe::platform::{PlatformKind, PlatformSpec, check_submission_dir};
 use crate::recipe::primitives::{
     ArgHook, Command, OsId, ParamVal, PkgName, Step, ToolchainId, ToolchainRef,
 };
@@ -125,6 +125,9 @@ fn platform_artifact(
             })?;
     let params = resolve_params(&platform.hooks.build.params, &spec.params)
         .map_err(ResolveError::InvalidParams)?;
+    if spec.kind == PlatformKind::Workspace {
+        check_submission_dir(&params).map_err(ResolveError::InvalidParams)?;
+    }
     let entrypoint = interpolate_args(&platform.hooks.entrypoint, &params)
         .map_err(|message| interp_error("platform entrypoint", message))?;
     let ports = interpolate_args(&platform.hooks.ports, &params)
@@ -473,6 +476,35 @@ mod tests {
     }
 
     // ---- Toolchain/addon resolution (fixture stores) ------------------------
+
+    #[test]
+    fn submission_dir_must_stay_inside_the_workspace() {
+        let platform = "platform: workspace\nos: os-a\nhooks:\n  build:\n    params:\n      submission_dir:\n        type: str\n        default: \".\"\n    steps: []\n  entrypoint: [run]\n";
+        let store = crate::recipe::store::fixture_store(&[
+            ("os/a.yaml", FIX_OS),
+            ("platforms/workspace.yaml", platform),
+        ])
+        .unwrap();
+        let resolve_with = |dir: &str| {
+            let params = if dir.is_empty() {
+                String::new()
+            } else {
+                format!("\n    params: {{ submission_dir: '{dir}' }}")
+            };
+            let yaml = format!(
+                "id: t\nname: T\nenvironment:\n  os: os-a\n  platform:\n    kind: workspace{params}\n"
+            );
+            let a: AssignmentYaml = serde_yaml::from_str(&yaml).unwrap();
+            resolve(&a, &store).map(|_| ())
+        };
+        assert!(resolve_with("").is_ok(), "default `.`");
+        assert!(resolve_with("src").is_ok());
+        assert!(resolve_with("src/").is_ok());
+        for bad in ["../etc", "/home/student", "a/../../b"] {
+            let err = resolve_with(bad).unwrap_err().to_string();
+            assert!(err.contains("submission_dir"), "{bad}: {err}");
+        }
+    }
 
     const FIX_OS: &str = "id: os-a\nupstream: base:1\nimage: pedagog/a:1\nhooks:\n  build:\n    init: []\n  pkg:\n    install:\n      args: [packages]\n      steps: []\n";
     const FIX_OS_B: &str = "id: os-b\nupstream: base:2\nimage: pedagog/b:1\nhooks:\n  build:\n    init: []\n  pkg:\n    install:\n      args: [packages]\n      steps: []\n";
