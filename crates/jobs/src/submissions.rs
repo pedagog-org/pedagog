@@ -3,6 +3,9 @@
 //! assignment's `submission:` rules, store it, and queue its grading run
 //! against the current build.
 //!
+//! `GET /internal/submissions/{id}` and
+//! `GET /internal/assignments/{id}/submissions?student=<id>` report them.
+//!
 //! Normalization, in order: unpack a single archive (unless `archives: keep`),
 //! drop OS clutter, strip one wrapping folder (`strip: auto`), apply
 //! include/exclude, check required paths, check the size. Each step is
@@ -394,6 +397,125 @@ pub async fn submit(
         receipt: normalized.receipt,
     };
     Ok((StatusCode::CREATED, Json(reply)).into_response())
+}
+
+/// A grading run as the status endpoints report it.
+#[derive(Debug, Serialize)]
+pub struct RunStatus {
+    pub id: i64,
+    pub reason: String,
+    pub build_id: i64,
+    pub status: String,
+    /// 1-based position in the queue while queued.
+    pub queue_position: Option<i64>,
+    pub isolation: Option<String>,
+    pub score: Option<f64>,
+    pub total: Option<f64>,
+    pub problems: Vec<String>,
+    pub error: Option<String>,
+    pub log_tail: Option<String>,
+    /// Regrades: what changed since the previous graded run.
+    pub changes: Option<serde_json::Value>,
+    /// Whether the student should be told about this run.
+    pub notify: bool,
+    pub results: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SubmissionStatus {
+    pub id: i64,
+    pub assignment_id: String,
+    pub student_id: String,
+    /// The build current when it was accepted.
+    pub build_id: i64,
+    pub source: String,
+    pub tree_hash: String,
+    pub size_bytes: i64,
+    pub receipt: serde_json::Value,
+    /// Latest first; the first is the one shown.
+    pub runs: Vec<RunStatus>,
+}
+
+/// `GET /internal/submissions/{id}`: a submission and all its runs.
+/// Internal callers see everything; what students see is filtered by the api.
+pub async fn submission_status(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<i64>,
+) -> Result<Response, Refused> {
+    let submission = db::get_submission(&state.pool, id)
+        .await
+        .map_err(|e| internal("reading the submission", e))?
+        .ok_or_else(|| refused(StatusCode::NOT_FOUND, format!("no submission {id}")))?;
+    Ok(Json(status_of(&state, submission).await?).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct StudentQuery {
+    student: String,
+}
+
+/// `GET /internal/assignments/{id}/submissions?student=<id>`: a student's
+/// submissions to an assignment, latest first, each with its runs.
+pub async fn student_submissions(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+    Query(query): Query<StudentQuery>,
+) -> Result<Response, Refused> {
+    let submissions = db::submissions_for_student(&state.pool, &id, &query.student)
+        .await
+        .map_err(|e| internal("reading the submissions", e))?;
+    let mut out = Vec::with_capacity(submissions.len());
+    for submission in submissions {
+        out.push(status_of(&state, submission).await?);
+    }
+    Ok(Json(out).into_response())
+}
+
+async fn status_of(
+    state: &AppState,
+    submission: pedagog_store::Submission,
+) -> Result<SubmissionStatus, Refused> {
+    let json = |text: Option<String>| text.and_then(|t| serde_json::from_str(&t).ok());
+    let mut runs = Vec::new();
+    for run in db::runs_for_submission(&state.pool, submission.id)
+        .await
+        .map_err(|e| internal("reading the runs", e))?
+    {
+        let queue_position = if run.status == pedagog_store::RunStatus::Queued {
+            queue::position(&state.pool, QueuedRun::Grading(run.id))
+                .await
+                .map_err(|e| internal("reading the queue", e))?
+        } else {
+            None
+        };
+        runs.push(RunStatus {
+            id: run.id,
+            reason: run.reason.to_string(),
+            build_id: run.build_id,
+            status: run.status.to_string(),
+            queue_position,
+            isolation: run.isolation,
+            score: run.score,
+            total: run.total,
+            problems: run.problems,
+            error: run.error,
+            log_tail: run.log_tail,
+            changes: json(run.changes),
+            notify: run.notify,
+            results: json(run.results),
+        });
+    }
+    Ok(SubmissionStatus {
+        id: submission.id,
+        assignment_id: submission.assignment_id,
+        student_id: submission.student_id,
+        build_id: submission.build_id,
+        source: submission.source.to_string(),
+        tree_hash: submission.tree_hash,
+        size_bytes: submission.size_bytes,
+        receipt: json(Some(submission.receipt)).unwrap_or_default(),
+        runs,
+    })
 }
 
 /// The assignment's current build and the `assignment.yml` it was built from.

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT g.id AS run_id, s.id AS submission_id, s.assignment_id, b.id AS build_id,\n                b.image_ref, b.upload_id, s.object_key, s.tree_hash\n           FROM grading_runs g\n           JOIN submissions s ON s.id = g.submission_id\n           JOIN assignment_builds b ON b.id = g.build_id\n          WHERE g.id = $1",
+  "query": "SELECT g.id AS run_id, s.id AS submission_id, s.assignment_id, b.id AS build_id,\n                b.image_ref, b.upload_id, s.object_key, s.tree_hash, g.regrade_batch_id\n           FROM grading_runs g\n           JOIN submissions s ON s.id = g.submission_id\n           JOIN assignment_builds b ON b.id = g.build_id\n          WHERE g.id = $1",
   "describe": {
     "columns": [
       {
@@ -90,6 +90,17 @@
             "name": "tree_hash"
           }
         }
+      },
+      {
+        "ordinal": 8,
+        "name": "regrade_batch_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grading_runs",
+            "name": "regrade_batch_id"
+          }
+        }
       }
     ],
     "parameters": {
@@ -105,8 +116,9 @@
       false,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "92353907b39a466bb5326852bcb0e2d5a1c677e4e97fe62ee5ed936383647534"
+  "hash": "bb19e72d5fb4104a50b87af2b314ac1ebb4713488ea6dbfb33eb3baaac4a6991"
 }

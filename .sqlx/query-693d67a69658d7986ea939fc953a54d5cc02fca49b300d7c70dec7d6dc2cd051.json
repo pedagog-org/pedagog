@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT notify FROM regrade_batches WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "notify",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "regrade_batches",
+            "name": "notify"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "693d67a69658d7986ea939fc953a54d5cc02fca49b300d7c70dec7d6dc2cd051"
+}

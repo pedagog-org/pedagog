@@ -34,7 +34,13 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/internal/assignments/{id}/submissions",
-            post(submissions::submit).layer(DefaultBodyLimit::max(max_submission)),
+            post(submissions::submit)
+                .layer(DefaultBodyLimit::max(max_submission))
+                .get(submissions::student_submissions),
+        )
+        .route(
+            "/internal/submissions/{id}",
+            get(submissions::submission_status),
         )
         .with_state(state)
 }

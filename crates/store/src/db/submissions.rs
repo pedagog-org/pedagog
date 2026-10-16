@@ -9,7 +9,7 @@ use std::str::FromStr;
 
 use sqlx::{PgConnection, PgPool};
 
-use crate::{GradingRun, RunReason, RunStatus, Submission, SubmissionSource};
+use crate::{GradingRun, Notify, RunReason, RunStatus, Submission, SubmissionSource};
 
 /// Queue priority of a submission's first run (validations share it).
 pub const SUBMISSION_PRIORITY: i16 = 0;
@@ -162,6 +162,15 @@ pub async fn abandon_run(pool: &PgPool, run: i64, error: &str) -> sqlx::Result<b
     Ok(done.rows_affected() == 1)
 }
 
+/// When a regrade batch tells students about its results.
+pub async fn batch_notify(pool: &PgPool, batch: i64) -> sqlx::Result<Option<Notify>> {
+    let row = sqlx::query!("SELECT notify FROM regrade_batches WHERE id = $1", batch)
+        .fetch_optional(pool)
+        .await?;
+    row.map(|r| Notify::from_str(&r.notify).map_err(decode))
+        .transpose()
+}
+
 /// One submission by id.
 pub async fn get_submission(pool: &PgPool, id: i64) -> sqlx::Result<Option<Submission>> {
     sqlx::query_as!(
@@ -211,13 +220,15 @@ pub struct RunContext {
     /// The submission's stored tree.
     pub object_key: String,
     pub tree_hash: String,
+    /// Set for regrade runs.
+    pub regrade_batch_id: Option<i64>,
 }
 
 pub async fn run_context(pool: &PgPool, run: i64) -> sqlx::Result<Option<RunContext>> {
     sqlx::query_as!(
         RunContext,
         "SELECT g.id AS run_id, s.id AS submission_id, s.assignment_id, b.id AS build_id,
-                b.image_ref, b.upload_id, s.object_key, s.tree_hash
+                b.image_ref, b.upload_id, s.object_key, s.tree_hash, g.regrade_batch_id
            FROM grading_runs g
            JOIN submissions s ON s.id = g.submission_id
            JOIN assignment_builds b ON b.id = g.build_id
@@ -528,6 +539,21 @@ pub(crate) mod tests {
         let run = get_run(&pool, acc.run_id).await?.unwrap();
         assert_eq!(run.status, RunStatus::Error);
         assert_eq!(run.error.as_deref(), Some("couldn't start: no plan"));
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn batch_notify_reads_the_batch(pool: PgPool) -> sqlx::Result<()> {
+        let build = current_build(&pool, "ll", "img-a").await?;
+        let batch = sqlx::query!(
+            "INSERT INTO regrade_batches (assignment_id, build_id, notify, runs) VALUES ('ll', $1, 'changed', 0) RETURNING id",
+            build
+        )
+        .fetch_one(&pool)
+        .await?
+        .id;
+        assert_eq!(batch_notify(&pool, batch).await?, Some(Notify::Changed));
+        assert_eq!(batch_notify(&pool, batch + 1).await?, None);
         Ok(())
     }
 

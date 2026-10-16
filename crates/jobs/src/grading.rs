@@ -5,9 +5,11 @@
 
 use std::time::Duration;
 
+use pedagog_core::changes::compare;
 use pedagog_core::results::{COLLECTION_SUFFIX, Results};
 use pedagog_k8s::build::JobKey;
 use pedagog_k8s::grade::GradingRequest;
+use pedagog_store::Notify;
 use pedagog_store::db::assignments as builds_db;
 use pedagog_store::db::submissions::{self as db, RunOutcome};
 use pedagog_store::objects::grading_results_key;
@@ -104,13 +106,18 @@ async fn await_outcome(state: &AppState, run: i64) -> anyhow::Result<()> {
         log_tail = Some(logs[logs.len().saturating_sub(LOG_TAIL)..].to_owned());
         verdict.error = Some("the run crashed or timed out".to_owned());
     }
+    let (changes, notify) = match ctx.regrade_batch_id {
+        Some(batch) => regrade_changes(state, &ctx, batch, verdict.results.as_deref()).await?,
+        None => (None, false),
+    };
     let outcome = RunOutcome {
         score: verdict.score,
         results: verdict.results.as_deref(),
         problems: &verdict.problems,
         error: verdict.error.as_deref(),
         log_tail: log_tail.as_deref(),
-        ..Default::default()
+        changes: changes.as_deref(),
+        notify,
     };
     db::finish_run(&state.pool, run, &outcome).await?;
     match verdict.score {
@@ -118,6 +125,26 @@ async fn await_outcome(state: &AppState, run: i64) -> anyhow::Result<()> {
         None => tracing::warn!(run, problems = ?verdict.problems, "grading run errored"),
     }
     Ok(())
+}
+
+/// A regrade's difference from the submission's previous graded run, as
+/// JSON, and whether its batch says to tell the student.
+async fn regrade_changes(
+    state: &AppState,
+    ctx: &db::RunContext,
+    batch: i64,
+    results: Option<&str>,
+) -> anyhow::Result<(Option<String>, bool)> {
+    let parse = |json: Option<&str>| json.and_then(|j| serde_json::from_str::<Results>(j).ok());
+    let previous = db::previous_graded_run(&state.pool, ctx.submission_id, ctx.run_id).await?;
+    let before = parse(previous.as_ref().and_then(|r| r.results.as_deref()));
+    let changes = compare(before.as_ref(), parse(results).as_ref());
+    let notify = match db::batch_notify(&state.pool, batch).await? {
+        Some(Notify::Always) => true,
+        Some(Notify::Changed) => !changes.is_empty(),
+        Some(Notify::Never) | None => false,
+    };
+    Ok((serde_json::to_string(&changes).ok(), notify))
 }
 
 /// End a run that can't be graded (it never started, or its watcher failed).

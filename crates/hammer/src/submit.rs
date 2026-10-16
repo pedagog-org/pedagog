@@ -138,6 +138,111 @@ pub fn send(
     serde_json::from_str(&body).map_err(|e| format!("unexpected reply from jobs: {e}: {body}"))
 }
 
+/// A grading run's status (`GET /internal/submissions/<id>`, one of its runs).
+#[derive(Debug, Deserialize)]
+pub struct Run {
+    pub id: i64,
+    pub status: String,
+    pub queue_position: Option<i64>,
+    pub score: Option<f64>,
+    pub total: Option<f64>,
+    #[serde(default)]
+    pub problems: Vec<String>,
+    pub error: Option<String>,
+    pub results: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SubmissionStatus {
+    runs: Vec<Run>,
+}
+
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Polls until the run is graded or errored, calling `progress` whenever its
+/// status (or queue position) changes.
+pub fn wait(
+    jobs_url: &str,
+    submission: i64,
+    run: i64,
+    mut progress: impl FnMut(&Run),
+) -> Result<Run, String> {
+    let url = format!(
+        "{}/internal/submissions/{submission}",
+        jobs_url.trim_end_matches('/')
+    );
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut last = String::new();
+    loop {
+        let reply = client
+            .get(&url)
+            .send()
+            .map_err(|e| format!("cannot reach jobs at {url}: {e}"))?;
+        if !reply.status().is_success() {
+            return Err(format!("jobs answered {} for {url}", reply.status()));
+        }
+        let body = reply.text().map_err(|e| e.to_string())?;
+        let status: SubmissionStatus = serde_json::from_str(&body)
+            .map_err(|e| format!("unexpected reply from jobs: {e}: {body}"))?;
+        let current = status
+            .runs
+            .into_iter()
+            .find(|r| r.id == run)
+            .ok_or_else(|| format!("submission {submission} has no run {run}"))?;
+        let stage = format!("{}/{:?}", current.status, current.queue_position);
+        if stage != last {
+            progress(&current);
+            last = stage;
+        }
+        if matches!(current.status.as_str(), "graded" | "error") {
+            return Ok(current);
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// A finished run as lines for the terminal, and whether it was graded.
+pub fn outcome(run: &Run) -> (bool, Vec<String>) {
+    if run.status != "graded" {
+        let mut lines = vec![format!(
+            "grading failed{}",
+            run.error
+                .as_ref()
+                .map(|e| format!(": {e}"))
+                .unwrap_or_default()
+        )];
+        lines.extend(run.problems.iter().cloned());
+        return (false, lines);
+    }
+    let mut lines = vec![format!(
+        "graded: {} / {}",
+        run.score.unwrap_or_default(),
+        run.total.unwrap_or_default()
+    )];
+    let tests = run
+        .results
+        .as_ref()
+        .and_then(|r| r.get("tests")?.as_array().cloned())
+        .unwrap_or_default();
+    for t in tests {
+        let field = |k: &str| t.get(k).cloned().unwrap_or_default();
+        if field("status").as_str() == Some("pass") {
+            continue;
+        }
+        lines.push(format!(
+            "  {} ({}): {} / {}",
+            field("name").as_str().unwrap_or("?"),
+            field("status").as_str().unwrap_or("?"),
+            field("score"),
+            field("max")
+        ));
+    }
+    (true, lines)
+}
+
 /// The receipt as lines for the terminal.
 pub fn describe(s: &Submitted) -> Vec<String> {
     let mut lines = vec![format!(
@@ -209,6 +314,29 @@ mod tests {
         let err = collect(&[dir.join("a"), dir.join("main.py")]).unwrap_err();
         assert!(err.contains("main.py is given twice"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn outcomes_list_tests_that_didnt_pass() {
+        let run: Run = serde_json::from_value(serde_json::json!({
+            "id": 3, "status": "graded", "queue_position": null, "score": 9.0, "total": 10.0,
+            "results": {"tests": [
+                {"name": "append", "status": "pass", "score": 2.0, "max": 2.0},
+                {"name": "pop-front", "status": "fail", "score": 0.0, "max": 1.0}
+            ]}
+        }))
+        .unwrap();
+        let (graded, lines) = outcome(&run);
+        assert!(graded);
+        assert_eq!(lines, ["graded: 9 / 10", "  pop-front (fail): 0.0 / 1.0"]);
+
+        let run: Run = serde_json::from_value(serde_json::json!({
+            "id": 4, "status": "error", "problems": ["test_ll.py couldn't be loaded"]
+        }))
+        .unwrap();
+        let (graded, lines) = outcome(&run);
+        assert!(!graded);
+        assert_eq!(lines, ["grading failed", "test_ll.py couldn't be loaded"]);
     }
 
     #[test]
