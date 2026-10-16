@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end check of the assignment pipeline on the kind cluster
-# (`just kind-e2e`): upload → Kaniko build → validation → verdict.
+# (`just kind-e2e`): upload → Kaniko build → validation → verdict, then
+# submissions → admission → grading → regrades.
 # Needs a cluster from `just kind-up`, `just kind-load-jobs` and `just kind-deploy`.
 # Exits non-zero if any check fails.
 set -uo pipefail
@@ -10,6 +11,9 @@ CTX=kind-pedagog
 NS=pedagog-builds
 RUNS=pedagog-grading
 EXAMPLE=recipes/examples/linked-list-python
+EXAMPLE_ID=linked-list-python
+UPLOAD_EXAMPLE=recipes/examples/linked-list-python-upload
+UPLOAD_ID=linked-list-python-upload
 PORT=18081
 URL=http://localhost:$PORT
 export HAMMER_RECIPES="$PWD/recipes"
@@ -24,6 +28,10 @@ cargo build -q -p hammer
 HAMMER=target/debug/hammer
 upload() { "$HAMMER" upload "$1" --jobs-url "$URL" -q "${@:2}" 2>&1; }
 build_id() { grep -oE "build [0-9]+" | head -1 | grep -oE "[0-9]+"; }
+# Fixed student ids, so each run's regrade covers the same few submissions.
+submit() { "$HAMMER" submit "${@:3}" --assignment "$1" --student "e2e-$2" --jobs-url "$URL" 2>&1; }
+# hammer's error report wraps long lines: join them (and drop its colors and frame).
+flat() { sed 's/\x1b\[[0-9;]*m//g; s/[│×]//g' | tr -s ' \n' ' '; }
 
 # Forward to jobs and wait until it answers (a forward opened during a rollout
 # can attach to a terminating pod and die with it).
@@ -141,6 +149,117 @@ if echo "$probe" | grep -q internet-open && echo "$probe" | grep -q node-blocked
     pass "egress: internet reachable, node $node_ip (kubelet) blocked"
 else
     fail "egress (allow): $probe"
+fi
+
+echo "== 8. the upload example builds and validates"
+out=$(upload "$UPLOAD_EXAMPLE" --force --wait)
+if echo "$out" | grep -q "validation passed: 10.0 / 10.0"; then pass "upload example validates (10/10)"; else fail "upload example validates: $out"; fi
+SOLUTION="$UPLOAD_EXAMPLE/solution"
+cp -r "$SOLUTION" "$work/buggy-sub"
+sed -i.bak 's/raise IndexError("pop from empty list")/return None/' "$work/buggy-sub/linked_list.py"
+rm "$work/buggy-sub/linked_list.py.bak"
+mkdir -p "$work/broken" && printf 'class LinkedList(:\n' > "$work/broken/linked_list.py"
+printf 'x = 1\n' > "$work/other.py"
+
+echo "== 9. submissions are graded"
+out=$(submit "$UPLOAD_ID" good "$SOLUTION" --wait)
+if echo "$out" | grep -q "graded: 10 / 10"; then pass "the solution grades 10/10"; else fail "the solution grades 10/10: $out"; fi
+out=$(submit "$UPLOAD_ID" buggy "$work/buggy-sub" --wait)
+if echo "$out" | grep -q "graded: 9 / 10" && echo "$out" | grep -q "pop_front (fail)"; then
+    pass "a buggy submission grades 9/10 and names the failing test"
+else
+    fail "a buggy submission grades 9/10: $out"
+fi
+
+echo "== 10. a Finder zip is unpacked, unwrapped and cleaned"
+python3 - "$SOLUTION/linked_list.py" "$work/hw1.zip" <<'PY'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[2], "w") as z:
+    z.write(sys.argv[1], "hw1/linked_list.py")
+    z.writestr("hw1/notes.txt", "my notes")
+    z.writestr("hw1/.DS_Store", "junk")
+    z.writestr("__MACOSX/hw1/._linked_list.py", "junk")
+PY
+out=$(submit "$UPLOAD_ID" zipped "$work/hw1.zip" --wait)
+if echo "$out" | grep -q "dropped the wrapping folder hw1/" && echo "$out" | grep -q "ignored by the assignment's rules: notes.txt" \
+    && echo "$out" | grep -q "dropped 2 OS file" && echo "$out" | grep -q "graded: 10 / 10"; then
+    pass "zip: wrapping folder, notes.txt and OS clutter dropped; graded 10/10"
+else
+    fail "zip submission: $out"
+fi
+
+echo "== 11. refused and failed submissions"
+out=$(submit "$UPLOAD_ID" missing "$work/other.py" | flat)
+if echo "$out" | grep -q "422" && echo "$out" | grep -q "missing required files: linked_list.py"; then
+    pass "a submission without linked_list.py is refused"
+else
+    fail "missing required file: $out"
+fi
+out=$(submit "$EXAMPLE_ID" missing "$SOLUTION" | flat)
+if echo "$out" | grep -q "409" && echo "$out" | grep -q "arrives with sessions"; then
+    pass "a workspace assignment refuses uploads"
+else
+    fail "workspace assignment: $out"
+fi
+out=$(submit "$UPLOAD_ID" broken "$work/broken" --wait); status=$?
+out=$(echo "$out" | flat)
+if [ $status -ne 0 ] && echo "$out" | grep -q "couldn't be loaded"; then
+    pass "a syntax error is a grading error, not 0/0"
+else
+    fail "syntax error (exit $status): $out"
+fi
+
+echo "== 12. a burst waits in the queue and never exceeds the quota"
+for n in 1 2 3 4 5 6; do submit "$UPLOAD_ID" "burst$n" "$SOLUTION" >/dev/null; done
+most=0
+for _ in $(seq 1 60); do
+    # By phase, as the quota counts them (a just-finished pod still shows as running).
+    running=$(k -n "$RUNS" get pods -l pedagog.io/role=grade --no-headers \
+        --field-selector=status.phase!=Succeeded,status.phase!=Failed 2>/dev/null | wc -l | tr -d ' ')
+    [ "$running" -gt "$most" ] && most=$running
+    left=$(sql "SELECT count(*) FROM grading_runs g JOIN submissions s ON s.id = g.submission_id
+                WHERE s.student_id LIKE 'e2e-burst%' AND g.status IN ('queued', 'grading')")
+    [ "$left" = 0 ] && break
+    sleep 1
+done
+graded=$(sql "SELECT count(*) FROM (SELECT DISTINCT ON (s.student_id) g.status FROM grading_runs g
+              JOIN submissions s ON s.id = g.submission_id WHERE s.student_id LIKE 'e2e-burst%'
+              ORDER BY s.student_id, g.id DESC) latest WHERE status = 'graded'")
+if [ "$left" = 0 ] && [ "$graded" = 6 ] && [ "$most" -le 3 ]; then
+    pass "6 submissions drained, at most $most grading at once (quota: 3)"
+else
+    fail "burst: $graded/6 graded, $left left, $most at once"
+fi
+
+echo "== 13. a regrade reports what changed"
+cp -r "$UPLOAD_EXAMPLE" "$work/v2"
+cat >> "$work/v2/tests/test_linked_list.py" <<'PY'
+
+
+@rubric_item("pop_front shrinks the list", points=1, id="pop-shrinks")
+@number(6)
+def test_pop_shrinks(score: Score):
+    items = LinkedList()
+    items.append(1)
+    items.append(2)
+    items.pop_front()
+    assert len(items) == 1
+    score.award()
+PY
+out=$(upload "$work/v2" --force --regrade --notify changed --wait)
+v2=$(echo "$out" | build_id)
+for _ in $(seq 1 90); do
+    left=$(sql "SELECT count(*) FROM grading_runs WHERE build_id = ${v2:-0} AND status IN ('queued', 'grading')")
+    [ "$left" = 0 ] && break
+    sleep 2
+done
+regrade=$(sql "SELECT g.score || '/' || g.total || ' ' || g.notify || ' ' || (g.changes->'added')::text
+               FROM grading_runs g JOIN submissions s ON s.id = g.submission_id
+               WHERE s.student_id = 'e2e-good' AND g.reason = 'regrade' AND g.build_id = ${v2:-0}")
+if [ "$regrade" = '11/11 true ["pop-shrinks"]' ]; then
+    pass "regraded 11/11 with pop-shrinks added, student to be notified"
+else
+    fail "regrade of e2e-good against build ${v2:-?}: '$regrade' ($out)"
 fi
 
 echo

@@ -340,10 +340,10 @@ insecure = true
 
 ---
 
-## Phase 5 — Assignment Builds
+## Phase 5 — Assignment Builds and Grading
 
-`jobs` takes assignment uploads, builds them with Kaniko and validates them; the defaults
-suit a small cluster. Set these on the `pedagog-jobs` Deployment when they don't:
+`jobs` takes assignment uploads, builds them with Kaniko and validates them, then takes
+submissions and grades them; the defaults suit a small cluster. Set these on the `pedagog-jobs` Deployment when they don't:
 
 | Env var | Default | Notes |
 | --- | --- | --- |
@@ -369,7 +369,7 @@ suit a small cluster. Set these on the `pedagog-jobs` Deployment when they don't
   NetworkPolicy (k3s does). Each run waits until its policies are in force before
   starting (`await-egress`, which probes CoreDNS on port 9153: keep the CoreDNS metrics
   port enabled, as k3s does by default).
-- **Registry pulls:** validation pods pull the built image by its in-cluster name
+- **Registry pulls:** validation and grading pods pull the built image by its in-cluster name
   (`registry-service.pedagog-data.svc:5000/...`) through each node's containerd, which
   can't resolve cluster DNS. Add that name to each node's
   `/etc/rancher/k3s/registries.yaml` (Phase 4), pointing at the registry's IP, and
@@ -383,7 +383,15 @@ suit a small cluster. Set these on the `pedagog-jobs` Deployment when they don't
   ```
 - **Uploading:** until the web UI exists, upload from your machine through a
   port-forward: `kubectl -n pedagog-builds port-forward svc/pedagog-jobs 18081:8080`, then
-  `hammer upload <dir> --wait` (with `HAMMER_RECIPES` set for the local check).
+  `hammer upload <dir> --wait` (with `HAMMER_RECIPES` set for the local check). Add
+  `--regrade [--notify changed]` to regrade every student's latest submission once the
+  new build is current.
+- **Submitting:** through the same port-forward, `hammer submit <files|dir|archive>
+  --assignment <id> --student <id> --wait` prints the receipt, then the score. Only
+  assignments on the `upload` platform take submissions for now.
+- **Capacity:** test runs wait in jobs' queue until there's room; if submissions sit
+  queued, look at `pedagog-grading`'s quota (`kubectl -n pedagog-grading describe
+  resourcequota`) and pending pods before raising anything.
 
 ---
 

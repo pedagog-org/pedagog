@@ -198,6 +198,34 @@ submission:
 - Indexes: unreleased queue entries by `(priority, queued_at)`; submissions by
   `(assignment_id, student_id, created_at)`.
 
+## Implementation notes
+
+Deviations found while implementing (PRs #31–#37), recorded here:
+
+- **Egress (0a):** `100.64.0.0/10` (shared address space: CGNAT, Tailscale) is also always
+  excluded, added in review.
+- **Store (a):** priority lives only on `run_queue`, whose entries point at either a build
+  or a grading run through two foreign keys (exactly one set); a run's isolation is
+  recorded when it starts, since regrade runs don't know their assignment's settings
+  until then.
+- **Intake (b):** `strip: auto` keeps the wrapping folder when the required paths are
+  already in place (`src/main.c` required and submitted as such). Files sent as separate
+  parts have no executable bit; archives keep theirs. `zip` is used for reading only,
+  with deflate through the existing `flate2`.
+- **Namespace (c1):** no copy of the Garage key Secret in `pedagog-grading`: test-run pods
+  only ever see presigned URLs.
+- **Admission (c2):** admission creates each run's Job inside the transaction that
+  releases it, so a released run always has a Job. The gate counts Jobs without a pod
+  and *unscheduled* pods; pods on a node running their init containers don't block. The
+  optional ceiling is `PEDAGOG_MAX_RUNNING_TESTS`. A run that can never start (missing
+  plan, the API refusing the Job with a 4xx) is ended so it can't block the queue.
+- **Grading outcome (c2):** a test file that couldn't be loaded (the helper's
+  `<file>::<collection>` entry, e.g. a syntax error in the submission) makes the run an
+  `error`; the helper reported it as 0 out of 0, found on kind.
+- **Regrades (d):** a change summary compares against the submission's previous *graded*
+  run. Uploading content that's already built with `--regrade` regrades nothing (with a
+  warning); `--force` rebuilds and regrades.
+
 ## Dependencies
 
 All approved in review:

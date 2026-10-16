@@ -11,14 +11,17 @@ Every assignment image is built in this order. Each phase is one or more `RUN` l
 | # | Phase | Runs | Source |
 | --- | --- | --- | --- |
 | 1 | **BASE** | OS package-manager init, `student` user, `vend` helper | OS recipe `hooks.build.init` |
-| 2 | **PLATFORM** | Platform install (e.g. code-server, extensions, policy) | Platform recipe `hooks.build.steps` |
+| 2 | **PLATFORM** | Platform install (`workspace`: code-server, extensions, policy; `upload`: nothing) | Platform recipe `hooks.build.steps` |
 | 3 | **TOOLCHAIN** | Each toolchain in the order listed, each followed by its addons | Toolchain recipes `steps` |
 | 4 | **ASSIGNMENT** | The assignment's own build steps | Assignment `environment.steps` |
 | 5 | **OS CLEANUP** | Package caches and other build leftovers removed | OS recipe `hooks.build.cleanup` |
 | 6 | **ASSIGNMENT FILES** | `starter/` → `/pedagog/starter` (root, read-only); `tests/` and `solution/` → `/pedagog/tests`, `/pedagog/solution` (`grader:grader`, `0700`) | The archive's directories (`files:` in `assignment.yml` names them) |
-| — | **RUNTIME** | `EXPOSE` ports, `USER student`, exec-form `ENTRYPOINT` | Platform recipe `entrypoint` / `ports` |
+| — | **RUNTIME** | `EXPOSE` ports, `USER student`, exec-form `ENTRYPOINT` (none on `upload`: it has no session) | Platform recipe `entrypoint` / `ports` |
 
-Phases with no steps are skipped.
+Phases with no steps are skipped. The same image serves sessions, validation and
+grading: test runs override the entrypoint with the helper's launcher
+(`/pedagog/bin/run-tests`), against `/pedagog/solution` for validation or the
+submission at `/pedagog/submission` for grading.
 
 ### Why this order
 
