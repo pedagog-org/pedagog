@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE run_queue SET released_at = now()\n          WHERE id = (SELECT id FROM run_queue\n                       WHERE released_at IS NULL\n                       ORDER BY priority, queued_at, id\n                       LIMIT 1\n                       FOR UPDATE SKIP LOCKED)\n          RETURNING build_id, grading_run_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "build_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "run_queue",
+            "name": "build_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "grading_run_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "run_queue",
+            "name": "grading_run_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "74444f1bc137233b7e7bb2eb7fe95a58e31404e2aa470bd64c7d464ece034277"
+}

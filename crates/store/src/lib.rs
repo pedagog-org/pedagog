@@ -49,6 +49,8 @@ pub enum AssignmentBuildStatus {
 pub enum ValidationStatus {
     /// Not started (or never will be, if the build failed).
     Pending,
+    /// Waiting in the admission queue.
+    Queued,
     Running,
     Passed,
     /// The results are consistent, but the reference solution disagrees with the tests.
@@ -94,6 +96,93 @@ pub struct AssignmentBuild {
     pub finished: bool,
 }
 
+/// Where a submission came from; each platform kind takes one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
+pub enum SubmissionSource {
+    Upload,
+    Workspace,
+}
+
+/// A `submissions` row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Submission {
+    pub id: i64,
+    pub assignment_id: String,
+    pub student_id: String,
+    /// The build current when the submission was accepted.
+    pub build_id: i64,
+    pub source: SubmissionSource,
+    pub tree_hash: String,
+    pub object_key: String,
+    pub size_bytes: i64,
+    /// What intake did, as JSON text.
+    pub receipt: String,
+}
+
+/// State of a grading run (`grading_runs.status`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
+pub enum RunStatus {
+    /// Waiting in the admission queue.
+    Queued,
+    Grading,
+    /// Results are in (failing tests included).
+    Graded,
+    /// No usable results: missing, invalid, a crash, or a timeout.
+    Error,
+}
+
+/// Why a grading run exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
+pub enum RunReason {
+    Submission,
+    Regrade,
+}
+
+/// When students hear about a regrade's results.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
+pub enum Notify {
+    Never,
+    /// Only if the results changed.
+    Changed,
+    Always,
+}
+
+/// A `grading_runs` row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GradingRun {
+    pub id: i64,
+    pub submission_id: i64,
+    pub build_id: i64,
+    pub reason: RunReason,
+    pub regrade_batch_id: Option<i64>,
+    pub status: RunStatus,
+    pub isolation: Option<String>,
+    pub job_name: Option<String>,
+    pub score: Option<f64>,
+    pub total: Option<f64>,
+    /// The parsed results as JSON text.
+    pub results: Option<String>,
+    pub problems: Vec<String>,
+    pub error: Option<String>,
+    pub log_tail: Option<String>,
+    /// For regrades: the difference from the previous graded run, as JSON text.
+    pub changes: Option<String>,
+    pub notify: bool,
+}
+
+/// A test run waiting for (or just given) admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueuedRun {
+    /// Validation of this assignment build.
+    Validation(i64),
+    /// This grading run.
+    Grading(i64),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +201,7 @@ mod tests {
         assert_eq!(AssignmentBuildStatus::Superseded.to_string(), "superseded");
         for s in [
             ValidationStatus::Pending,
+            ValidationStatus::Queued,
             ValidationStatus::Running,
             ValidationStatus::Passed,
             ValidationStatus::Failed,
@@ -125,11 +215,28 @@ mod tests {
     #[test]
     fn only_passed_and_skipped_validations_are_usable() {
         use ValidationStatus::*;
-        let usable: Vec<_> = [Pending, Running, Passed, Failed, Skipped, Invalid]
+        let usable: Vec<_> = [Pending, Queued, Running, Passed, Failed, Skipped, Invalid]
             .into_iter()
             .filter(|s| s.is_usable())
             .collect();
         assert_eq!(usable, [Passed, Skipped]);
+    }
+
+    #[test]
+    fn grading_enums_roundtrip_lowercase() {
+        for s in [
+            RunStatus::Queued,
+            RunStatus::Grading,
+            RunStatus::Graded,
+            RunStatus::Error,
+        ] {
+            assert_eq!(RunStatus::from_str(&s.to_string()).unwrap(), s);
+        }
+        for n in [Notify::Never, Notify::Changed, Notify::Always] {
+            assert_eq!(Notify::from_str(&n.to_string()).unwrap(), n);
+        }
+        assert_eq!(RunReason::Regrade.to_string(), "regrade");
+        assert_eq!(SubmissionSource::Workspace.to_string(), "workspace");
     }
 
     #[test]

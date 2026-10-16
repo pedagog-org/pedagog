@@ -1,5 +1,6 @@
 //! Postgres access (`feature = "db"`): generic pool/migration infra here, the
-//! per-domain queries in submodules (`builds`, `assignments`).
+//! per-domain queries in submodules (`builds`, `assignments`, `submissions`,
+//! `queue`).
 
 use sqlx::PgPool;
 use sqlx::migrate::MigrateError;
@@ -7,6 +8,8 @@ use sqlx::postgres::PgPoolOptions;
 
 pub mod assignments;
 pub mod builds;
+pub mod queue;
+pub mod submissions;
 
 /// Max pooled connections for a single service replica.
 const MAX_CONNECTIONS: u32 = 5;

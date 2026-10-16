@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO submissions\n           (assignment_id, student_id, build_id, source, tree_hash, object_key, size_bytes, receipt)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::jsonb)\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "dc0f6de68dd20a584727b8620e3c41b7a78e303da15402ead297e9be5e0a810d"
+}

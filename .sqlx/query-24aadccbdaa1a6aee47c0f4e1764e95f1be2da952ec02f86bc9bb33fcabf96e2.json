@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO run_queue (grading_run_id, priority) VALUES ($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "24aadccbdaa1a6aee47c0f4e1764e95f1be2da952ec02f86bc9bb33fcabf96e2"
+}
