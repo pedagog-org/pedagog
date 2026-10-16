@@ -18,7 +18,6 @@ use std::path::Path;
 use axum::extract::{Multipart, Path as UrlPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use pedagog_core::recipe::assignment::AssignmentYaml;
 use pedagog_core::recipe::platform::PlatformKind;
 use pedagog_core::recipe::submission::{Archives, Strip, SubmissionRules, Unmatched, is_junk};
 use pedagog_store::QueuedRun;
@@ -29,6 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, ArchiveError, Entry, Limits, TreeFile};
 use crate::intake::{Refused, internal, refused};
+use crate::settings::{RunSettings, settings_of};
 use crate::state::AppState;
 
 /// Size and count limits for one submission (jobs' ceiling; an assignment's
@@ -332,20 +332,20 @@ pub async fn submit(
             format!("student must be 1–{MAX_STUDENT_ID} printable characters"),
         ));
     }
-    let (build_id, assignment) = current_assignment(&state, &id).await?;
-    if assignment.environment.platform.kind != PlatformKind::Upload {
+    let (build_id, settings) = current_settings(&state, &id).await?;
+    if settings.platform != PlatformKind::Upload {
         return Err(refused(
             StatusCode::CONFLICT,
             format!(
                 "{id} is a {} assignment: its submissions come from the session workspace, which arrives with sessions",
-                assignment.environment.platform.kind
+                settings.platform
             ),
         ));
     }
     let parts = read_parts(multipart).await?;
 
     let limits = state.config.submission_limits;
-    let rules = assignment.submission;
+    let rules = settings.submission;
     let (normalized, packed) = tokio::task::spawn_blocking(move || {
         let normalized = normalize(parts, &rules, &limits)?;
         let packed =
@@ -518,8 +518,9 @@ async fn status_of(
     })
 }
 
-/// The assignment's current build and the `assignment.yml` it was built from.
-async fn current_assignment(state: &AppState, id: &str) -> Result<(i64, AssignmentYaml), Refused> {
+/// The assignment's current build and its run settings (from the build row;
+/// no archive is read).
+async fn current_settings(state: &AppState, id: &str) -> Result<(i64, RunSettings), Refused> {
     let build_id = builds_db::current_build_id(&state.pool, id)
         .await
         .map_err(|e| internal("reading the assignment", e))?
@@ -529,31 +530,14 @@ async fn current_assignment(state: &AppState, id: &str) -> Result<(i64, Assignme
                 format!("{id} has no usable build yet: upload it and wait for validation"),
             )
         })?;
-    let build = builds_db::get_build(&state.pool, id, build_id)
+    let build = builds_db::build_by_id(&state.pool, build_id)
         .await
         .map_err(|e| internal("reading the build", e))?
         .ok_or_else(|| internal("reading the build", format!("build {build_id} is missing")))?;
-    let upload = builds_db::get_upload(&state.pool, build.upload_id)
+    let settings = settings_of(state, &build)
         .await
-        .map_err(|e| internal("reading the upload", e))?
-        .ok_or_else(|| {
-            internal(
-                "reading the upload",
-                format!("upload {} is missing", build.upload_id),
-            )
-        })?;
-    let bytes = state
-        .objects
-        .get(&upload.object_key)
-        .await
-        .map_err(|e| internal("reading the assignment archive", e))?;
-    let limits = state.config.limits;
-    let yaml = archive::inspect(&bytes, &limits)
-        .map_err(|e| internal("reading the assignment archive", e))?
-        .assignment_yaml;
-    let assignment =
-        serde_yaml::from_str(&yaml).map_err(|e| internal("reading the assignment", e))?;
-    Ok((build_id, assignment))
+        .map_err(|e| internal("reading the build's settings", e))?;
+    Ok((build_id, settings))
 }
 
 async fn read_parts(mut multipart: Multipart) -> Result<Vec<Part>, Refused> {

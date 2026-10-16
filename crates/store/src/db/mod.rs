@@ -26,3 +26,14 @@ pub async fn connect(url: &str) -> sqlx::Result<PgPool> {
 pub async fn run_migrations(pool: &PgPool) -> Result<(), MigrateError> {
     sqlx::migrate!("./migrations").run(pool).await
 }
+
+/// Run settings for builds made in tests.
+#[cfg(test)]
+pub(crate) fn test_settings() -> crate::BuildSettings {
+    crate::BuildSettings {
+        platform: "upload".into(),
+        isolation: "process".into(),
+        egress: r#"{"mode":"deny"}"#.into(),
+        submission: "{}".into(),
+    }
+}

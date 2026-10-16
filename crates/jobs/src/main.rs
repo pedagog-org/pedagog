@@ -14,6 +14,7 @@ mod fetch;
 mod grading;
 mod http;
 mod intake;
+mod settings;
 mod state;
 mod submissions;
 
@@ -88,7 +89,6 @@ async fn serve() -> anyhow::Result<()> {
         objects,
         config: Arc::new(config),
         dispatch_lock: Arc::new(Mutex::new(())),
-        plans: Arc::default(),
     };
 
     // prod builds the pinned recipes at startup; dev waits for the endpoint

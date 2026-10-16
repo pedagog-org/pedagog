@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,\n                  validation_status, results::text AS \"results?\", validation_problems,\n                  error, finished_at IS NOT NULL AS \"finished!\"\n             FROM assignment_builds\n            WHERE finished_at IS NULL\n            ORDER BY started_at",
+  "query": "SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,\n                  validation_status, results::text AS \"results?\", validation_problems,\n                  error, finished_at IS NOT NULL AS \"finished!\", platform, isolation,\n                  egress::text AS \"egress?\", submission::text AS \"submission?\"\n             FROM assignment_builds WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -113,10 +113,46 @@
         "name": "finished!",
         "type_info": "Bool",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "platform",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "platform"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "isolation",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "isolation"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "egress?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 14,
+        "name": "submission?",
+        "type_info": "Text",
+        "origin": "Expression"
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Int8"
+      ]
     },
     "nullable": [
       false,
@@ -129,8 +165,12 @@
       null,
       false,
       true,
+      null,
+      true,
+      true,
+      null,
       null
     ]
   },
-  "hash": "d9e00909ebf778f6def5489dbe3eb102ac20af6f32c40dc4b28e72f4ba02beaf"
+  "hash": "42ac570c39df722a106d12307e898c1afea5aa3b69ede5caf4e9d56e257c8f5a"
 }

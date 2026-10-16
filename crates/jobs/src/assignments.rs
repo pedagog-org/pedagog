@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use pedagog_core::results::Results;
 use pedagog_k8s::build::{BuildRequest, Context, IfBuilt, JobKey, JobState, Waited};
-use pedagog_k8s::validate::{Egress, ValidationRequest};
+use pedagog_k8s::validate::ValidationRequest;
 use pedagog_store::db::assignments as db;
 use pedagog_store::db::queue;
 use pedagog_store::objects::results_key;
@@ -19,6 +19,7 @@ use sqlx::PgConnection;
 
 use crate::admission::Launch;
 use crate::intake;
+use crate::settings::{RunSettings, settings_of};
 use crate::state::AppState;
 
 /// How often an attempt checks whether admission released its validation.
@@ -37,9 +38,7 @@ pub struct Plan {
     pub object_key: String,
     pub containerfile: String,
     pub has_solution: bool,
-    /// `process` or `in-process`.
-    pub isolation: String,
-    pub egress: Egress,
+    pub settings: RunSettings,
     pub force: bool,
 }
 
@@ -86,10 +85,16 @@ pub async fn dispatch(state: &AppState, plan: Plan) -> anyhow::Result<Decision> 
         supersede(state, &running).await?;
     }
     let image_ref = plan.image_ref(&state.config.registry);
-    let build_id =
-        db::start_build(&state.pool, id, plan.upload_id, &image_hash, &image_ref).await?;
+    let build_id = db::start_build(
+        &state.pool,
+        id,
+        plan.upload_id,
+        &image_hash,
+        &image_ref,
+        &plan.settings.to_stored()?,
+    )
+    .await?;
     tracing::info!(assignment = %id, build = build_id, image = %image_ref, "build dispatched");
-    remember_plan(state, build_id, &plan);
     spawn(state, build_id, plan, Resume::Build);
     Ok(Decision::Dispatched { build_id })
 }
@@ -268,7 +273,9 @@ pub async fn launch_validation(
         .await
         .map_err(Launch::transient)?
         .ok_or_else(|| Launch::permanent(format!("build {build_id} is missing")))?;
-    let plan = plan_of(state, &build).await.map_err(Launch::permanent)?;
+    let settings = settings_of(state, &build)
+        .await
+        .map_err(Launch::permanent)?;
     let deadline = state.config.validation.deadline;
     let results_url = state
         .objects
@@ -285,8 +292,8 @@ pub async fn launch_validation(
         image: build.image_ref.clone(),
         jobs_image: state.config.jobs_image.clone(),
         results_url: results_url.to_string(),
-        isolation: plan.isolation.clone(),
-        egress: plan.egress.clone(),
+        isolation: settings.isolation,
+        egress: settings.egress,
         deadline,
         cpu: state.config.validation.cpu.clone(),
         memory: state.config.validation.memory.clone(),
@@ -315,29 +322,6 @@ pub async fn fail_validation(state: &AppState, build_id: i64, message: &str) {
     {
         tracing::error!(build = build_id, error = %e, "recording a failed validation failed");
     }
-}
-
-fn remember_plan(state: &AppState, build_id: i64, plan: &Plan) {
-    if let Ok(mut plans) = state.plans.lock() {
-        plans.insert(build_id, plan.clone());
-    }
-}
-
-/// The plan a build was made from: cached at dispatch, or re-derived from its
-/// stored archive (after a restart).
-pub async fn plan_of(state: &AppState, build: &AssignmentBuild) -> anyhow::Result<Plan> {
-    let cached = state
-        .plans
-        .lock()
-        .ok()
-        .and_then(|plans| plans.get(&build.id).cloned());
-    if let Some(plan) = cached {
-        return Ok(plan);
-    }
-    let upload = upload_of(state, build).await?;
-    let plan = plan_for(state, &upload, false).await?;
-    remember_plan(state, build.id, &plan);
-    Ok(plan)
 }
 
 /// What a validation run's results.yaml says about the assignment.
@@ -451,7 +435,7 @@ async fn upload_of(state: &AppState, build: &AssignmentBuild) -> anyhow::Result<
 }
 
 /// Re-derives an upload's plan from its stored archive.
-async fn plan_for(
+pub(crate) async fn plan_for(
     state: &AppState,
     upload: &AssignmentUpload,
     force: bool,
@@ -488,8 +472,12 @@ mod tests {
             object_key: "assignments/ll/t.tgz".into(),
             containerfile: containerfile.into(),
             has_solution: true,
-            isolation: "process".into(),
-            egress: Egress::Deny,
+            settings: crate::settings::RunSettings {
+                platform: pedagog_core::recipe::platform::PlatformKind::Upload,
+                isolation: "process".into(),
+                egress: pedagog_k8s::validate::Egress::Deny,
+                submission: Default::default(),
+            },
             force: false,
         }
     }

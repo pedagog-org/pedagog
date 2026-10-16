@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE assignment_builds\n            SET platform = $2, isolation = $3, egress = $4::text::jsonb, submission = $5::text::jsonb\n          WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b29db126f84119ca5718a8d29b9bafab3377cef3b3249804697e9ba4a6bdc404"
+}

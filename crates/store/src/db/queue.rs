@@ -128,7 +128,15 @@ mod tests {
     async fn built(pool: &PgPool, image: &str) -> sqlx::Result<i64> {
         upsert_assignment(pool, "other", "Other").await?;
         let up = record_upload(pool, "other", image, "k", 1).await?;
-        let build = start_build(pool, "other", up.id, image, "reg/o:1").await?;
+        let build = start_build(
+            pool,
+            "other",
+            up.id,
+            image,
+            "reg/o:1",
+            &crate::db::test_settings(),
+        )
+        .await?;
         finish_build(pool, build, true, None).await?;
         Ok(build)
     }

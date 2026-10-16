@@ -5,7 +5,7 @@
 use std::fmt;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize, Serializer};
 
 /// OS clutter dropped from every submission before the rules apply.
 pub const JUNK: [&str; 3] = ["__MACOSX", ".DS_Store", "Thumbs.db"];
@@ -36,7 +36,24 @@ pub fn is_junk(path: &str) -> bool {
     path.split('/').any(|seg| JUNK.contains(&seg))
 }
 
-#[derive(Deserialize)]
+/// Serialized back to the `submission:` form it was read from, so a parsed
+/// block can be stored and read again.
+impl Serialize for SubmissionRules {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        RawRules {
+            include: self.include.as_ref().map(|p| p.sources.clone()),
+            exclude: self.exclude.sources.clone(),
+            unmatched: self.unmatched,
+            archives: self.archives,
+            strip: self.strip,
+            required: self.required.clone(),
+            max_size: self.max_size,
+        }
+        .serialize(serializer)
+    }
+}
+
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RawRules {
     include: Option<Vec<String>>,
@@ -144,7 +161,7 @@ impl Patterns {
 }
 
 /// What happens to files the rules leave out.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Unmatched {
     /// Left out and listed on the receipt.
@@ -155,7 +172,7 @@ pub enum Unmatched {
 }
 
 /// What happens to a single uploaded archive.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Archives {
     /// Its contents become the submission.
@@ -175,6 +192,15 @@ pub enum Strip {
     Off,
 }
 
+impl Serialize for Strip {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Strip::Auto => serializer.serialize_str("auto"),
+            Strip::Off => serializer.serialize_bool(false),
+        }
+    }
+}
+
 impl TryFrom<serde_yaml::Value> for Strip {
     type Error = String;
 
@@ -189,9 +215,15 @@ impl TryFrom<serde_yaml::Value> for Strip {
 
 /// A relative file path inside a submission: no leading `/`, no empty, `.` or
 /// `..` segments, no backslashes.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "String")]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct RelPath(String);
+
+impl From<RelPath> for String {
+    fn from(p: RelPath) -> Self {
+        p.0
+    }
+}
 
 impl RelPath {
     pub fn as_str(&self) -> &str {
@@ -224,9 +256,15 @@ impl fmt::Display for RelPath {
 }
 
 /// A size written as bytes (`1048576`) or with a unit (`5MiB`, `500KB`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
-#[serde(try_from = "serde_yaml::Value")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(try_from = "serde_yaml::Value", into = "u64")]
 pub struct ByteSize(pub u64);
+
+impl From<ByteSize> for u64 {
+    fn from(b: ByteSize) -> Self {
+        b.0
+    }
+}
 
 impl TryFrom<serde_yaml::Value> for ByteSize {
     type Error = String;
@@ -358,6 +396,28 @@ mod tests {
         assert!(rules("sources: [upload]").is_err());
         assert!(rules("include: ['a[']").is_err());
         assert!(rules("unmatched: ignore").is_err());
+    }
+
+    #[test]
+    fn rules_round_trip_through_json() {
+        let yaml = "include: ['*.py']\nexclude: [__pycache__]\nunmatched: refuse\narchives: keep\nstrip: false\nrequired: [linked_list.py]\nmax_size: 5MiB\n";
+        let rules = rules(yaml).unwrap();
+        let json = serde_json::to_string(&rules).unwrap();
+        let back: SubmissionRules = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::to_string(&back).unwrap(), json);
+        assert!(back.accepts("a.py") && !back.accepts("__pycache__/a.py"));
+        assert_eq!(
+            (back.unmatched, back.archives, back.strip),
+            (Unmatched::Refuse, Archives::Keep, Strip::Off)
+        );
+        assert_eq!(back.max_size, Some(ByteSize(5 << 20)));
+        let defaults = serde_json::to_string(&SubmissionRules::default()).unwrap();
+        assert!(
+            serde_json::from_str::<SubmissionRules>(&defaults)
+                .unwrap()
+                .include
+                .is_none()
+        );
     }
 
     #[test]

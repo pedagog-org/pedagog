@@ -16,7 +16,7 @@ use pedagog_store::objects::grading_results_key;
 use sqlx::PgConnection;
 
 use crate::admission::Launch;
-use crate::assignments::plan_of;
+use crate::settings::settings_of;
 use crate::state::AppState;
 
 /// Extra validity for presigned URLs beyond the Job's deadline.
@@ -37,7 +37,9 @@ pub async fn launch(state: &AppState, conn: &mut PgConnection, run: i64) -> Resu
         .await
         .map_err(Launch::transient)?
         .ok_or_else(|| Launch::permanent(format!("build {} is missing", ctx.build_id)))?;
-    let plan = plan_of(state, &build).await.map_err(Launch::permanent)?;
+    let settings = settings_of(state, &build)
+        .await
+        .map_err(Launch::permanent)?;
     let key = JobKey::grading(&ctx.assignment_id, run);
     let limits = &state.config.grading;
     let submission_url = state
@@ -50,7 +52,7 @@ pub async fn launch(state: &AppState, conn: &mut PgConnection, run: i64) -> Resu
         .presign_put(&grading_results_key(run), limits.deadline + URL_MARGIN)
         .await
         .map_err(Launch::transient)?;
-    if !db::start_grading(&mut *conn, run, &key.name(), &plan.isolation)
+    if !db::start_grading(&mut *conn, run, &key.name(), &settings.isolation)
         .await
         .map_err(Launch::transient)?
     {
@@ -62,8 +64,8 @@ pub async fn launch(state: &AppState, conn: &mut PgConnection, run: i64) -> Resu
         submission_url: submission_url.to_string(),
         tree_hash: ctx.tree_hash,
         results_url: results_url.to_string(),
-        isolation: plan.isolation.clone(),
-        egress: plan.egress.clone(),
+        isolation: settings.isolation,
+        egress: settings.egress,
         deadline: limits.deadline,
         cpu: limits.cpu.clone(),
         memory: limits.memory.clone(),

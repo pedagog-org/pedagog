@@ -12,7 +12,8 @@ use sqlx::PgPool;
 
 use crate::db::submissions::REGRADE_PRIORITY;
 use crate::{
-    AssignmentBuild, AssignmentBuildStatus, AssignmentUpload, Notify, RunReason, ValidationStatus,
+    AssignmentBuild, AssignmentBuildStatus, AssignmentUpload, BuildSettings, Notify, RunReason,
+    ValidationStatus,
 };
 
 /// Create the assignment, or update its name.
@@ -81,7 +82,8 @@ pub async fn usable_build_for(
     Ok(row.map(|r| r.id))
 }
 
-/// Open a build attempt (`build_status = running`, validation pending).
+/// Open a build attempt (`build_status = running`, validation pending), with
+/// the settings its test runs need.
 ///
 /// Fails with a unique violation if the assignment already has an attempt in
 /// flight; supersede it first.
@@ -91,16 +93,23 @@ pub async fn start_build(
     upload_id: i64,
     image_hash: &str,
     image_ref: &str,
+    settings: &BuildSettings,
 ) -> sqlx::Result<i64> {
     let row = sqlx::query!(
-        "INSERT INTO assignment_builds (assignment_id, upload_id, image_hash, image_ref, build_status)
-         VALUES ($1, $2, $3, $4, $5)
+        "INSERT INTO assignment_builds
+           (assignment_id, upload_id, image_hash, image_ref, build_status,
+            platform, isolation, egress, submission)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::jsonb, $9::text::jsonb)
          RETURNING id",
         assignment_id,
         upload_id,
         image_hash,
         image_ref,
-        AssignmentBuildStatus::Running.to_string()
+        AssignmentBuildStatus::Running.to_string(),
+        settings.platform,
+        settings.isolation,
+        settings.egress,
+        settings.submission
     )
     .fetch_one(pool)
     .await?;
@@ -135,6 +144,27 @@ pub async fn finish_build(
     Ok(done.rows_affected() == 1)
 }
 
+/// Save the settings of a build from before they were recorded at dispatch.
+pub async fn set_build_settings(
+    pool: &PgPool,
+    build: i64,
+    settings: &BuildSettings,
+) -> sqlx::Result<()> {
+    sqlx::query!(
+        "UPDATE assignment_builds
+            SET platform = $2, isolation = $3, egress = $4::text::jsonb, submission = $5::text::jsonb
+          WHERE id = $1",
+        build,
+        settings.platform,
+        settings.isolation,
+        settings.egress,
+        settings.submission
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Mark validation as running (admission does this in its release
 /// transaction). Returns false if the attempt is no longer in flight.
 pub async fn start_validation<'e>(db: impl sqlx::PgExecutor<'e>, build: i64) -> sqlx::Result<bool> {
@@ -155,7 +185,8 @@ pub async fn build_by_id(pool: &PgPool, build: i64) -> sqlx::Result<Option<Assig
         BuildRow,
         r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
                   validation_status, results::text AS "results?", validation_problems,
-                  error, finished_at IS NOT NULL AS "finished!"
+                  error, finished_at IS NOT NULL AS "finished!", platform, isolation,
+                  egress::text AS "egress?", submission::text AS "submission?"
              FROM assignment_builds WHERE id = $1"#,
         build
     )
@@ -304,7 +335,8 @@ pub async fn in_flight_for(
         BuildRow,
         r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
                   validation_status, results::text AS "results?", validation_problems,
-                  error, finished_at IS NOT NULL AS "finished!"
+                  error, finished_at IS NOT NULL AS "finished!", platform, isolation,
+                  egress::text AS "egress?", submission::text AS "submission?"
              FROM assignment_builds
             WHERE assignment_id = $1 AND finished_at IS NULL"#,
         assignment_id
@@ -321,7 +353,8 @@ pub async fn in_flight(pool: &PgPool) -> sqlx::Result<Vec<AssignmentBuild>> {
         BuildRow,
         r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
                   validation_status, results::text AS "results?", validation_problems,
-                  error, finished_at IS NOT NULL AS "finished!"
+                  error, finished_at IS NOT NULL AS "finished!", platform, isolation,
+                  egress::text AS "egress?", submission::text AS "submission?"
              FROM assignment_builds
             WHERE finished_at IS NULL
             ORDER BY started_at"#
@@ -343,7 +376,8 @@ pub async fn get_build(
         BuildRow,
         r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
                   validation_status, results::text AS "results?", validation_problems,
-                  error, finished_at IS NOT NULL AS "finished!"
+                  error, finished_at IS NOT NULL AS "finished!", platform, isolation,
+                  egress::text AS "egress?", submission::text AS "submission?"
              FROM assignment_builds
             WHERE assignment_id = $1 AND id = $2"#,
         assignment_id,
@@ -406,6 +440,10 @@ struct BuildRow {
     validation_problems: Vec<String>,
     error: Option<String>,
     finished: bool,
+    platform: Option<String>,
+    isolation: Option<String>,
+    egress: Option<String>,
+    submission: Option<String>,
 }
 
 impl TryFrom<BuildRow> for AssignmentBuild {
@@ -426,6 +464,17 @@ impl TryFrom<BuildRow> for AssignmentBuild {
             validation_problems: row.validation_problems,
             error: row.error,
             finished: row.finished,
+            settings: match (row.platform, row.isolation, row.egress, row.submission) {
+                (Some(platform), Some(isolation), Some(egress), Some(submission)) => {
+                    Some(BuildSettings {
+                        platform,
+                        isolation,
+                        egress,
+                        submission,
+                    })
+                }
+                _ => None,
+            },
         })
     }
 }
@@ -456,7 +505,15 @@ mod tests {
         assert_eq!(get_upload(&pool, 999).await?, None);
         assert_ne!(a.id, b.id);
         assert_eq!(uploads_without_builds(&pool).await?.len(), 2);
-        start_build(&pool, "ll", a.id, "img-a", "reg/a:1").await?;
+        start_build(
+            &pool,
+            "ll",
+            a.id,
+            "img-a",
+            "reg/a:1",
+            &crate::db::test_settings(),
+        )
+        .await?;
         let orphans = uploads_without_builds(&pool).await?;
         assert_eq!(orphans, [b]);
         Ok(())
@@ -465,7 +522,15 @@ mod tests {
     #[sqlx::test]
     async fn passing_validation_becomes_current(pool: PgPool) -> sqlx::Result<()> {
         let up = uploaded(&pool, "ll", "tree-a").await?;
-        let build = start_build(&pool, "ll", up.id, "img-a", "reg/a:1").await?;
+        let build = start_build(
+            &pool,
+            "ll",
+            up.id,
+            "img-a",
+            "reg/a:1",
+            &crate::db::test_settings(),
+        )
+        .await?;
         let running = in_flight_for(&pool, "ll").await?.unwrap();
         assert_eq!(
             (
@@ -500,12 +565,28 @@ mod tests {
     #[sqlx::test]
     async fn failures_never_replace_the_current_build(pool: PgPool) -> sqlx::Result<()> {
         let up = uploaded(&pool, "ll", "tree-a").await?;
-        let good = start_build(&pool, "ll", up.id, "img-a", "reg/a:1").await?;
+        let good = start_build(
+            &pool,
+            "ll",
+            up.id,
+            "img-a",
+            "reg/a:1",
+            &crate::db::test_settings(),
+        )
+        .await?;
         finish_build(&pool, good, true, None).await?;
         finish_validation(&pool, good, ValidationStatus::Skipped, None, &[]).await?;
 
         // A failed validation keeps its results and problems but isn't usable.
-        let bad = start_build(&pool, "ll", up.id, "img-b", "reg/a:2").await?;
+        let bad = start_build(
+            &pool,
+            "ll",
+            up.id,
+            "img-b",
+            "reg/a:2",
+            &crate::db::test_settings(),
+        )
+        .await?;
         finish_build(&pool, bad, true, None).await?;
         let problems = vec!["append: expected the solution to pass, but it failed".to_string()];
         finish_validation(&pool, bad, ValidationStatus::Failed, Some("{}"), &problems).await?;
@@ -514,7 +595,15 @@ mod tests {
         assert_eq!(usable_build_for(&pool, "ll", "img-b").await?, None);
 
         // A failed image build ends the attempt without validating.
-        let broken = start_build(&pool, "ll", up.id, "img-c", "reg/a:3").await?;
+        let broken = start_build(
+            &pool,
+            "ll",
+            up.id,
+            "img-c",
+            "reg/a:3",
+            &crate::db::test_settings(),
+        )
+        .await?;
         finish_build(&pool, broken, false, Some("kaniko: exit 1")).await?;
         let row = get_build(&pool, "ll", broken).await?.unwrap();
         assert!(row.finished);
@@ -528,11 +617,26 @@ mod tests {
     #[sqlx::test]
     async fn one_attempt_in_flight_and_supersede(pool: PgPool) -> sqlx::Result<()> {
         let up = uploaded(&pool, "ll", "tree-a").await?;
-        let first = start_build(&pool, "ll", up.id, "img-a", "reg/a:1").await?;
+        let first = start_build(
+            &pool,
+            "ll",
+            up.id,
+            "img-a",
+            "reg/a:1",
+            &crate::db::test_settings(),
+        )
+        .await?;
         assert!(
-            start_build(&pool, "ll", up.id, "img-b", "reg/a:2")
-                .await
-                .is_err()
+            start_build(
+                &pool,
+                "ll",
+                up.id,
+                "img-b",
+                "reg/a:2",
+                &crate::db::test_settings()
+            )
+            .await
+            .is_err()
         );
 
         assert!(supersede(&pool, first).await?);
@@ -545,7 +649,15 @@ mod tests {
         assert_eq!(row.build_status, AssignmentBuildStatus::Superseded);
         assert_eq!(current_build_id(&pool, "ll").await?, None);
 
-        let second = start_build(&pool, "ll", up.id, "img-b", "reg/a:2").await?;
+        let second = start_build(
+            &pool,
+            "ll",
+            up.id,
+            "img-b",
+            "reg/a:2",
+            &crate::db::test_settings(),
+        )
+        .await?;
         assert_eq!(in_flight(&pool).await?[0].id, second);
         Ok(())
     }
@@ -565,7 +677,15 @@ mod tests {
         while claim_next(&mut conn).await?.is_some() {}
 
         let up = uploaded(&pool, "ll", "tree-b").await?;
-        let new = start_build(&pool, "ll", up.id, "img-b", "reg/a:2").await?;
+        let new = start_build(
+            &pool,
+            "ll",
+            up.id,
+            "img-b",
+            "reg/a:2",
+            &crate::db::test_settings(),
+        )
+        .await?;
         assert!(request_regrade(&pool, new, Notify::Changed).await?);
         finish_build(&pool, new, true, None).await?;
         enqueue_validation(&pool, new).await?;
@@ -607,12 +727,28 @@ mod tests {
         submit(&pool, "ll", "s1", old).await?;
         let up = uploaded(&pool, "ll", "tree-b").await?;
 
-        let failing = start_build(&pool, "ll", up.id, "img-b", "reg/a:2").await?;
+        let failing = start_build(
+            &pool,
+            "ll",
+            up.id,
+            "img-b",
+            "reg/a:2",
+            &crate::db::test_settings(),
+        )
+        .await?;
         request_regrade(&pool, failing, Notify::Always).await?;
         finish_build(&pool, failing, true, None).await?;
         finish_validation(&pool, failing, ValidationStatus::Failed, Some("{}"), &[]).await?;
 
-        let superseded = start_build(&pool, "ll", up.id, "img-c", "reg/a:3").await?;
+        let superseded = start_build(
+            &pool,
+            "ll",
+            up.id,
+            "img-c",
+            "reg/a:3",
+            &crate::db::test_settings(),
+        )
+        .await?;
         request_regrade(&pool, superseded, Notify::Always).await?;
         finish_build(&pool, superseded, true, None).await?;
         enqueue_validation(&pool, superseded).await?;
@@ -628,6 +764,44 @@ mod tests {
             .await?;
         assert_eq!(batches.n, 0);
         Ok(())
+    }
+
+    #[sqlx::test]
+    async fn builds_carry_their_settings(pool: PgPool) -> sqlx::Result<()> {
+        let up = uploaded(&pool, "ll", "tree-a").await?;
+        let build = start_build(
+            &pool,
+            "ll",
+            up.id,
+            "img-a",
+            "reg/a:1",
+            &crate::db::test_settings(),
+        )
+        .await?;
+        let row = build_by_id(&pool, build).await?.unwrap();
+        let settings = row.settings.unwrap();
+        assert_eq!(
+            (settings.platform.as_str(), settings.isolation.as_str()),
+            ("upload", "process")
+        );
+        assert_eq!(serde_json_like(&settings.egress), r#"{"mode":"deny"}"#);
+
+        // A build from before settings were saved has none until backfilled.
+        sqlx::query!(
+            "UPDATE assignment_builds SET platform = NULL WHERE id = $1",
+            build
+        )
+        .execute(&pool)
+        .await?;
+        assert_eq!(build_by_id(&pool, build).await?.unwrap().settings, None);
+        set_build_settings(&pool, build, &crate::db::test_settings()).await?;
+        assert!(build_by_id(&pool, build).await?.unwrap().settings.is_some());
+        Ok(())
+    }
+
+    /// JSONB normalizes spacing: compare without it.
+    fn serde_json_like(text: &str) -> String {
+        text.chars().filter(|c| !c.is_whitespace()).collect()
     }
 
     #[sqlx::test]

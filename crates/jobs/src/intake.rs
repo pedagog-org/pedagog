@@ -21,9 +21,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, ArchiveError, Limits};
 use crate::assignments::{self, Decision, Plan};
+use crate::settings::RunSettings;
 use crate::state::AppState;
-use pedagog_core::recipe::network::{EgressTarget, NetworkSpec};
-use pedagog_k8s::validate::Egress;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct Uploaded {
@@ -274,13 +273,6 @@ pub async fn build_status(
 
 impl Plan {
     pub fn from_checked(checked: Checked, upload_id: i64, object_key: String, force: bool) -> Self {
-        let egress = egress(&checked.assignment.environment.network);
-        let isolation = checked
-            .assignment
-            .testing
-            .as_ref()
-            .map(|t| t.isolation.to_string())
-            .unwrap_or_else(|| "process".to_owned());
         Plan {
             assignment_id: checked.assignment.id.to_string(),
             upload_id,
@@ -288,34 +280,8 @@ impl Plan {
             object_key,
             containerfile: checked.containerfile,
             has_solution: checked.has_solution,
-            isolation,
-            egress,
+            settings: RunSettings::of(&checked.assignment),
             force,
-        }
-    }
-}
-
-/// `environment.network` as validation-pod egress. Host rules need the egress
-/// proxy and aren't enforced yet, so they grant nothing (fail closed).
-fn egress(network: &NetworkSpec) -> Egress {
-    match network {
-        NetworkSpec::Allow => Egress::Internet,
-        NetworkSpec::Deny { allow } => {
-            let cidrs: Vec<(String, Vec<u16>)> = allow
-                .iter()
-                .filter_map(|rule| match &rule.target {
-                    EgressTarget::Cidr(net) => Some((
-                        net.to_string(),
-                        rule.ports.iter().map(|p| p.get()).collect(),
-                    )),
-                    EgressTarget::Host(_) => None,
-                })
-                .collect();
-            if cidrs.is_empty() {
-                Egress::Deny
-            } else {
-                Egress::Cidrs(cidrs)
-            }
         }
     }
 }
@@ -405,24 +371,6 @@ mod tests {
             status(&example(&[], Some(unknown_toolchain))),
             StatusCode::UNPROCESSABLE_ENTITY,
             "doesn't resolve against jobs' recipes"
-        );
-    }
-
-    #[test]
-    fn network_maps_to_validation_egress() {
-        let spec = |yaml: &str| serde_yaml::from_str::<NetworkSpec>(yaml).unwrap();
-        assert_eq!(egress(&NetworkSpec::default()), Egress::Deny);
-        assert_eq!(egress(&spec("mode: allow\n")), Egress::Internet);
-        assert_eq!(
-            egress(&spec("mode: deny\nallow:\n  - host: pypi.org\n")),
-            Egress::Deny,
-            "host rules grant nothing yet"
-        );
-        assert_eq!(
-            egress(&spec(
-                "mode: deny\nallow:\n  - cidr: 10.20.0.0/16\n    ports: [5432]\n  - host: a.com\n"
-            )),
-            Egress::Cidrs(vec![("10.20.0.0/16".into(), vec![5432])])
         );
     }
 
