@@ -143,6 +143,15 @@ pub struct UploadArgs {
     #[arg(long)]
     pub force: bool,
 
+    /// Once this upload's build validates and becomes current, regrade every
+    /// student's latest submission against it (earlier results are kept).
+    #[arg(long)]
+    pub regrade: bool,
+
+    /// With --regrade: when students are told about their new results.
+    #[arg(long, value_enum, default_value_t = Notify::Never, requires = "regrade")]
+    pub notify: Notify,
+
     /// Wait for the build and validation, print the outcome, and fail if either fails.
     #[arg(short = 'w', long)]
     pub wait: bool,
@@ -187,9 +196,35 @@ pub struct SubmitArgs {
     #[arg(short = 's', long, value_name = "ID")]
     pub student: String,
 
+    /// Wait for grading, print the score and the tests that didn't pass, and
+    /// fail if the run couldn't be graded.
+    #[arg(short = 'w', long)]
+    pub wait: bool,
+
     /// jobs service URL [env: PEDAGOG_JOBS_URL] [default: http://localhost:18081].
     #[arg(long, value_name = "URL")]
     pub jobs_url: Option<String>,
+}
+
+/// When a regrade tells students about their new results.
+#[derive(ValueEnum, Clone, Copy, PartialEq, Debug)]
+pub enum Notify {
+    /// Never (the default: the instructor may be testing).
+    Never,
+    /// Only if their results changed.
+    Changed,
+    /// Always.
+    Always,
+}
+
+impl Notify {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Notify::Never => "never",
+            Notify::Changed => "changed",
+            Notify::Always => "always",
+        }
+    }
 }
 
 #[derive(ValueEnum, Clone, PartialEq)]

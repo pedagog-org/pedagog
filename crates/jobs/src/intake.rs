@@ -3,6 +3,7 @@
 //! `GET /internal/assignments/{id}/builds/{build}`: an attempt's progress and outcome.
 
 use std::path::Path;
+use std::str::FromStr;
 
 use axum::body::Bytes;
 use axum::extract::{Path as UrlPath, Query, State};
@@ -13,6 +14,7 @@ use pedagog_core::recipe::render::containerfile::Containerfile;
 use pedagog_core::recipe::render::{AssignmentFiles, FromSource, Render, RenderOptions};
 use pedagog_core::recipe::resolve::resolve;
 use pedagog_core::recipe::store::RecipeStore;
+use pedagog_store::Notify;
 use pedagog_store::db::assignments as db;
 use pedagog_store::objects::archive_key;
 use serde::{Deserialize, Serialize};
@@ -39,6 +41,9 @@ pub struct UploadQuery {
     /// Rebuild even if this exact image was already built and validated.
     #[serde(default)]
     force: bool,
+    /// Regrade every student's latest submission once this build becomes
+    /// current, telling students `never`, when their results `changed`, or `always`.
+    regrade: Option<String>,
 }
 
 /// An upload that passed every check and is ready to store.
@@ -152,6 +157,18 @@ pub async fn upload(
     Query(query): Query<UploadQuery>,
     body: Bytes,
 ) -> Result<Response, Refused> {
+    let regrade = query
+        .regrade
+        .as_deref()
+        .map(|n| {
+            Notify::from_str(n).map_err(|_| {
+                refused(
+                    StatusCode::BAD_REQUEST,
+                    format!("regrade must be never, changed or always, not {n:?}"),
+                )
+            })
+        })
+        .transpose()?;
     let limits = state.config.limits;
     let recipes = state.config.recipes_dir.clone();
     let registry = state.config.registry.clone();
@@ -178,11 +195,23 @@ pub async fn upload(
     tracing::info!(assignment = %id, upload = upload.id, tree = %checked.tree_hash, "upload stored");
 
     let tree_hash = checked.tree_hash.clone();
-    let warnings = checked.warnings.clone();
+    let mut warnings = checked.warnings.clone();
     let plan = Plan::from_checked(checked, upload.id, key, query.force);
     let build = assignments::dispatch(&state, plan)
         .await
         .map_err(|e| internal("dispatching the build", e))?;
+    if let Some(notify) = regrade {
+        match build {
+            Decision::Dispatched { build_id } => {
+                db::request_regrade(&state.pool, build_id, notify)
+                    .await
+                    .map_err(|e| internal("requesting the regrade", e))?;
+            }
+            Decision::AlreadyBuilt { .. } => warnings.push(
+                "nothing to regrade: this exact image is already built (--force rebuilds it and regrades)".to_owned(),
+            ),
+        }
+    }
 
     let reply = Uploaded {
         assignment_id: id,

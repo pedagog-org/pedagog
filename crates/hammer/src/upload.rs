@@ -192,19 +192,32 @@ fn is_executable(_: &Path) -> bool {
     false
 }
 
-/// POSTs the archive; jobs' refusals come back as their message.
-pub fn send(jobs_url: &str, archive: Vec<u8>, force: bool) -> Result<Uploaded, String> {
-    let url = format!(
-        "{}/internal/assignments{}",
-        jobs_url.trim_end_matches('/'),
-        if force { "?force=true" } else { "" }
-    );
+/// POSTs the archive; jobs' refusals come back as their message. `regrade`
+/// is the notify setting (`never`, `changed`, `always`) of a requested regrade.
+pub fn send(
+    jobs_url: &str,
+    archive: Vec<u8>,
+    force: bool,
+    regrade: Option<&str>,
+) -> Result<Uploaded, String> {
+    let mut params = Vec::new();
+    if force {
+        params.push(("force", "true"));
+    }
+    if let Some(notify) = regrade {
+        params.push(("regrade", notify));
+    }
+    let url = reqwest::Url::parse_with_params(
+        &format!("{}/internal/assignments", jobs_url.trim_end_matches('/')),
+        &params,
+    )
+    .map_err(|e| format!("invalid jobs URL {jobs_url:?}: {e}"))?;
     let client = reqwest::blocking::Client::builder()
         .timeout(UPLOAD_TIMEOUT)
         .build()
         .map_err(|e| e.to_string())?;
     let reply = client
-        .post(&url)
+        .post(url.clone())
         .header(reqwest::header::CONTENT_TYPE, "application/gzip")
         .body(archive)
         .send()

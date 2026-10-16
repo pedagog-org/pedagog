@@ -192,7 +192,27 @@ fn run_submit(args: SubmitArgs) -> Result<()> {
     for line in submit::describe(&submitted) {
         println!("{line}");
     }
-    Ok(())
+    if !args.wait {
+        return Ok(());
+    }
+    let run = submit::wait(&url, submitted.submission_id, submitted.run_id, |r| match (
+        r.status.as_str(),
+        r.queue_position,
+    ) {
+        ("queued", Some(p)) => println!("queued (position {p})..."),
+        ("grading", _) => println!("grading..."),
+        _ => {}
+    })
+    .map_err(|e| miette!("{e}"))?;
+    let (graded, lines) = submit::outcome(&run);
+    if graded {
+        for line in lines {
+            println!("{line}");
+        }
+        Ok(())
+    } else {
+        Err(miette!("{}", lines.join("\n")))
+    }
 }
 
 fn jobs_url(flag: Option<String>) -> String {
@@ -226,7 +246,8 @@ fn run_upload(args: UploadArgs) -> Result<()> {
 
     let url = jobs_url(args.jobs_url);
     let archive = upload::pack(&dir).map_err(|e| miette!("{e}"))?;
-    let uploaded = upload::send(&url, archive, args.force).map_err(|e| miette!("{e}"))?;
+    let regrade = args.regrade.then(|| args.notify.as_str());
+    let uploaded = upload::send(&url, archive, args.force, regrade).map_err(|e| miette!("{e}"))?;
     println!(
         "uploaded {} (tree {}, {} bytes) as upload {}",
         uploaded.assignment_id,
@@ -241,6 +262,13 @@ fn run_upload(args: UploadArgs) -> Result<()> {
         ),
         _ => println!("build {} dispatched", uploaded.build.build_id),
     }
+    if let Some(notify) = regrade
+        && uploaded.build.status != "already_built"
+    {
+        println!(
+            "every student's latest submission will be regraded once it's current (notify: {notify})"
+        );
+    }
     for warning in &uploaded.warnings {
         emit_warning(warning, "", args.quiet);
     }
@@ -254,7 +282,8 @@ fn run_upload(args: UploadArgs) -> Result<()> {
         |s| {
             let stage = match (s.build_status.as_str(), s.validation_status.as_str()) {
                 ("running", _) => "building",
-                ("succeeded", "pending" | "running") => "validating",
+                ("succeeded", "pending" | "queued") => "queued for validation",
+                ("succeeded", "running") => "validating",
                 _ => return,
             };
             println!("{stage}...");
