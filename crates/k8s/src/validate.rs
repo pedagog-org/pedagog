@@ -191,12 +191,14 @@ fn policy(name: &str, pod: LabelSelector, egress: Vec<NetworkPolicyEgressRule>) 
     }
 }
 
-/// Never part of "the internet": private, link-local and unique-local ranges,
-/// which cover the cluster's own ranges, node IPs and the LAN.
-const PRIVATE_CIDRS: [&str; 6] = [
+/// Never part of "the internet": private, shared (CGNAT, Tailscale),
+/// link-local and unique-local ranges, which cover the cluster's own ranges,
+/// node IPs and the LAN.
+const PRIVATE_CIDRS: [&str; 7] = [
     "10.0.0.0/8",
     "172.16.0.0/12",
     "192.168.0.0/16",
+    "100.64.0.0/10",
     "169.254.0.0/16",
     "fc00::/7",
     "fe80::/10",
@@ -428,6 +430,7 @@ mod tests {
                 "10.0.0.0/8",
                 "172.16.0.0/12",
                 "192.168.0.0/16",
+                "100.64.0.0/10",
                 "169.254.0.0/16",
                 "203.0.113.0/24"
             ],
@@ -448,7 +451,7 @@ mod tests {
             .to
             .clone()
             .unwrap();
-        assert_eq!(peers[0].ip_block.clone().unwrap().except.unwrap().len(), 4);
+        assert_eq!(peers[0].ip_block.clone().unwrap().except.unwrap().len(), 5);
         assert_eq!(peers[1].ip_block.clone().unwrap().except.unwrap().len(), 2);
     }
 

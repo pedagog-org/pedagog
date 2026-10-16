@@ -347,7 +347,7 @@ suit a small cluster. Set these on the `pedagog-jobs` Deployment when they don't
 
 | Env var | Default | Notes |
 | --- | --- | --- |
-| `PEDAGOG_BLOCKED_CIDRS` | (none) | Extra ranges excluded from `mode: allow` egress; private and link-local ranges (which cover the cluster, node IPs and the LAN) are always excluded |
+| `PEDAGOG_BLOCKED_CIDRS` | (none) | Extra ranges excluded from `mode: allow` egress; private, shared (`100.64.0.0/10`) and link-local ranges (which cover the cluster, node IPs and the LAN) are always excluded |
 | `PEDAGOG_BUILD_CACHE` | `true` | Kaniko layer cache in `<registry>/pedagog/cache` |
 | `PEDAGOG_ASSIGNMENT_BUILD_DEADLINE` | `1800` | Seconds |
 | `PEDAGOG_VALIDATION_DEADLINE` | `600` | Seconds |

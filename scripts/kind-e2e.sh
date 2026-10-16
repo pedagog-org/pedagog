@@ -93,6 +93,23 @@ else
     fail "egress: $probe"
 fi
 
+echo "== 7. under mode: allow, the internet is reachable but node IPs are not"
+node_ip=$(k get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+k -n "$NS" delete pod e2e-netprobe-allow --ignore-not-found >/dev/null
+k -n "$NS" run e2e-netprobe-allow --restart=Never --image=busybox:1.36 \
+    --labels=pedagog.io/role=validate,pedagog.io/network=allow --command -- sh -c "
+    sleep 8  # network policies apply a few seconds after a pod starts
+    wget -q -T 5 -O /dev/null http://1.1.1.1/ >/dev/null 2>&1 && echo internet-open || echo internet-blocked
+    nc -z -w 3 $node_ip 10250 && echo node-open || echo node-blocked" >/dev/null
+k -n "$NS" wait --for=jsonpath='{.status.phase}'=Succeeded pod/e2e-netprobe-allow --timeout=90s >/dev/null
+probe=$(k -n "$NS" logs e2e-netprobe-allow)
+k -n "$NS" delete pod e2e-netprobe-allow --wait=false >/dev/null
+if echo "$probe" | grep -q internet-open && echo "$probe" | grep -q node-blocked; then
+    pass "egress: internet reachable, node $node_ip (kubelet) blocked"
+else
+    fail "egress (allow): $probe"
+fi
+
 echo
 if [ $failures -eq 0 ]; then echo "all checks passed"; else echo "$failures check(s) failed"; fi
 exit $failures
