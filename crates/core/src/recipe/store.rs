@@ -232,7 +232,25 @@ impl Loadable for OsDef {
 }
 
 impl Loadable for PlatformRecipe {
-    fn register(self, store: &mut RecipeStore, _path: &Path, _errors: &mut Vec<LoadError>) {
+    fn register(self, store: &mut RecipeStore, path: &Path, errors: &mut Vec<LoadError>) {
+        let has_runtime = !self.hooks.entrypoint.is_empty() || !self.hooks.ports.is_empty();
+        let problem = if self.platform.has_session() && self.hooks.entrypoint.is_empty() {
+            Some("needs an entrypoint (it runs a session)")
+        } else if !self.platform.has_session() && has_runtime {
+            Some("can't have an entrypoint or ports (it has no session)")
+        } else {
+            None
+        };
+        if let Some(problem) = problem {
+            errors.push(LoadError {
+                path: path.to_owned(),
+                message: format!(
+                    "platform {:?} {problem}: ignoring this file",
+                    self.platform.as_str()
+                ),
+            });
+            return;
+        }
         store
             .platforms
             .entry(self.platform.clone())
@@ -379,6 +397,36 @@ mod tests {
         ]);
         assert_eq!(errs.len(), 1, "{errs:?}");
         assert!(errs[0].contains("supports none"), "{errs:?}");
+    }
+
+    #[test]
+    fn platform_runtime_must_match_its_kind() {
+        let workspace = "platform: workspace\nos: os-a\nhooks:\n  build:\n    steps: []\n";
+        let upload =
+            "platform: upload\nos: os-a\nhooks:\n  build:\n    steps: []\n  ports: [\"8080\"]\n";
+        let errs = load_errors(&[
+            ("os/a.yaml", OS),
+            ("platforms/workspace.yaml", workspace),
+            ("platforms/upload.yaml", upload),
+        ]);
+        assert_eq!(errs.len(), 2, "{errs:?}");
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("\"workspace\" needs an entrypoint")),
+            "{errs:?}"
+        );
+        assert!(
+            errs.iter().any(|e| e.contains("\"upload\" can't have")),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
+    fn upload_platform_without_runtime_loads() {
+        let upload = "platform: upload\nos: os-a\nhooks:\n  build:\n    steps: []\n";
+        let store = fixture_store(&[("os/a.yaml", OS), ("platforms/upload.yaml", upload)]).unwrap();
+        let os = OsId::try_from("os-a".to_owned()).unwrap();
+        assert!(store.platform(PlatformKind::Upload, &os).is_some());
     }
 
     #[test]

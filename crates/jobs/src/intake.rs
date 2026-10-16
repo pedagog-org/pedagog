@@ -362,7 +362,7 @@ mod tests {
             StatusCode::UNPROCESSABLE_ENTITY,
             "assignment.yml doesn't parse"
         );
-        let unknown_toolchain = "id: x\nname: X\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: interactive\n  toolchains: [cobol:1]\n";
+        let unknown_toolchain = "id: x\nname: X\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: workspace\n  toolchains: [cobol:1]\n";
         assert_eq!(
             status(&example(&[], Some(unknown_toolchain))),
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn testing_without_tests_is_refused() {
-        let yml = "id: x\nname: X\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: interactive\n  toolchains: [python:3.12]\ntesting:\n  framework: pytest:1\nfiles:\n  tests: hidden\n";
+        let yml = "id: x\nname: X\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: workspace\n  toolchains: [python:3.12]\ntesting:\n  framework: pytest:1\nfiles:\n  tests: hidden\n";
         let err =
             check_upload(&example(&[], Some(yml)), &LIMITS, &recipes(), REGISTRY).unwrap_err();
         assert_eq!(err.status, StatusCode::UNPROCESSABLE_ENTITY);
@@ -399,7 +399,7 @@ mod tests {
 
     #[test]
     fn host_rules_and_missing_solution_are_warnings() {
-        let yml = "id: x\nname: X\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: interactive\n  network:\n    mode: deny\n    allow:\n      - host: pypi.org\n        ports: [443]\n";
+        let yml = "id: x\nname: X\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: workspace\n  network:\n    mode: deny\n    allow:\n      - host: pypi.org\n        ports: [443]\n";
         let bytes = tgz(&[Item::File("assignment.yml", yml.as_bytes(), 0o644)]);
         let checked = check_upload(&bytes, &LIMITS, &recipes(), REGISTRY).unwrap();
         assert_eq!(checked.warnings.len(), 2, "{:?}", checked.warnings);

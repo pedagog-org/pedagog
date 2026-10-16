@@ -133,7 +133,11 @@ fn runtime_node(
 ) -> Node {
     let mut node = Node::new(paint(HEADER, "RUNTIME"));
     node.push(field("user", &runtime.user));
-    node.push(field("entrypoint", &shell_words(&runtime.entrypoint)));
+    if runtime.entrypoint.is_empty() {
+        node.push(field("entrypoint", "none (no session)"));
+    } else {
+        node.push(field("entrypoint", &shell_words(&runtime.entrypoint)));
+    }
     if !ports.is_empty() {
         let ports: Vec<String> = ports.iter().map(ToString::to_string).collect();
         node.push(field("ports", &ports.join(", ")));
@@ -300,7 +304,7 @@ mod tests {
             plan: BuildPlan {
                 os: layer(LayerSource::Os(id("ubuntu-22")), &[Some("init")]),
                 platform: layer(
-                    LayerSource::Platform(PlatformKind::Interactive),
+                    LayerSource::Platform(PlatformKind::Workspace),
                     &[Some("Install code-server"), None],
                 ),
                 toolchain,
@@ -344,7 +348,7 @@ mod tests {
 Assignment: hw1
 ├── FROM localhost/pedagog/ubuntu:22
 ├── PLATFORM
-│   └── Platform: interactive
+│   └── Platform: workspace
 │       ├── Install code-server
 │       └── Step 2
 ├── TOOLCHAIN
