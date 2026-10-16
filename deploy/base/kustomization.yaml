@@ -4,6 +4,7 @@ resources:
   - namespaces/pedagog-system.yaml
   - namespaces/pedagog-data.yaml
   - namespaces/pedagog-builds.yaml
+  - namespaces/pedagog-grading.yaml
   - cert-manager/
   - traefik/rbac.yaml
   - traefik/deployment.yaml
@@ -26,3 +27,6 @@ resources:
   - jobs/resource-quota.yaml
   - jobs/deployment.yaml
   - jobs/service.yaml
+  - grading/rbac.yaml
+  - grading/limit-range.yaml
+  - grading/resource-quota.yaml

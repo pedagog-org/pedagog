@@ -210,15 +210,25 @@ enum Phase {
     Failed,
 }
 
-/// Groups all build logic over a [`KubeClient`] + environment.
+/// Groups all build logic over a [`KubeClient`] + environment. Image builds
+/// run in `client`'s namespace; test runs (validation, grading) in `runs`'.
 pub struct Builder {
     pub(crate) client: KubeClient,
+    pub(crate) runs: KubeClient,
     env: BuildEnv,
 }
 
 impl Builder {
-    pub fn new(client: KubeClient, env: BuildEnv) -> Self {
-        Self { client, env }
+    pub fn new(client: KubeClient, runs: KubeClient, env: BuildEnv) -> Self {
+        Self { client, runs, env }
+    }
+
+    /// The namespace a kind of Job runs in.
+    pub(crate) fn client_for(&self, kind: JobKind) -> &KubeClient {
+        match kind {
+            JobKind::AssignmentValidate => &self.runs,
+            JobKind::OsBuild | JobKind::AssignmentBuild => &self.client,
+        }
     }
 
     /// Idempotently ensure a Kaniko build Job exists for `key`.
@@ -231,17 +241,17 @@ impl Builder {
         self.put_configmap(&cm, key.kind, &req.containerfile)
             .await?;
 
-        let existing = self.client.jobs().get_opt(&name).await?;
+        let existing = self.client_for(key.kind).jobs().get_opt(&name).await?;
         match action(existing.as_ref().map(phase), req.if_built) {
             Action::Create => self.create(&name, key.kind, req, &cm).await,
             Action::Skip => Ok(Outcome::Skipped),
             Action::Replace => {
                 // fallback capture for a failed Job (primary capture is in wait/poll)
                 if existing.as_ref().map(phase) == Some(Phase::Failed) {
-                    let _ = self.capture_logs(&name).await;
+                    let _ = self.capture_logs(key.kind, &name).await;
                 }
-                self.delete(&name).await?;
-                self.await_gone(&name).await?;
+                self.delete(key.kind, &name).await?;
+                self.await_gone(key.kind, &name).await?;
                 self.create(&name, key.kind, req, &cm).await.map(|o| {
                     if o == Outcome::Created {
                         Outcome::Retried
@@ -255,7 +265,7 @@ impl Builder {
 
     /// Delete the Job for `key` (and its pods), e.g. when its build is superseded.
     pub async fn remove(&self, key: &JobKey) -> kube::Result<()> {
-        self.delete(&key.name()).await
+        self.delete(key.kind, &key.name()).await
     }
 
     /// Block until the Job for `key` reaches a terminal state. With a
@@ -266,10 +276,10 @@ impl Builder {
         loop {
             if give_up.is_some_and(|t| tokio::time::Instant::now() >= t) {
                 return Ok(Waited::Failed {
-                    logs: format!("timed out\n{}", self.capture_logs(&name).await),
+                    logs: format!("timed out\n{}", self.capture_logs(key.kind, &name).await),
                 });
             }
-            match self.client.jobs().get_opt(&name).await? {
+            match self.client_for(key.kind).jobs().get_opt(&name).await? {
                 None => {
                     return Ok(Waited::Failed {
                         logs: "job vanished before completion".into(),
@@ -279,7 +289,7 @@ impl Builder {
                     Phase::Succeeded => return Ok(Waited::Succeeded),
                     Phase::Failed => {
                         return Ok(Waited::Failed {
-                            logs: self.capture_logs(&name).await,
+                            logs: self.capture_logs(key.kind, &name).await,
                         });
                     }
                     Phase::Active => tokio::time::sleep(POLL_INTERVAL).await,
@@ -291,20 +301,25 @@ impl Builder {
     /// Single non-blocking read of the Job for `key` — used by reconcile.
     pub async fn poll(&self, key: &JobKey) -> kube::Result<JobState> {
         let name = key.name();
-        match self.client.jobs().get_opt(&name).await? {
+        match self.client_for(key.kind).jobs().get_opt(&name).await? {
             None => Ok(JobState::Gone),
             Some(job) => Ok(match phase(&job) {
                 Phase::Succeeded => JobState::Succeeded,
                 Phase::Failed => JobState::Failed {
-                    logs: self.capture_logs(&name).await,
+                    logs: self.capture_logs(key.kind, &name).await,
                 },
                 Phase::Active => JobState::Active,
             }),
         }
     }
 
-    pub(crate) async fn create_job(&self, job: &Job) -> kube::Result<Option<Job>> {
-        match self.client.jobs().create(&PostParams::default(), job).await {
+    pub(crate) async fn create_job(&self, kind: JobKind, job: &Job) -> kube::Result<Option<Job>> {
+        match self
+            .client_for(kind)
+            .jobs()
+            .create(&PostParams::default(), job)
+            .await
+        {
             Ok(created) => Ok(Some(created)),
             // race backstop: another pass created it first
             Err(kube::Error::Api(e)) if e.code == 409 => Ok(None),
@@ -333,22 +348,22 @@ impl Builder {
         }
     }
 
-    async fn delete(&self, name: &str) -> kube::Result<()> {
+    async fn delete(&self, kind: JobKind, name: &str) -> kube::Result<()> {
         let dp = DeleteParams {
             propagation_policy: Some(PropagationPolicy::Background),
             ..Default::default()
         };
-        match self.client.jobs().delete(name, &dp).await {
+        match self.client_for(kind).jobs().delete(name, &dp).await {
             Ok(_) => Ok(()),
             Err(kube::Error::Api(e)) if e.code == 404 => Ok(()),
             Err(e) => Err(e),
         }
     }
 
-    async fn await_gone(&self, name: &str) -> kube::Result<()> {
+    async fn await_gone(&self, kind: JobKind, name: &str) -> kube::Result<()> {
         let deadline = DELETE_WAIT.as_secs() / POLL_INTERVAL.as_secs();
         for _ in 0..deadline {
-            if self.client.jobs().get_opt(name).await?.is_none() {
+            if self.client_for(kind).jobs().get_opt(name).await?.is_none() {
                 return Ok(());
             }
             tokio::time::sleep(POLL_INTERVAL).await;
@@ -376,8 +391,8 @@ impl Builder {
     }
 
     /// Best-effort pod logs for a Job (empty string if unavailable).
-    async fn capture_logs(&self, job_name: &str) -> String {
-        let pods = self.client.pods();
+    async fn capture_logs(&self, kind: JobKind, job_name: &str) -> String {
+        let pods = self.client_for(kind).pods();
         let lp = ListParams::default().labels(&format!("batch.kubernetes.io/job-name={job_name}"));
         let Ok(list) = pods.list(&lp).await else {
             return String::new();

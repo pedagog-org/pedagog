@@ -13,6 +13,7 @@ use crate::submissions::SubmissionLimits;
 pub const DATABASE_URL: &str = "DATABASE_URL";
 pub const RECIPES_DIR: &str = "PEDAGOG_RECIPES_DIR";
 pub const BUILD_NAMESPACE: &str = "PEDAGOG_BUILD_NAMESPACE";
+pub const RUN_NAMESPACE: &str = "PEDAGOG_RUN_NAMESPACE";
 pub const REGISTRY: &str = "PEDAGOG_REGISTRY";
 pub const JOBS_IMAGE: &str = "PEDAGOG_JOBS_IMAGE";
 pub const RECIPES_HOSTPATH: &str = "PEDAGOG_RECIPES_HOSTPATH";
@@ -31,6 +32,7 @@ pub const MAX_SUBMISSION_FILES: &str = "PEDAGOG_MAX_SUBMISSION_FILES";
 
 const DEFAULT_RECIPES_DIR: &str = "/opt/pedagog/recipes";
 const DEFAULT_NAMESPACE: &str = "pedagog-builds";
+const DEFAULT_RUN_NAMESPACE: &str = "pedagog-grading";
 const DEFAULT_REGISTRY: &str = "registry-service.pedagog-data.svc:5000";
 const DEFAULT_LISTEN: &str = "0.0.0.0:8080";
 // Fallbacks until assignments can set their own.
@@ -53,6 +55,8 @@ pub struct Config {
     pub database_url: String,
     pub recipes_dir: PathBuf,
     pub namespace: String,
+    /// Where test runs (validation, grading) and their network policies live.
+    pub run_namespace: String,
     pub registry: String,
     /// prod: image whose baked recipes the Kaniko initContainer stages.
     pub jobs_image: String,
@@ -91,6 +95,7 @@ impl Config {
             database_url,
             recipes_dir: var_or(RECIPES_DIR, DEFAULT_RECIPES_DIR).into(),
             namespace: var_or(BUILD_NAMESPACE, DEFAULT_NAMESPACE),
+            run_namespace: var_or(RUN_NAMESPACE, DEFAULT_RUN_NAMESPACE),
             registry: var_or(REGISTRY, DEFAULT_REGISTRY),
             jobs_image: std::env::var(JOBS_IMAGE).unwrap_or_default(),
             recipes_hostpath: std::env::var(RECIPES_HOSTPATH).ok(),

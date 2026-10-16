@@ -8,6 +8,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 CTX=kind-pedagog
 NS=pedagog-builds
+RUNS=pedagog-grading
 EXAMPLE=recipes/examples/linked-list-python
 PORT=18081
 URL=http://localhost:$PORT
@@ -89,16 +90,42 @@ if [ "$final" = passed ]; then pass "build $second resumed and passed (restarted
 kill $PF 2>/dev/null
 forward
 
-echo "== 6. validation pods can reach Garage but not the internet (mode: deny)"
-k -n "$NS" delete pod e2e-netprobe --ignore-not-found >/dev/null
-k -n "$NS" run e2e-netprobe --restart=Never --image=busybox:1.36 \
-    --labels=pedagog.io/role=validate,pedagog.io/network=deny --command -- sh -c '
-    sleep 8  # network policies apply a few seconds after a pod starts
+# A test-run pod: jobs' await-egress initContainer (as on validation and
+# grading pods), then a shell running $3.
+probe_pod() {
+    local script
+    script=$(printf '%s\n' "$3" | sed 's/^/        /')
+    k -n "$RUNS" delete pod "$1" --ignore-not-found >/dev/null
+    k -n "$RUNS" apply -f - >/dev/null <<YAML
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $1
+  labels: { pedagog.io/role: validate, pedagog.io/network: $2 }
+spec:
+  restartPolicy: Never
+  initContainers:
+    - name: await-egress
+      image: localhost/pedagog/jobs:dev
+      imagePullPolicy: IfNotPresent
+      args: [await-egress, "kube-dns.kube-system.svc:9153", "30"]
+  containers:
+    - name: probe
+      image: busybox:1.36
+      command: [sh, -c]
+      args:
+        - |
+$script
+YAML
+    k -n "$RUNS" wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$1" --timeout=90s >/dev/null
+    k -n "$RUNS" logs "$1" -c probe
+    k -n "$RUNS" delete pod "$1" --wait=false >/dev/null
+}
+
+echo "== 6. test-run pods can reach Garage but not the internet (mode: deny)"
+probe=$(probe_pod e2e-netprobe deny '
     wget -q -T 5 -O /dev/null http://garage-service.pedagog-data.svc:3900/ 2>&1 | grep -q "403" && echo garage-ok
-    wget -q -T 5 -O /dev/null http://1.1.1.1/ >/dev/null 2>&1 && echo internet-open || echo internet-blocked' >/dev/null
-k -n "$NS" wait --for=jsonpath='{.status.phase}'=Succeeded pod/e2e-netprobe --timeout=90s >/dev/null
-probe=$(k -n "$NS" logs e2e-netprobe)
-k -n "$NS" delete pod e2e-netprobe --wait=false >/dev/null
+    wget -q -T 5 -O /dev/null http://1.1.1.1/ >/dev/null 2>&1 && echo internet-open || echo internet-blocked')
 if echo "$probe" | grep -q garage-ok && echo "$probe" | grep -q internet-blocked; then
     pass "egress: Garage reachable, internet blocked"
 else
@@ -107,15 +134,9 @@ fi
 
 echo "== 7. under mode: allow, the internet is reachable but node IPs are not"
 node_ip=$(k get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
-k -n "$NS" delete pod e2e-netprobe-allow --ignore-not-found >/dev/null
-k -n "$NS" run e2e-netprobe-allow --restart=Never --image=busybox:1.36 \
-    --labels=pedagog.io/role=validate,pedagog.io/network=allow --command -- sh -c "
-    sleep 8  # network policies apply a few seconds after a pod starts
+probe=$(probe_pod e2e-netprobe-allow allow "
     wget -q -T 5 -O /dev/null http://1.1.1.1/ >/dev/null 2>&1 && echo internet-open || echo internet-blocked
-    nc -z -w 3 $node_ip 10250 && echo node-open || echo node-blocked" >/dev/null
-k -n "$NS" wait --for=jsonpath='{.status.phase}'=Succeeded pod/e2e-netprobe-allow --timeout=90s >/dev/null
-probe=$(k -n "$NS" logs e2e-netprobe-allow)
-k -n "$NS" delete pod e2e-netprobe-allow --wait=false >/dev/null
+    nc -z -w 3 $node_ip 10250 && echo node-open || echo node-blocked")
 if echo "$probe" | grep -q internet-open && echo "$probe" | grep -q node-blocked; then
     pass "egress: internet reachable, node $node_ip (kubelet) blocked"
 else

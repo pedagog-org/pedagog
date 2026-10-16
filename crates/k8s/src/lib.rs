@@ -28,6 +28,14 @@ impl KubeClient {
         })
     }
 
+    /// The same connection, pinned to another namespace.
+    pub fn in_namespace(&self, namespace: impl Into<String>) -> Self {
+        Self {
+            client: self.client.clone(),
+            namespace: namespace.into(),
+        }
+    }
+
     pub fn namespace(&self) -> &str {
         &self.namespace
     }

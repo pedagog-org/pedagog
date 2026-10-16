@@ -1,0 +1,15 @@
+# Bounds test runs separately from image builds, so a burst of submissions
+# can't starve builds and a big build can't stall grading. With the default
+# 1 CPU / 1Gi per run this admits three at once; when it's full, pod creation
+# is refused and jobs' admission gate holds the queue until there's room.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: grading-quota
+  namespace: pedagog-grading
+spec:
+  hard:
+    requests.cpu: "3500m"
+    requests.memory: 4Gi
+    limits.cpu: "3500m"
+    limits.memory: 4Gi

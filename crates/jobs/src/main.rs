@@ -8,6 +8,7 @@ mod archive;
 mod assignments;
 mod config;
 mod dispatch;
+mod egress;
 mod fetch;
 mod http;
 mod intake;
@@ -45,6 +46,13 @@ fn main() -> anyhow::Result<()> {
         };
         return fetch::fetch_context(url, std::path::Path::new(dir), tree);
     }
+    if args.get(1).map(String::as_str) == Some("await-egress") {
+        let [_, _, target, seconds] = args.as_slice() else {
+            anyhow::bail!("usage: pedagog-jobs await-egress <host:port> <seconds>");
+        };
+        let seconds: u64 = seconds.parse()?;
+        return egress::await_egress(target, std::time::Duration::from_secs(seconds));
+    }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
@@ -59,13 +67,17 @@ async fn serve() -> anyhow::Result<()> {
         .init();
 
     let config = Config::from_env()?;
-    tracing::info!(env = ?config.env, namespace = %config.namespace, "starting pedagog-jobs");
+    tracing::info!(
+        env = ?config.env, namespace = %config.namespace, runs = %config.run_namespace,
+        "starting pedagog-jobs"
+    );
 
     let pool = db::connect(&config.database_url).await?;
     db::run_migrations(&pool).await?;
 
     let kube = KubeClient::connect(&config.namespace).await?;
-    let builder = Arc::new(Builder::new(kube, config.build_env()));
+    let runs = kube.in_namespace(&config.run_namespace);
+    let builder = Arc::new(Builder::new(kube, runs, config.build_env()));
     let objects = Objects::connect(&config.objects)?;
 
     let state = AppState {

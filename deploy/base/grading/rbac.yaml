@@ -1,0 +1,36 @@
+# jobs (in pedagog-builds) creates test-run Jobs here and confines them with
+# network policies. Test-run pods get no service account token.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pedagog-jobs
+  namespace: pedagog-grading
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  # find run pods (capacity, logs)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # label-selected base policies (server-side apply) and per-run CIDR policies
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "get", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pedagog-jobs
+  namespace: pedagog-grading
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pedagog-jobs
+subjects:
+  - kind: ServiceAccount
+    name: pedagog-jobs
+    namespace: pedagog-builds

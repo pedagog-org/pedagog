@@ -1,0 +1,10 @@
+# Test runs: validation (the reference solution) and grading (student code).
+# Pod Security "baseline": the pytest launcher starts as root and needs a few
+# capabilities to drop to grader/runner, which "restricted" forbids.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pedagog-grading
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: baseline
