@@ -14,6 +14,7 @@ mod fetch;
 mod grading;
 mod http;
 mod intake;
+mod runs;
 mod settings;
 mod state;
 mod submissions;
@@ -26,6 +27,7 @@ use pedagog_k8s::build::Builder;
 use pedagog_store::db;
 use pedagog_store::objects::Objects;
 use tokio::net::TcpListener;
+use tokio::task::JoinSet;
 use tracing_subscriber::EnvFilter;
 
 use crate::config::Config;
@@ -113,15 +115,22 @@ async fn serve() -> anyhow::Result<()> {
             tracing::error!(error = %e, "assignment reconcile failed");
         }
     });
-    if let Err(e) = grading::reconcile(&state).await {
-        tracing::error!(error = %e, "grading reconcile failed");
-    }
-    admission::spawn(&state);
+    // Background work owned here: if any of it stops (a panic), the service
+    // exits and Kubernetes restarts it, rather than running without it.
+    let mut background = JoinSet::new();
+    background.spawn(admission::run(state.clone()));
+    background.spawn(runs::watch(state.clone()));
+    background.spawn(runs::sweep(state.clone()));
 
     let addr = state.config.listen_addr.clone();
     let listener = TcpListener::bind(&addr).await?;
     tracing::info!(%addr, "listening");
-    axum::serve(listener, http::router(state)).await?;
+    tokio::select! {
+        served = axum::serve(listener, http::router(state)) => served?,
+        Some(stopped) = background.join_next() => {
+            anyhow::bail!("a background task stopped: {stopped:?}");
+        }
+    }
     Ok(())
 }
 

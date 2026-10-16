@@ -22,8 +22,6 @@ use crate::intake;
 use crate::settings::{RunSettings, settings_of};
 use crate::state::AppState;
 
-/// How often an attempt checks whether admission released its validation.
-const RELEASE_POLL: Duration = Duration::from_secs(2);
 /// Extra validity for presigned URLs beyond their Job's deadline.
 const URL_MARGIN: Duration = Duration::from_secs(600);
 /// How much of a failed validation pod's log is kept with its problems.
@@ -131,12 +129,9 @@ enum Resume {
     Build,
     /// The build Job exists; wait for it.
     AwaitBuild,
-    /// The image is built; queue validation.
+    /// The image is built; queue validation (admission starts it, the
+    /// test-run watcher judges it).
     Validate,
-    /// Validation is queued; wait for admission to start it.
-    AwaitRelease,
-    /// The validation Job exists (or ran); wait for it and judge its results.
-    AwaitValidation,
 }
 
 fn spawn(state: &AppState, build_id: i64, plan: Plan, from: Resume) {
@@ -149,7 +144,7 @@ fn spawn(state: &AppState, build_id: i64, plan: Plan, from: Resume) {
                 Resume::Build | Resume::AwaitBuild => {
                     let _ = db::finish_build(&state.pool, build_id, false, Some(&message)).await;
                 }
-                Resume::Validate | Resume::AwaitRelease | Resume::AwaitValidation => {
+                Resume::Validate => {
                     let problems = [format!("validation couldn't run: {message}")];
                     let _ = db::finish_validation(
                         &state.pool,
@@ -207,36 +202,42 @@ async fn run(state: &AppState, build_id: i64, plan: &Plan, from: Resume) -> anyh
             }
         }
     }
-    let validation_key = JobKey::validation(&plan.assignment_id, build_id);
-    if let Resume::Build | Resume::AwaitBuild | Resume::Validate = from {
-        if !plan.has_solution {
-            db::finish_validation(&state.pool, build_id, ValidationStatus::Skipped, None, &[])
-                .await?;
-            tracing::info!(
-                build = build_id,
-                "validation skipped (no reference solution)"
-            );
-            return Ok(());
-        }
-        if !queue::enqueue_validation(&state.pool, build_id).await? {
-            return Ok(()); // superseded meanwhile
-        }
-        tracing::info!(build = build_id, "validation queued");
-    }
-    if let Resume::Build | Resume::AwaitBuild | Resume::Validate | Resume::AwaitRelease = from
-        && !await_release(state, build_id).await?
-    {
+    if !plan.has_solution {
+        db::finish_validation(&state.pool, build_id, ValidationStatus::Skipped, None, &[]).await?;
+        tracing::info!(
+            build = build_id,
+            "validation skipped (no reference solution)"
+        );
         return Ok(());
     }
-    let waited = state
-        .builder
-        .wait(&validation_key, Some(state.config.validation.deadline))
-        .await?;
+    // Admission starts the validation; the test-run watcher judges it.
+    if queue::enqueue_validation(&state.pool, build_id).await? {
+        tracing::info!(build = build_id, "validation queued");
+    }
+    Ok(())
+}
+
+/// Judge a validation whose pod ended (or whose Job is gone) from the results
+/// it uploaded, and end the attempt. Does nothing if it isn't running (already
+/// settled, or superseded), so reports of the same pod can repeat.
+pub async fn settle_validation(
+    state: &AppState,
+    build_id: i64,
+    succeeded: bool,
+) -> anyhow::Result<()> {
+    let Some(build) = db::build_by_id(&state.pool, build_id).await? else {
+        return Ok(());
+    };
+    if build.finished || build.validation_status != ValidationStatus::Running {
+        return Ok(());
+    }
     let uploaded = state.objects.get(&results_key(build_id)).await.ok();
     let mut verdict = judge(uploaded.as_deref());
-    if uploaded.is_none()
-        && let Waited::Failed { logs } = waited
-    {
+    if uploaded.is_none() && !succeeded {
+        let logs = state
+            .builder
+            .logs(&JobKey::validation(&build.assignment_id, build_id))
+            .await;
         let tail = &logs[logs.len().saturating_sub(LOG_TAIL)..];
         verdict
             .problems
@@ -252,23 +253,6 @@ async fn run(state: &AppState, build_id: i64, plan: &Plan, from: Resume) -> anyh
     .await?;
     tracing::info!(build = build_id, status = %verdict.status, "validated");
     Ok(())
-}
-
-/// Wait until admission starts the validation; false if the attempt ended
-/// meanwhile (superseded).
-async fn await_release(state: &AppState, build_id: i64) -> anyhow::Result<bool> {
-    loop {
-        let Some(build) = db::build_by_id(&state.pool, build_id).await? else {
-            return Ok(false);
-        };
-        if build.finished {
-            return Ok(false);
-        }
-        if build.validation_status != ValidationStatus::Queued {
-            return Ok(true);
-        }
-        tokio::time::sleep(RELEASE_POLL).await;
-    }
 }
 
 /// Start a released validation: mark it running and create its Job, in the
@@ -298,6 +282,7 @@ pub async fn launch_validation(
         return Ok(()); // superseded meanwhile
     }
     let request = ValidationRequest {
+        build_id,
         image: build.image_ref.clone(),
         jobs_image: state.config.jobs_image.clone(),
         results_url: results_url.to_string(),
@@ -410,9 +395,9 @@ pub async fn reconcile(state: &AppState) -> anyhow::Result<()> {
             }
             AssignmentBuildStatus::Succeeded => match build.validation_status {
                 ValidationStatus::Pending => Resume::Validate,
-                ValidationStatus::Queued => Resume::AwaitRelease,
-                // Even if its Job is gone, the results may have been uploaded.
-                _ => Resume::AwaitValidation,
+                // Queued: admission starts it; running: the test-run watcher
+                // and sweep judge it (from its results, even if the Job is gone).
+                _ => continue,
             },
             _ => continue,
         };

@@ -9,10 +9,10 @@ use pedagog_core::changes::compare;
 use pedagog_core::results::{COLLECTION_SUFFIX, Results};
 use pedagog_k8s::build::JobKey;
 use pedagog_k8s::grade::GradingRequest;
-use pedagog_store::Notify;
 use pedagog_store::db::assignments as builds_db;
 use pedagog_store::db::submissions::{self as db, RunOutcome};
 use pedagog_store::objects::grading_results_key;
+use pedagog_store::{Notify, RunStatus};
 use sqlx::PgConnection;
 
 use crate::admission::Launch;
@@ -59,6 +59,7 @@ pub async fn launch(state: &AppState, conn: &mut PgConnection, run: i64) -> Resu
         return Ok(()); // already started
     }
     let request = GradingRequest {
+        run_id: run,
         image: ctx.image_ref,
         jobs_image: state.config.jobs_image.clone(),
         submission_url: submission_url.to_string(),
@@ -79,32 +80,27 @@ pub async fn launch(state: &AppState, conn: &mut PgConnection, run: i64) -> Resu
     Ok(())
 }
 
-/// Wait for a grading run's Job and record its outcome.
-pub fn watch(state: &AppState, run: i64) {
-    let state = state.clone();
-    tokio::spawn(async move {
-        if let Err(e) = await_outcome(&state, run).await {
-            tracing::error!(run, error = %e, "grading run failed to finish");
-            fail(&state, run, &format!("grading couldn't finish: {e}")).await;
-        }
-    });
-}
-
-async fn await_outcome(state: &AppState, run: i64) -> anyhow::Result<()> {
+/// Record the outcome of a grading run whose pod ended (or whose Job is
+/// gone), from the results it uploaded. Does nothing if the run isn't grading
+/// (already settled), so reports of the same pod can repeat.
+pub async fn settle(state: &AppState, run: i64, succeeded: bool) -> anyhow::Result<()> {
+    let Some(current) = db::get_run(&state.pool, run).await? else {
+        return Ok(());
+    };
+    if current.status != RunStatus::Grading {
+        return Ok(());
+    }
     let ctx = db::run_context(&state.pool, run)
         .await?
         .ok_or_else(|| anyhow::anyhow!("grading run {run} is missing"))?;
-    let key = JobKey::grading(&ctx.assignment_id, run);
-    let waited = state
-        .builder
-        .wait(&key, Some(state.config.grading.deadline))
-        .await?;
     let uploaded = state.objects.get(&grading_results_key(run)).await.ok();
     let mut verdict = judge(uploaded.as_deref());
     let mut log_tail = None;
-    if verdict.results.is_none()
-        && let pedagog_k8s::build::Waited::Failed { logs } = waited
-    {
+    if verdict.results.is_none() && !succeeded {
+        let logs = state
+            .builder
+            .logs(&JobKey::grading(&ctx.assignment_id, run))
+            .await;
         log_tail = Some(logs[logs.len().saturating_sub(LOG_TAIL)..].to_owned());
         verdict.error = Some("the run crashed or timed out".to_owned());
     }
@@ -214,16 +210,6 @@ pub fn judge(uploaded: Option<&[u8]>) -> Verdict {
 fn tail_lines(text: &str, n: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
     lines[lines.len().saturating_sub(n)..].join("\n")
-}
-
-/// After a restart: watch every run still grading. A run whose Job is gone is
-/// judged from whatever results it uploaded.
-pub async fn reconcile(state: &AppState) -> anyhow::Result<()> {
-    for run in db::grading_in_flight(&state.pool).await? {
-        tracing::info!(run = run.id, "resuming a grading run");
-        watch(state, run.id);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

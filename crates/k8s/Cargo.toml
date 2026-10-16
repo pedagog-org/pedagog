@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 pedagog-core = { path = "../core" }
+futures = { workspace = true }
 kube = { workspace = true }
 k8s-openapi = { workspace = true }
 tokio = { workspace = true }

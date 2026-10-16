@@ -13,6 +13,7 @@ pub use kube::Error as KubeError;
 
 pub mod build;
 pub mod grade;
+pub mod runs;
 pub mod validate;
 
 /// Whether the API refused a request outright (a 4xx other than a conflict or

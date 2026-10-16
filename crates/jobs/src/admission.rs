@@ -24,6 +24,9 @@ use crate::grading;
 use crate::state::AppState;
 
 const TICK: Duration = Duration::from_secs(2);
+/// After a release, how soon to check for room again: the released run's pod
+/// is usually created (and placed) by then.
+const RECHECK: Duration = Duration::from_millis(250);
 
 /// Why a released run didn't start.
 #[derive(Debug)]
@@ -54,19 +57,20 @@ impl Launch {
     }
 }
 
-pub fn spawn(state: &AppState) {
-    let state = state.clone();
-    tokio::spawn(async move {
-        loop {
-            match release_once(&state).await {
-                // Released one: check again at once, the next may fit too.
-                Ok(Some(_)) => continue,
-                Ok(None) => {}
-                Err(e) => tracing::warn!(error = %e, "admission tick failed"),
+/// The release loop; runs for the life of the service.
+pub async fn run(state: AppState) {
+    loop {
+        let pause = match release_once(&state).await {
+            // Released one: the next may fit as soon as its pod is placed.
+            Ok(Some(_)) => RECHECK,
+            Ok(None) => TICK,
+            Err(e) => {
+                tracing::warn!(error = %e, "admission tick failed");
+                TICK
             }
-            tokio::time::sleep(TICK).await;
-        }
-    });
+        };
+        tokio::time::sleep(pause).await;
+    }
 }
 
 /// Release at most one run. Returns it if it was released (started, or ended
@@ -97,9 +101,6 @@ async fn release_once(state: &AppState) -> anyhow::Result<Option<QueuedRun>> {
         Ok(()) => {
             tx.commit().await?;
             tracing::info!(?next, "released");
-            if let QueuedRun::Grading(run) = next {
-                grading::watch(state, run);
-            }
             Ok(Some(next))
         }
         Err(Launch::Transient(e)) => {

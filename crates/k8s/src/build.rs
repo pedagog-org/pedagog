@@ -402,6 +402,11 @@ impl Builder {
             .map(|_| ())
     }
 
+    /// Best-effort logs of `key`'s pod (empty if unavailable).
+    pub async fn logs(&self, key: &JobKey) -> String {
+        self.capture_logs(key.kind, &key.name()).await
+    }
+
     /// Best-effort pod logs for a Job (empty string if unavailable).
     async fn capture_logs(&self, kind: JobKind, job_name: &str) -> String {
         let pods = self.client_for(kind).pods();

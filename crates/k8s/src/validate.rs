@@ -32,6 +32,8 @@ pub const ROLE_LABEL: &str = "pedagog.io/role";
 pub const NETWORK_LABEL: &str = "pedagog.io/network";
 /// On every test-run Job (validation, grading), for the admission gate.
 pub const TEST_RUN_LABEL: &str = "pedagog.io/test-run";
+/// On every test-run pod: the build (validation) or grading run it belongs to.
+pub const RUN_ID_LABEL: &str = "pedagog.io/run-id";
 const CODE_VOLUME: &str = "code";
 const ROLE: &str = "validate";
 const APP_LABEL: &str = "pedagog-assignment-validate";
@@ -77,6 +79,8 @@ impl Egress {
 
 #[derive(Clone, Debug)]
 pub struct ValidationRequest {
+    /// The build being validated.
+    pub build_id: i64,
     pub image: String,
     /// Runs the `await-egress` initContainer.
     pub jobs_image: String,
@@ -96,6 +100,7 @@ pub(crate) fn validation_job(name: &str, req: &ValidationRequest) -> Job {
         &TestRun {
             app: APP_LABEL,
             role: ROLE,
+            run_id: req.build_id,
             container: "validate",
             image: &req.image,
             jobs_image: &req.jobs_image,
@@ -115,6 +120,7 @@ pub(crate) fn validation_job(name: &str, req: &ValidationRequest) -> Job {
 pub(crate) struct TestRun<'a> {
     pub app: &'a str,
     pub role: &'a str,
+    pub run_id: i64,
     pub container: &'a str,
     pub image: &'a str,
     pub jobs_image: &'a str,
@@ -137,6 +143,7 @@ pub(crate) fn test_run_job(name: &str, run: &TestRun<'_>) -> Job {
         ("app".to_string(), run.app.to_string()),
         (ROLE_LABEL.to_string(), run.role.to_string()),
         (NETWORK_LABEL.to_string(), run.egress.label().to_string()),
+        (RUN_ID_LABEL.to_string(), run.run_id.to_string()),
     ]);
     let limits = BTreeMap::from([
         ("cpu".to_string(), Quantity(run.cpu.to_string())),
@@ -510,6 +517,7 @@ mod tests {
 
     fn request(egress: Egress) -> ValidationRequest {
         ValidationRequest {
+            build_id: 7,
             image: "reg:5000/pedagog/assignments/ll:abc".into(),
             jobs_image: "localhost/pedagog/jobs:dev".into(),
             results_url: "http://garage/results?sig".into(),

@@ -18,6 +18,7 @@ pub const SUBMISSION_DIR: &str = "/pedagog/submission";
 
 #[derive(Clone, Debug)]
 pub struct GradingRequest {
+    pub run_id: i64,
     pub image: String,
     /// Runs `await-egress` and `fetch-context`.
     pub jobs_image: String,
@@ -40,6 +41,7 @@ pub(crate) fn grading_job(name: &str, req: &GradingRequest) -> Job {
         &TestRun {
             app: APP_LABEL,
             role: ROLE,
+            run_id: req.run_id,
             container: "grade",
             image: &req.image,
             jobs_image: &req.jobs_image,
@@ -146,6 +148,7 @@ mod tests {
 
     fn request(egress: Egress) -> GradingRequest {
         GradingRequest {
+            run_id: 9,
             image: "reg:5000/pedagog/assignments/ll:abc".into(),
             jobs_image: "localhost/pedagog/jobs:dev".into(),
             submission_url: "http://garage/submissions/ll/t.tgz?sig".into(),
@@ -167,6 +170,7 @@ mod tests {
         let labels = template.metadata.unwrap().labels.unwrap();
         assert_eq!(labels["pedagog.io/role"], "grade");
         assert_eq!(labels[NETWORK_LABEL], "deny");
+        assert_eq!(labels[crate::validate::RUN_ID_LABEL], "9");
         let pod = template.spec.unwrap();
         let init = pod.init_containers.unwrap();
         assert_eq!(
