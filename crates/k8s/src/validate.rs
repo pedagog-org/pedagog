@@ -191,10 +191,21 @@ fn policy(name: &str, pod: LabelSelector, egress: Vec<NetworkPolicyEgressRule>) 
     }
 }
 
+/// Never part of "the internet": private, link-local and unique-local ranges,
+/// which cover the cluster's own ranges, node IPs and the LAN.
+const PRIVATE_CIDRS: [&str; 6] = [
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "fc00::/7",
+    "fe80::/10",
+];
+
 /// The policies every validation pod gets, selected by label: `validate-base`
-/// (DNS and Garage, no ingress) and `validate-internet` (everything outside
-/// the cluster's own ranges) for pods labeled `allow`.
-pub fn base_policies(cluster_cidrs: &[String]) -> Vec<NetworkPolicy> {
+/// (DNS and Garage, no ingress) and `validate-internet` (public addresses
+/// only, minus `blocked_cidrs`) for pods labeled `allow`.
+pub fn base_policies(blocked_cidrs: &[String]) -> Vec<NetworkPolicy> {
     let dns = NetworkPolicyEgressRule {
         to: Some(vec![NetworkPolicyPeer {
             namespace_selector: Some(selector(&[("kubernetes.io/metadata.name", "kube-system")])),
@@ -218,14 +229,7 @@ pub fn base_policies(cluster_cidrs: &[String]) -> Vec<NetworkPolicy> {
                 .map(|all| NetworkPolicyPeer {
                     ip_block: Some(IPBlock {
                         cidr: (*all).to_string(),
-                        except: Some(
-                            cluster_cidrs
-                                .iter()
-                                .filter(|c| c.contains(':') == all.contains(':'))
-                                .cloned()
-                                .collect(),
-                        )
-                        .filter(|e: &Vec<String>| !e.is_empty()),
+                        except: Some(excluded(blocked_cidrs, all.contains(':'))),
                     }),
                     ..Default::default()
                 })
@@ -245,6 +249,18 @@ pub fn base_policies(cluster_cidrs: &[String]) -> Vec<NetworkPolicy> {
             vec![internet],
         ),
     ]
+}
+
+/// The private ranges plus `blocked`, for one address family.
+fn excluded(blocked: &[String], v6: bool) -> Vec<String> {
+    let mut out: Vec<String> = PRIVATE_CIDRS.iter().map(|c| (*c).to_owned()).collect();
+    for c in blocked {
+        if !out.contains(c) {
+            out.push(c.clone());
+        }
+    }
+    out.retain(|c| c.contains(':') == v6);
+    out
 }
 
 /// A run's CIDR allowances, owned by its Job so it's deleted with it.
@@ -306,8 +322,8 @@ impl Builder {
     }
 
     /// Install (or update) the label-selected policies every validation pod gets.
-    pub async fn apply_validation_policies(&self, cluster_cidrs: &[String]) -> kube::Result<()> {
-        for policy in base_policies(cluster_cidrs) {
+    pub async fn apply_validation_policies(&self, blocked_cidrs: &[String]) -> kube::Result<()> {
+        for policy in base_policies(blocked_cidrs) {
             self.apply_policy(&policy).await?;
         }
         Ok(())
@@ -392,13 +408,13 @@ mod tests {
     }
 
     #[test]
-    fn base_policies_allow_dns_and_garage_and_internet_minus_the_cluster() {
-        let cidrs = vec![
-            "10.42.0.0/16".to_string(),
-            "10.43.0.0/16".to_string(),
-            "fd00::/48".to_string(),
+    fn base_policies_allow_dns_and_garage_and_public_internet() {
+        let blocked = vec![
+            "203.0.113.0/24".to_string(),
+            "10.0.0.0/8".to_string(),
+            "2001:db8::/32".to_string(),
         ];
-        let [base, internet] = base_policies(&cidrs).try_into().unwrap();
+        let [base, internet] = base_policies(&blocked).try_into().unwrap();
         let base_spec = base.spec.unwrap();
         assert!(base_spec.ingress.is_none());
         assert_eq!(base_spec.egress.unwrap().len(), 2, "DNS and Garage");
@@ -406,9 +422,34 @@ mod tests {
         let peers = rules[0].to.clone().unwrap();
         let v4 = peers[0].ip_block.clone().unwrap();
         assert_eq!(v4.cidr, "0.0.0.0/0");
-        assert_eq!(v4.except.unwrap(), ["10.42.0.0/16", "10.43.0.0/16"]);
+        assert_eq!(
+            v4.except.unwrap(),
+            [
+                "10.0.0.0/8",
+                "172.16.0.0/12",
+                "192.168.0.0/16",
+                "169.254.0.0/16",
+                "203.0.113.0/24"
+            ],
+            "private ranges always, extra blocked ranges once"
+        );
         let v6 = peers[1].ip_block.clone().unwrap();
-        assert_eq!(v6.except.unwrap(), ["fd00::/48"]);
+        assert_eq!(v6.cidr, "::/0");
+        assert_eq!(
+            v6.except.unwrap(),
+            ["fc00::/7", "fe80::/10", "2001:db8::/32"]
+        );
+    }
+
+    #[test]
+    fn private_ranges_are_excluded_without_configuration() {
+        let [_, internet] = base_policies(&[]).try_into().unwrap();
+        let peers = internet.spec.unwrap().egress.unwrap()[0]
+            .to
+            .clone()
+            .unwrap();
+        assert_eq!(peers[0].ip_block.clone().unwrap().except.unwrap().len(), 4);
+        assert_eq!(peers[1].ip_block.clone().unwrap().except.unwrap().len(), 2);
     }
 
     #[test]

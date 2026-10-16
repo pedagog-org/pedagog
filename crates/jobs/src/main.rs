@@ -86,7 +86,7 @@ async fn serve() -> anyhow::Result<()> {
 
     if let Err(e) = state
         .builder
-        .apply_validation_policies(&state.config.cluster_cidrs)
+        .apply_validation_policies(&state.config.blocked_cidrs)
         .await
     {
         tracing::error!(error = %e, "installing the validation network policies failed");
