@@ -8,6 +8,7 @@ use pedagog_k8s::build::BuildEnv;
 use pedagog_store::objects::ObjectsConfig;
 
 use crate::archive::Limits;
+use crate::submissions::SubmissionLimits;
 
 pub const DATABASE_URL: &str = "DATABASE_URL";
 pub const RECIPES_DIR: &str = "PEDAGOG_RECIPES_DIR";
@@ -25,6 +26,8 @@ pub const VALIDATION_CPU: &str = "PEDAGOG_VALIDATION_CPU";
 pub const VALIDATION_MEMORY: &str = "PEDAGOG_VALIDATION_MEMORY";
 pub const BLOCKED_CIDRS: &str = "PEDAGOG_BLOCKED_CIDRS";
 pub const BUILD_CACHE: &str = "PEDAGOG_BUILD_CACHE";
+pub const MAX_SUBMISSION_BYTES: &str = "PEDAGOG_MAX_SUBMISSION_BYTES";
+pub const MAX_SUBMISSION_FILES: &str = "PEDAGOG_MAX_SUBMISSION_FILES";
 
 const DEFAULT_RECIPES_DIR: &str = "/opt/pedagog/recipes";
 const DEFAULT_NAMESPACE: &str = "pedagog-builds";
@@ -35,6 +38,10 @@ const DEFAULT_ASSIGNMENT_BUILD_DEADLINE: u64 = 1800;
 const DEFAULT_VALIDATION_DEADLINE: u64 = 600;
 const DEFAULT_VALIDATION_CPU: &str = "1";
 const DEFAULT_VALIDATION_MEMORY: &str = "1Gi";
+pub const DEFAULT_SUBMISSION_LIMITS: SubmissionLimits = SubmissionLimits {
+    max_bytes: 50 << 20,
+    max_files: 1_000,
+};
 pub const DEFAULT_LIMITS: Limits = Limits {
     max_compressed_bytes: 50 << 20,
     max_unpacked_bytes: 200 << 20,
@@ -64,6 +71,8 @@ pub struct Config {
     pub blocked_cidrs: Vec<String>,
     /// Kaniko's layer cache in the registry (`PEDAGOG_BUILD_CACHE=false` turns it off).
     pub build_cache: bool,
+    /// Ceiling for a submission; an assignment's `max_size` can only lower it.
+    pub submission_limits: SubmissionLimits,
 }
 
 pub struct ValidationConfig {
@@ -108,6 +117,10 @@ impl Config {
                 memory: var_or(VALIDATION_MEMORY, DEFAULT_VALIDATION_MEMORY),
             },
             build_cache: var_or(BUILD_CACHE, "true") != "false",
+            submission_limits: SubmissionLimits {
+                max_bytes: num_or(MAX_SUBMISSION_BYTES, DEFAULT_SUBMISSION_LIMITS.max_bytes)?,
+                max_files: num_or(MAX_SUBMISSION_FILES, DEFAULT_SUBMISSION_LIMITS.max_files)?,
+            },
             blocked_cidrs: var_or(BLOCKED_CIDRS, "")
                 .split(',')
                 .map(|c| c.trim().to_owned())

@@ -136,6 +136,34 @@ fn set_mode(_: &Path, _: u32) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A file in a tree built in memory (a normalized submission).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeFile {
+    pub executable: bool,
+    pub content: Vec<u8>,
+}
+
+/// Pack a tree as a deterministic `.tgz` (sorted, fixed modes, no times or
+/// owners) and return it with its tree hash, as `extract` would compute it.
+pub fn pack(files: &BTreeMap<String, TreeFile>) -> std::io::Result<(Vec<u8>, String)> {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+    let mut hashes = BTreeMap::new();
+    for (path, file) in files {
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(EntryType::Regular);
+        header.set_size(file.content.len() as u64);
+        header.set_mode(if file.executable { 0o755 } else { 0o644 });
+        header.set_mtime(0);
+        builder.append_data(&mut header, path, file.content.as_slice())?;
+        let digest = blake3::hash(&file.content).to_hex().to_string();
+        hashes.insert(path.clone(), (file.executable, digest));
+    }
+    let bytes = builder.into_inner()?.finish()?;
+    Ok((bytes, tree_hash(&hashes)))
+}
+
 fn tree_hash(files: &BTreeMap<String, (bool, String)>) -> String {
     let mut tree = blake3::Hasher::new();
     for (path, (executable, digest)) in files {
@@ -222,7 +250,7 @@ pub fn walk(
 }
 
 /// A safe relative path in `/`-separated form, or `None` if it's absolute or escapes.
-fn normalize(path: &Path) -> Option<String> {
+pub fn normalize(path: &Path) -> Option<String> {
     let mut parts = Vec::new();
     for component in path.components() {
         match component {
@@ -421,5 +449,31 @@ pub mod tests {
             tight(|l| l.max_files = 1),
             ArchiveError::TooLarge(_)
         ));
+    }
+
+    #[test]
+    fn pack_is_deterministic_and_extracts_to_the_same_tree() {
+        let mut tree = BTreeMap::new();
+        tree.insert(
+            "src/run.sh".to_owned(),
+            TreeFile {
+                executable: true,
+                content: b"echo hi".to_vec(),
+            },
+        );
+        tree.insert(
+            "a.py".to_owned(),
+            TreeFile {
+                executable: false,
+                content: b"print(1)".to_vec(),
+            },
+        );
+        let (bytes, hash) = pack(&tree).unwrap();
+        assert_eq!(pack(&tree).unwrap(), (bytes.clone(), hash.clone()));
+        let dest = std::env::temp_dir().join(format!("pedagog-pack-{}", std::process::id()));
+        std::fs::create_dir_all(&dest).unwrap();
+        assert_eq!(extract(&bytes, &LIMITS, &dest).unwrap(), hash);
+        assert_eq!(std::fs::read(dest.join("src/run.sh")).unwrap(), b"echo hi");
+        let _ = std::fs::remove_dir_all(&dest);
     }
 }

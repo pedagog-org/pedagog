@@ -66,7 +66,7 @@ impl IntoResponse for Refused {
     }
 }
 
-fn refused(status: StatusCode, error: impl Into<String>) -> Refused {
+pub(crate) fn refused(status: StatusCode, error: impl Into<String>) -> Refused {
     Refused {
         status,
         error: error.into(),
@@ -282,7 +282,7 @@ fn egress(network: &NetworkSpec) -> Egress {
     }
 }
 
-fn internal(what: &str, e: impl std::fmt::Display) -> Refused {
+pub(crate) fn internal(what: &str, e: impl std::fmt::Display) -> Refused {
     tracing::error!(error = %e, "{what} failed");
     refused(
         StatusCode::INTERNAL_SERVER_ERROR,

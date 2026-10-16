@@ -111,6 +111,11 @@ pub fn archive_key(assignment_id: &str, sha256: &str) -> String {
     format!("assignments/{assignment_id}/{sha256}.tgz")
 }
 
+/// Object key for a submission's normalized tree, by content hash.
+pub fn submission_key(assignment_id: &str, tree_hash: &str) -> String {
+    format!("submissions/{assignment_id}/{tree_hash}.tgz")
+}
+
 /// Object key a run uploads its `results.yaml` to.
 pub fn results_key(run_id: i64) -> String {
     format!("results/{run_id}/results.yaml")
