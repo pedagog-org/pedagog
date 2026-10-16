@@ -181,7 +181,10 @@ fn render_from(to: &mut String, from: &str) {
 fn render_runtime(to: &mut String, rt: &Runtime) {
     let _ = writeln!(to);
     let _ = writeln!(to, "USER {}", rt.user);
-    let _ = writeln!(to, "ENTRYPOINT {}", exec_array(&rt.entrypoint));
+    // Platforms without a session have no entrypoint; grading names its command.
+    if !rt.entrypoint.is_empty() {
+        let _ = writeln!(to, "ENTRYPOINT {}", exec_array(&rt.entrypoint));
+    }
 }
 
 fn exec_array(words: &[String]) -> String {
@@ -232,7 +235,7 @@ mod tests {
         BuildPlan {
             os: os_layer(),
             platform: Layer {
-                source: LayerSource::Platform(PlatformKind::Interactive),
+                source: LayerSource::Platform(PlatformKind::Workspace),
                 steps: vec![step("code-server", &["install cs"])],
             },
             toolchain: vec![],
@@ -315,6 +318,14 @@ mod tests {
     }
 
     #[test]
+    fn no_entrypoint_without_a_session() {
+        let spec = full_spec(&[], vec![], NetworkSpec::Allow);
+        let out = Containerfile::render(&spec, &opts(None, FromSource::Standalone)).to_string();
+        assert!(out.contains("USER student"), "{out}");
+        assert!(!out.contains("ENTRYPOINT"), "{out}");
+    }
+
+    #[test]
     fn full_prebuilt_skips_os_layer() {
         let spec = full_spec(&["code-server"], vec![], NetworkSpec::Allow);
         let out = Containerfile::render(&spec, &opts(Some("localhost"), FromSource::PrebuiltBase))
@@ -370,7 +381,7 @@ mod tests {
         let spec = full_spec(&["code-server"], vec![], NetworkSpec::Allow);
         let out = Containerfile::render(&spec, &opts(None, FromSource::PrebuiltBase)).to_string();
         assert!(out.contains("ENV PEDAGOG_TYPE=platform"), "{out}");
-        assert!(out.contains("ENV PEDAGOG_ID=interactive"), "{out}");
+        assert!(out.contains("ENV PEDAGOG_ID=workspace"), "{out}");
     }
 
     #[test]
@@ -479,7 +490,7 @@ mod tests {
 
     fn assignment(extra: &str) -> crate::recipe::assignment::AssignmentYaml {
         serde_yaml::from_str(&format!(
-            "id: t\nname: T\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: interactive\n{extra}"
+            "id: t\nname: T\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: workspace\n{extra}"
         ))
         .unwrap()
     }

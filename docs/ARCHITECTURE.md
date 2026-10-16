@@ -4,10 +4,10 @@
 
 Pedagog is a multi-tenant programming assignment and assessment platform for universities. Instructors define development environments, test suites, and submission policies in a YAML file. Students interact with assignments through a Secure Exam Browser (SEB), either via an ephemeral code-server session or by uploading files for automated testing.
 
-Two assignment platforms:
+Two assignment platforms (`environment.platform.kind`); the platform decides where submissions come from, one source per assignment:
 
-- **Interactive** — student gets an ephemeral container with code-server, accessed through SEB. Long-lived for the duration of the exam window.
-- **Submission-only** — student uploads files or an archive. Platform unpacks, builds, and runs the test suite. No interactive session.
+- **`workspace`** — student gets an ephemeral container with code-server, accessed through SEB. Long-lived for the duration of the exam window. Submissions are snapshots of the session's `submission_dir` (a platform param, default `.` under `/home/student/workspace`).
+- **`upload`** — student uploads files or an archive. Platform unpacks and runs the test suite. No session: the platform recipe has no entrypoint or ports.
 
 ---
 
@@ -31,7 +31,7 @@ Instructors may only manage courses they own. Admins may manage any course.
 - Each course gets its own Kubernetes namespace for isolation.
 - Students are enrolled via roster import (CSV). Self-registration is not supported.
 - Resource limits are set at the platform level as defaults; admins may raise them per course.
-- Separate limits apply to interactive containers (code-server) and queued submission runners.
+- Separate limits apply to workspace sessions (code-server) and queued grading runs.
 
 ---
 
@@ -48,7 +48,7 @@ Instructors submit an assignment as a TGZ archive containing:
 
 ```yaml
 name: pointers-and-memory
-platform: interactive      # interactive | submission
+platform: workspace        # workspace | upload
 
 environment:
   toolchains:               # every version pinned; see "Toolchains and Addons"
@@ -56,7 +56,7 @@ environment:
     - id: python                 # object form
       version: "3.12"
       addons: [pytest:8]
-  editor:                  # interactive mode only
+  editor:                  # workspace platform only
     terminal: true         # default true; false sets student shell to /usr/sbin/nologin
     extensions:
       install: [cpptools]        # pre-installed at image build time; always in allowlist
@@ -132,7 +132,7 @@ assignment:
     open: "2026-09-01T14:00:00-04:00"
     due: "2026-09-01T16:00:00-04:00"
     late_due: "2026-09-02T16:00:00-04:00"   # absent = late submissions not accepted
-  duration: 120m           # interactive mode: max session length
+  duration: 120m           # workspace platform: max session length
   attempts: 1
   results:
     visibility: score-only  # full | score-only | hidden
@@ -167,8 +167,8 @@ The `assignment:` block is treated as a **suggestion**. When an instructor publi
 
 ### Assignment Updates
 
-- **Interactive assignments:** changes are allowed freely until the first student session starts. After that, the assignment is locked.
-- **Submission-only assignments:** changes at any time prompt "Rebuild and regrade all existing submissions?"
+- **Workspace assignments:** changes are allowed freely until the first student session starts. After that, the assignment is locked.
+- **Upload assignments:** changes at any time prompt "Rebuild and regrade all existing submissions?"
 
 ### Result Visibility
 
@@ -185,7 +185,7 @@ Configured in `assignment.results.visibility`:
 Building happens in two stages:
 
 1. **OS base image** — platform-managed. Contains the OS and any platform-level configuration. Built in-cluster by the `jobs` service (Kaniko) from the recipes pinned into the installation and pushed to the cluster registry (e.g. `pedagog/ubuntu:22`). Rebuilt when the pinned recipes change (detected at `jobs` startup / via its rebuild endpoint). Locally, `hammer plan --os <os-id>` (or `just build-base`) renders the same Containerfile for podman.
-2. **Instructor image** — built when the instructor uploads the assignment archive. Starts FROM the OS base image; installs toolchains, addons, platform components (code-server for interactive), and locked extensions declared in `assignment.yml`. The solution is run against the test suite at this step to validate the assignment. Build-time network policy is applied during this step only.
+2. **Instructor image** — built when the instructor uploads the assignment archive. Starts FROM the OS base image; installs toolchains, addons, platform components (code-server for `workspace`), and locked extensions declared in `assignment.yml`. The solution is run against the test suite at this step to validate the assignment. Build-time network policy is applied during this step only.
 
 All builds run in-cluster via **Kaniko** — no Docker daemon required. `core` renders the Containerfile from resolved recipes; the `k8s` crate submits it as a Kubernetes Job; `jobs` builds both OS base images and assignment images. Recipes are **pinned to the installation and baked** into the `jobs` image (with `hammer vend` ingredients) — not git-synced in-cluster.
 
@@ -230,15 +230,14 @@ $HAMMER_RECIPES/
       ...
   platforms/
     ubuntu-22/
-      interactive.yaml
-      submission.yaml
-      multi-submission.yaml
+      workspace.yaml
+      upload.yaml
   lib/
     vend            ← shell function installed by OS init hook
   ingredients/
     .keep
     platform/
-      interactive/
+      workspace/
         code-server.deb   ← gitignored; populated by `hammer vend`
   examples/
     pointers.yaml
@@ -334,7 +333,7 @@ locally to speed up or enable offline builds. Each entry is either a GitHub rele
 or a plain URL:
 
 ```yaml
-# platforms/ubuntu-22/interactive.yaml
+# platforms/ubuntu-22/workspace.yaml
 ingredients:
   - output: code-server.deb
     github:
@@ -362,7 +361,7 @@ fi
 `ENV` instructions before each recipe section's steps:
 
 - `PEDAGOG_TYPE` — `os`, `platform`, or `toolchain`
-- `PEDAGOG_ID` — e.g. `ubuntu-22`, `interactive`, `gcc/12`
+- `PEDAGOG_ID` — e.g. `ubuntu-22`, `workspace`, `gcc/12`
 
 The function lives at `$HAMMER_RECIPES/lib/vend` and is part of the OS init contract
 (see below). Every OS recipe's init hook must install it.
@@ -405,7 +404,7 @@ Built images are stored in the cluster's internal registry using immutable versi
 
 ## Container Lifecycle
 
-### Interactive Mode
+### Workspace Sessions
 
 1. Student clicks start in the web UI (within the configured window). Provisioning begins immediately; the student is redirected once the container is ready.
 2. The platform mounts the student's persistent NFS volume, injects a session auth token, and starts code-server and the daemon inside the container.
@@ -415,7 +414,7 @@ Built images are stored in the cluster's internal registry using immutable versi
 6. On disconnect, the container remains running. The student reconnects to the same container.
 7. On submission or time expiry, the daemon signals the platform via the API, the workspace is snapshotted, the test suite runs, and the container is torn down. The platform is responsible for NFS teardown.
 
-### Interactive Session State Machine
+### Workspace Session State Machine
 
 ```text
 Pending → Provisioning → Ready → Active ↔ Disconnected
@@ -483,7 +482,7 @@ Student workspaces are stored on shared NFS storage. Each student gets a per-ass
 
 ## Submission & Testing
 
-On submission (interactive or submission-only):
+On submission (from a `workspace` session or an `upload`):
 
 1. Workspace or uploaded files are collected per the `submission:` config.
 2. The test suite runs inside the container against the submitted state. All test output is written to the platform-defined `/pedagog/results/` directory.
@@ -680,14 +679,14 @@ The frontend and API are independently deployable. The API is callable by any HT
 
 - Exam list and status
 - Exam start (triggers container provisioning and SEB config download)
-- File upload UI (submission-only mode)
+- File upload UI (`upload` platform)
 - Result view (subject to visibility policy)
 
 **Admin:**
 
 - Platform configuration
 - Course creation and instructor assignment
-- Per-course resource limit management (separate limits for interactive and submission-only containers)
+- Per-course resource limit management (separate limits for workspace sessions and grading runs)
 - User and roster management
 
 ---

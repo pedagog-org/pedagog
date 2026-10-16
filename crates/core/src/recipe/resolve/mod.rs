@@ -476,7 +476,7 @@ mod tests {
 
     const FIX_OS: &str = "id: os-a\nupstream: base:1\nimage: pedagog/a:1\nhooks:\n  build:\n    init: []\n  pkg:\n    install:\n      args: [packages]\n      steps: []\n";
     const FIX_OS_B: &str = "id: os-b\nupstream: base:2\nimage: pedagog/b:1\nhooks:\n  build:\n    init: []\n  pkg:\n    install:\n      args: [packages]\n      steps: []\n";
-    const FIX_PLATFORM: &str = "platform: interactive\nos: [os-a, os-b]\nhooks:\n  build:\n    steps: []\n  entrypoint: [run]\n";
+    const FIX_PLATFORM: &str = "platform: workspace\nos: [os-a, os-b]\nhooks:\n  build:\n    steps: []\n  entrypoint: [run]\n";
 
     fn fix_tc(id: &str, version: &str, os: &str, extra: &str) -> (String, String) {
         (
@@ -508,7 +508,7 @@ mod tests {
         let mut files: Vec<(&str, &str)> = vec![
             ("os/a.yaml", FIX_OS),
             ("os/b.yaml", FIX_OS_B),
-            ("platforms/interactive.yaml", FIX_PLATFORM),
+            ("platforms/workspace.yaml", FIX_PLATFORM),
         ];
         files.extend(tcs.iter().map(|(p, s)| (p.as_str(), s.as_str())));
         crate::recipe::store::fixture_store(&files).unwrap()
@@ -520,7 +520,7 @@ mod tests {
         toolchains: &str,
     ) -> Result<Vec<Layer>, ResolveError> {
         let yaml = format!(
-            "id: t\nname: T\nenvironment:\n  os: {os}\n  platform:\n    kind: interactive\n  toolchains: {toolchains}\n"
+            "id: t\nname: T\nenvironment:\n  os: {os}\n  platform:\n    kind: workspace\n  toolchains: {toolchains}\n"
         );
         let a: AssignmentYaml = serde_yaml::from_str(&yaml).unwrap();
         match resolve(&a, store)? {
@@ -721,7 +721,7 @@ mod tests {
         ];
         let mut files: Vec<(&str, &str)> = vec![
             ("os/a.yaml", FIX_OS),
-            ("platforms/interactive.yaml", FIX_PLATFORM),
+            ("platforms/workspace.yaml", FIX_PLATFORM),
         ];
         files.extend(tcs.iter().map(|(p, s)| (p.as_str(), s.as_str())));
         crate::recipe::store::fixture_store(&files).unwrap()
@@ -729,7 +729,7 @@ mod tests {
 
     fn resolve_with_testing(toolchains: &str, framework: &str) -> Result<Vec<Layer>, ResolveError> {
         let yaml = format!(
-            "id: t\nname: T\nenvironment:\n  os: os-a\n  platform:\n    kind: interactive\n  toolchains: {toolchains}\ntesting:\n  framework: {framework}\n"
+            "id: t\nname: T\nenvironment:\n  os: os-a\n  platform:\n    kind: workspace\n  toolchains: {toolchains}\ntesting:\n  framework: {framework}\n"
         );
         let a: AssignmentYaml = serde_yaml::from_str(&yaml).unwrap();
         match resolve(&a, &framework_store())? {
@@ -815,7 +815,7 @@ mod tests {
 
     fn assignment(network_block: &str) -> AssignmentYaml {
         let yaml = format!(
-            "id: test-assignment\nname: Test\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: interactive\n{network_block}"
+            "id: test-assignment\nname: Test\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: workspace\n{network_block}"
         );
         serde_yaml::from_str(&yaml).unwrap()
     }

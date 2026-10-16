@@ -15,7 +15,7 @@ use crate::cli::VendArgs;
 mod github;
 
 struct RecipeTarget {
-    /// Relative path used in output, e.g. "platform/interactive"
+    /// Relative path used in output, e.g. "platform/workspace"
     label: String,
     ingredients: Vec<Ingredient>,
     /// Absolute path to the recipe's source directory

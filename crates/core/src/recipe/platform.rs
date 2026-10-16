@@ -17,14 +17,23 @@ pub struct PlatformRecipe {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PlatformKind {
-    Interactive,
+    /// A code-server session; submissions come from the session workspace.
+    Workspace,
+    /// No session; submissions are uploaded files or archives.
+    Upload,
 }
 
 impl PlatformKind {
     pub fn as_str(&self) -> &str {
         match self {
-            PlatformKind::Interactive => "interactive",
+            PlatformKind::Workspace => "workspace",
+            PlatformKind::Upload => "upload",
         }
+    }
+
+    /// Whether this kind runs a session, and so needs an entrypoint.
+    pub fn has_session(&self) -> bool {
+        matches!(self, PlatformKind::Workspace)
     }
 }
 
@@ -33,7 +42,8 @@ impl TryFrom<String> for PlatformKind {
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         match s.as_str() {
-            "interactive" => Ok(PlatformKind::Interactive),
+            "workspace" => Ok(PlatformKind::Workspace),
+            "upload" => Ok(PlatformKind::Upload),
             other => Err(format!("unknown platform kind {other:?}")),
         }
     }
@@ -55,6 +65,8 @@ impl std::fmt::Display for PlatformKind {
 pub struct PlatformHookDefs {
     pub build: ParamHook,
     /// Exec-form argv; each item is interpolated with the platform params.
+    /// Empty for kinds without a session.
+    #[serde(default)]
     pub entrypoint: Vec<String>,
     /// Interpolated like `entrypoint`, then parsed as non-zero port numbers.
     #[serde(default)]

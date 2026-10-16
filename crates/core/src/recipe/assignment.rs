@@ -284,7 +284,7 @@ mod tests {
 
     fn assignment(extra: &str) -> Result<AssignmentYaml, String> {
         let yaml = format!(
-            "id: t\nname: T\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: interactive\n{extra}"
+            "id: t\nname: T\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: workspace\n{extra}"
         );
         serde_yaml::from_str(&yaml).map_err(|e| e.to_string())
     }
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn network_defaults_to_deny() {
-        let yaml = "os: ubuntu-22\nplatform:\n  kind: interactive\n";
+        let yaml = "os: ubuntu-22\nplatform:\n  kind: workspace\n";
         let env: Environment = serde_yaml::from_str(yaml).unwrap();
         assert!(matches!(env.network, NetworkSpec::Deny { allow } if allow.is_empty()));
         assert!(env.toolchains.is_empty());
@@ -450,7 +450,7 @@ mod tests {
         let yaml = "\
 os: ubuntu-22
 platform:
-  kind: interactive
+  kind: workspace
 network:
   mode: deny
   allow:
@@ -467,7 +467,7 @@ network:
 
     #[test]
     fn network_deny_defaults_empty_allowlist() {
-        let yaml = "os: ubuntu-22\nplatform:\n  kind: interactive\nnetwork:\n  mode: deny\n";
+        let yaml = "os: ubuntu-22\nplatform:\n  kind: workspace\nnetwork:\n  mode: deny\n";
         let env: Environment = serde_yaml::from_str(yaml).unwrap();
         assert!(matches!(env.network, NetworkSpec::Deny { allow } if allow.is_empty()));
     }

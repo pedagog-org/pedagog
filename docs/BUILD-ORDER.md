@@ -131,7 +131,7 @@ Assignment: pointers-and-memory
 │   └── OS: ubuntu-22
 │       └── Step 1
 ├── PLATFORM
-│   └── Platform: interactive
+│   └── Platform: workspace
 │       ├── Install code-server
 │       ├── …
 │       └── Configure terminal access
