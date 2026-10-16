@@ -1,4 +1,5 @@
 mod cli;
+mod submit;
 mod upload;
 mod vend;
 
@@ -8,7 +9,7 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use miette::{GraphicalReportHandler, MietteDiagnostic, Report, Result, Severity, miette};
 
-use cli::{Cli, Command, Format, PlanArgs, UploadArgs, VendArgs};
+use cli::{Cli, Command, Format, PlanArgs, SubmitArgs, UploadArgs, VendArgs};
 use pedagog_core::recipe::assignment::{AssignmentYaml, FileSources};
 use pedagog_core::recipe::primitives::Id;
 use pedagog_core::recipe::render::containerfile::Containerfile;
@@ -27,6 +28,7 @@ fn main() -> Result<()> {
         Command::Plan(args) => run_plan(args),
         Command::Vend(args) => run_vend(args),
         Command::Upload(args) => run_upload(args),
+        Command::Submit(args) => run_submit(args),
     }
 }
 
@@ -181,6 +183,23 @@ fn run_vend(args: VendArgs) -> Result<()> {
     vend::run_vend(args, dirs)
 }
 
+fn run_submit(args: SubmitArgs) -> Result<()> {
+    let paths: Vec<PathBuf> = args.paths.into_iter().map(expand_tilde).collect();
+    let files = submit::collect(&paths).map_err(|e| miette!("{e}"))?;
+    let url = jobs_url(args.jobs_url);
+    let submitted =
+        submit::send(&url, &args.assignment, &args.student, &files).map_err(|e| miette!("{e}"))?;
+    for line in submit::describe(&submitted) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+fn jobs_url(flag: Option<String>) -> String {
+    flag.or_else(|| std::env::var(upload::JOBS_URL_ENV).ok())
+        .unwrap_or_else(|| upload::DEFAULT_JOBS_URL.to_owned())
+}
+
 fn run_upload(args: UploadArgs) -> Result<()> {
     let dir = expand_tilde(args.dir.clone());
     let assignment_path = dir.join("assignment.yml");
@@ -205,10 +224,7 @@ fn run_upload(args: UploadArgs) -> Result<()> {
         );
     }
 
-    let url = args
-        .jobs_url
-        .or_else(|| std::env::var(upload::JOBS_URL_ENV).ok())
-        .unwrap_or_else(|| upload::DEFAULT_JOBS_URL.to_owned());
+    let url = jobs_url(args.jobs_url);
     let archive = upload::pack(&dir).map_err(|e| miette!("{e}"))?;
     let uploaded = upload::send(&url, archive, args.force).map_err(|e| miette!("{e}"))?;
     println!(
