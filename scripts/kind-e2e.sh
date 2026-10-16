@@ -24,12 +24,26 @@ HAMMER=target/debug/hammer
 upload() { "$HAMMER" upload "$1" --jobs-url "$URL" -q "${@:2}" 2>&1; }
 build_id() { grep -oE "build [0-9]+" | head -1 | grep -oE "[0-9]+"; }
 
-k -n "$NS" port-forward svc/pedagog-jobs "$PORT:8080" >/dev/null 2>&1 &
-PF=$!
-disown $PF
+# Forward to jobs and wait until it answers (a forward opened during a rollout
+# can attach to a terminating pod and die with it).
+forward() {
+    k -n "$NS" rollout status deploy/pedagog-jobs --timeout=180s >/dev/null
+    for _ in $(seq 1 30); do
+        k -n "$NS" port-forward svc/pedagog-jobs "$PORT:8080" >/dev/null 2>&1 &
+        PF=$!
+        disown $PF
+        for _ in $(seq 1 10); do
+            curl -s -o /dev/null "$URL/" && return 0
+            sleep 0.5
+        done
+        kill $PF 2>/dev/null
+    done
+    echo "cannot reach jobs through a port-forward" >&2
+    exit 1
+}
+forward
 work=$(mktemp -d)
 trap 'kill $PF 2>/dev/null; rm -rf "$work"' EXIT
-sleep 2
 
 echo "== 1. the example builds and validates"
 out=$(upload "$EXAMPLE" --force --wait)
@@ -73,9 +87,7 @@ done
 if [ "$final" = passed ]; then pass "build $second resumed and passed (restarted during '$stage')"; else fail "build ${second:-?} after restart: '$final'"; fi
 # The restart dropped the port-forward.
 kill $PF 2>/dev/null
-k -n "$NS" port-forward svc/pedagog-jobs "$PORT:8080" >/dev/null 2>&1 &
-PF=$!
-disown $PF
+forward
 
 echo "== 6. validation pods can reach Garage but not the internet (mode: deny)"
 k -n "$NS" delete pod e2e-netprobe --ignore-not-found >/dev/null
@@ -91,6 +103,23 @@ if echo "$probe" | grep -q garage-ok && echo "$probe" | grep -q internet-blocked
     pass "egress: Garage reachable, internet blocked"
 else
     fail "egress: $probe"
+fi
+
+echo "== 7. under mode: allow, the internet is reachable but node IPs are not"
+node_ip=$(k get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+k -n "$NS" delete pod e2e-netprobe-allow --ignore-not-found >/dev/null
+k -n "$NS" run e2e-netprobe-allow --restart=Never --image=busybox:1.36 \
+    --labels=pedagog.io/role=validate,pedagog.io/network=allow --command -- sh -c "
+    sleep 8  # network policies apply a few seconds after a pod starts
+    wget -q -T 5 -O /dev/null http://1.1.1.1/ >/dev/null 2>&1 && echo internet-open || echo internet-blocked
+    nc -z -w 3 $node_ip 10250 && echo node-open || echo node-blocked" >/dev/null
+k -n "$NS" wait --for=jsonpath='{.status.phase}'=Succeeded pod/e2e-netprobe-allow --timeout=90s >/dev/null
+probe=$(k -n "$NS" logs e2e-netprobe-allow)
+k -n "$NS" delete pod e2e-netprobe-allow --wait=false >/dev/null
+if echo "$probe" | grep -q internet-open && echo "$probe" | grep -q node-blocked; then
+    pass "egress: internet reachable, node $node_ip (kubelet) blocked"
+else
+    fail "egress (allow): $probe"
 fi
 
 echo

@@ -23,9 +23,6 @@ spec:
             # Kaniko initContainers (fetch-context) run the jobs image, loaded into the node.
             - name: PEDAGOG_JOBS_IMAGE
               value: localhost/pedagog/jobs:dev
-            # kind's pod and service ranges (excluded from `mode: allow` egress)
-            - name: PEDAGOG_CLUSTER_CIDRS
-              value: 10.244.0.0/16,10.96.0.0/16
           volumeMounts:
             - name: recipes-src
               mountPath: /host/recipes
