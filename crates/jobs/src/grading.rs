@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use pedagog_core::results::Results;
+use pedagog_core::results::{COLLECTION_SUFFIX, Results};
 use pedagog_k8s::build::JobKey;
 use pedagog_k8s::grade::GradingRequest;
 use pedagog_store::db::assignments as builds_db;
@@ -19,6 +19,8 @@ use crate::state::AppState;
 
 /// Extra validity for presigned URLs beyond the Job's deadline.
 const URL_MARGIN: Duration = Duration::from_secs(600);
+/// How many lines of a load error are kept (the error itself is at the end).
+const ERROR_LINES: usize = 12;
 /// How much of a failed pod's log is kept.
 const LOG_TAIL: usize = 4000;
 
@@ -155,12 +157,34 @@ pub fn judge(uploaded: Option<&[u8]>) -> Verdict {
     if !problems.is_empty() {
         return error(problems);
     }
+    // Tests that couldn't even load (e.g. a syntax error in the submission)
+    // never ran: the run is an error, not a 0 out of 0.
+    let unloaded = results.collection_errors();
+    if !unloaded.is_empty() {
+        return error(
+            unloaded
+                .iter()
+                .map(|t| {
+                    let file = t.node.trim_end_matches(COLLECTION_SUFFIX);
+                    format!(
+                        "{file} couldn't be loaded, so its tests didn't run:\n{}",
+                        tail_lines(&t.output, ERROR_LINES)
+                    )
+                })
+                .collect(),
+        );
+    }
     Verdict {
         score: Some((results.summary.score, results.summary.total)),
         results: serde_json::to_string(&results).ok(),
         problems: Vec::new(),
         error: None,
     }
+}
+
+fn tail_lines(text: &str, n: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
 /// After a restart: watch every run still grading. A run whose Job is gone is
@@ -198,6 +222,29 @@ mod tests {
             1,
         );
         assert!(judge(Some(text.as_bytes())).score.is_some());
+    }
+
+    #[test]
+    fn tests_that_couldnt_load_make_an_error() {
+        // What the helper reported for a submission with a syntax error.
+        let broken = r#"{
+            "summary": {"score": 0.0, "total": 0.0},
+            "tests": [{
+                "node": "test_linked_list.py::<collection>",
+                "name": "Collecting test_linked_list.py",
+                "status": "error", "score": 0.0, "max": 0.0,
+                "output": "Traceback ...\nE     File \"linked_list.py\", line 1\nE       class LinkedList(:\nE   invalid syntax",
+                "visibility": {"score": "visible", "output": "after_end"}
+            }]
+        }"#;
+        let v = judge(Some(broken.as_bytes()));
+        assert_eq!((v.results, v.score), (None, None));
+        assert!(
+            v.problems[0].starts_with("test_linked_list.py couldn't be loaded"),
+            "{:?}",
+            v.problems
+        );
+        assert!(v.problems[0].contains("invalid syntax"), "{:?}", v.problems);
     }
 
     #[test]
