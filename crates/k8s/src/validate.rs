@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::api::core::v1::{
-    Capabilities, Container, EnvVar, PodSpec, PodTemplateSpec, ResourceRequirements,
-    SeccompProfile, SecurityContext,
+    Capabilities, Container, EmptyDirVolumeSource, EnvVar, PodSpec, PodTemplateSpec,
+    ResourceRequirements, SeccompProfile, SecurityContext, Volume, VolumeMount,
 };
 use k8s_openapi::api::networking::v1::{
     IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyPeer, NetworkPolicyPort,
@@ -30,6 +30,9 @@ use crate::build::{Builder, JobKey, Outcome};
 
 pub const ROLE_LABEL: &str = "pedagog.io/role";
 pub const NETWORK_LABEL: &str = "pedagog.io/network";
+/// On every test-run Job (validation, grading), for the admission gate.
+pub const TEST_RUN_LABEL: &str = "pedagog.io/test-run";
+const CODE_VOLUME: &str = "code";
 const ROLE: &str = "validate";
 const APP_LABEL: &str = "pedagog-assignment-validate";
 const RUN_TESTS: &str = "/pedagog/bin/run-tests";
@@ -63,7 +66,7 @@ pub enum Egress {
 }
 
 impl Egress {
-    fn label(&self) -> &'static str {
+    pub(crate) fn label(&self) -> &'static str {
         match self {
             Egress::Deny => "deny",
             Egress::Internet => "allow",
@@ -88,31 +91,107 @@ pub struct ValidationRequest {
 }
 
 pub(crate) fn validation_job(name: &str, req: &ValidationRequest) -> Job {
+    test_run_job(
+        name,
+        &TestRun {
+            app: APP_LABEL,
+            role: ROLE,
+            container: "validate",
+            image: &req.image,
+            jobs_image: &req.jobs_image,
+            code: SOLUTION_DIR,
+            fetch: None,
+            isolation: &req.isolation,
+            results_url: &req.results_url,
+            egress: &req.egress,
+            deadline: req.deadline,
+            cpu: &req.cpu,
+            memory: &req.memory,
+        },
+    )
+}
+
+/// What validation and grading Jobs are made of.
+pub(crate) struct TestRun<'a> {
+    pub app: &'a str,
+    pub role: &'a str,
+    pub container: &'a str,
+    pub image: &'a str,
+    pub jobs_image: &'a str,
+    /// The code under test, as `run-tests --code` sees it.
+    pub code: &'a str,
+    /// `(presigned GET, tree hash)` of an archive fetched into `code` first.
+    pub fetch: Option<(&'a str, &'a str)>,
+    pub isolation: &'a str,
+    pub results_url: &'a str,
+    pub egress: &'a Egress,
+    pub deadline: Duration,
+    pub cpu: &'a str,
+    pub memory: &'a str,
+}
+
+/// A test-run Job: `await-egress`, optionally `fetch-context` into the code
+/// directory, then the helper's launcher, locked down to what it needs.
+pub(crate) fn test_run_job(name: &str, run: &TestRun<'_>) -> Job {
     let labels = BTreeMap::from([
-        ("app".to_string(), APP_LABEL.to_string()),
-        (ROLE_LABEL.to_string(), ROLE.to_string()),
-        (NETWORK_LABEL.to_string(), req.egress.label().to_string()),
+        ("app".to_string(), run.app.to_string()),
+        (ROLE_LABEL.to_string(), run.role.to_string()),
+        (NETWORK_LABEL.to_string(), run.egress.label().to_string()),
     ]);
     let limits = BTreeMap::from([
-        ("cpu".to_string(), Quantity(req.cpu.clone())),
-        ("memory".to_string(), Quantity(req.memory.clone())),
+        ("cpu".to_string(), Quantity(run.cpu.to_string())),
+        ("memory".to_string(), Quantity(run.memory.to_string())),
     ]);
+    let mut init = vec![await_egress(run.jobs_image)];
+    let mut volumes = Vec::new();
+    let mut mounts = Vec::new();
+    if let Some((url, tree)) = run.fetch {
+        volumes.push(Volume {
+            name: CODE_VOLUME.into(),
+            empty_dir: Some(EmptyDirVolumeSource::default()),
+            ..Default::default()
+        });
+        mounts.push(VolumeMount {
+            name: CODE_VOLUME.into(),
+            mount_path: run.code.into(),
+            read_only: Some(true),
+            ..Default::default()
+        });
+        init.push(Container {
+            name: "fetch-context".into(),
+            image: Some(run.jobs_image.to_string()),
+            image_pull_policy: Some("IfNotPresent".into()),
+            args: Some(vec![
+                "fetch-context".into(),
+                url.to_string(),
+                run.code.into(),
+                tree.to_string(),
+            ]),
+            volume_mounts: Some(vec![VolumeMount {
+                name: CODE_VOLUME.into(),
+                mount_path: run.code.into(),
+                ..Default::default()
+            }]),
+            ..helper_container("fetch-context")
+        });
+    }
     let container = Container {
-        name: "validate".into(),
-        image: Some(req.image.clone()),
+        name: run.container.into(),
+        image: Some(run.image.to_string()),
         image_pull_policy: Some("IfNotPresent".into()),
         command: Some(vec![
             RUN_TESTS.into(),
             "--code".into(),
-            SOLUTION_DIR.into(),
+            run.code.into(),
             "--isolation".into(),
-            req.isolation.clone(),
+            run.isolation.to_string(),
         ]),
         env: Some(vec![EnvVar {
             name: "PEDAGOG_RESULTS_URL".into(),
-            value: Some(req.results_url.clone()),
+            value: Some(run.results_url.to_string()),
             ..Default::default()
         }]),
+        volume_mounts: (!mounts.is_empty()).then_some(mounts),
         resources: Some(ResourceRequirements {
             requests: Some(limits.clone()),
             limits: Some(limits),
@@ -135,8 +214,9 @@ pub(crate) fn validation_job(name: &str, req: &ValidationRequest) -> Job {
         ..Default::default()
     };
     let pod = PodSpec {
-        init_containers: Some(vec![await_egress(&req.jobs_image)]),
+        init_containers: Some(init),
         containers: vec![container],
+        volumes: (!volumes.is_empty()).then_some(volumes),
         restart_policy: Some("Never".into()),
         automount_service_account_token: Some(false),
         enable_service_links: Some(false),
@@ -145,13 +225,16 @@ pub(crate) fn validation_job(name: &str, req: &ValidationRequest) -> Job {
     Job {
         metadata: ObjectMeta {
             name: Some(name.to_string()),
-            labels: Some(BTreeMap::from([("app".to_string(), APP_LABEL.to_string())])),
+            labels: Some(BTreeMap::from([
+                ("app".to_string(), run.app.to_string()),
+                (TEST_RUN_LABEL.to_string(), "true".to_string()),
+            ])),
             ..Default::default()
         },
         spec: Some(JobSpec {
             backoff_limit: Some(0),
             ttl_seconds_after_finished: Some(TTL_SECONDS),
-            active_deadline_seconds: Some(req.deadline.as_secs() as i64),
+            active_deadline_seconds: Some(run.deadline.as_secs() as i64),
             template: PodTemplateSpec {
                 metadata: Some(ObjectMeta {
                     labels: Some(labels),
@@ -165,23 +248,14 @@ pub(crate) fn validation_job(name: &str, req: &ValidationRequest) -> Job {
     }
 }
 
-/// Blocks until the pod's network policies are in force (they apply a few
-/// seconds after a pod starts), so test code never runs with open egress.
-pub(crate) fn await_egress(jobs_image: &str) -> Container {
+/// A jobs-image helper: unprivileged, tiny.
+fn helper_container(name: &str) -> Container {
     let tiny = BTreeMap::from([
         ("cpu".to_string(), Quantity("50m".into())),
-        ("memory".to_string(), Quantity("32Mi".into())),
+        ("memory".to_string(), Quantity("64Mi".into())),
     ]);
     Container {
-        name: "await-egress".into(),
-        image: Some(jobs_image.to_string()),
-        image_pull_policy: Some("IfNotPresent".into()),
-        // The jobs image's entrypoint is the jobs binary.
-        args: Some(vec![
-            "await-egress".into(),
-            EGRESS_PROBE.into(),
-            EGRESS_WAIT_SECONDS.to_string(),
-        ]),
+        name: name.into(),
         resources: Some(ResourceRequirements {
             requests: Some(tiny.clone()),
             limits: Some(tiny),
@@ -202,6 +276,22 @@ pub(crate) fn await_egress(jobs_image: &str) -> Container {
             ..Default::default()
         }),
         ..Default::default()
+    }
+}
+
+/// Blocks until the pod's network policies are in force (they apply a few
+/// seconds after a pod starts), so test code never runs with open egress.
+pub(crate) fn await_egress(jobs_image: &str) -> Container {
+    Container {
+        image: Some(jobs_image.to_string()),
+        image_pull_policy: Some("IfNotPresent".into()),
+        // The jobs image's entrypoint is the jobs binary.
+        args: Some(vec![
+            "await-egress".into(),
+            EGRESS_PROBE.into(),
+            EGRESS_WAIT_SECONDS.to_string(),
+        ]),
+        ..helper_container("await-egress")
     }
 }
 
@@ -400,7 +490,7 @@ impl Builder {
         Ok(())
     }
 
-    async fn apply_policy(&self, policy: &NetworkPolicy) -> kube::Result<()> {
+    pub(crate) async fn apply_policy(&self, policy: &NetworkPolicy) -> kube::Result<()> {
         let name = policy.metadata.name.clone().unwrap_or_default();
         self.runs
             .network_policies()

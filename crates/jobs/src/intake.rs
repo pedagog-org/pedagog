@@ -8,7 +8,7 @@ use axum::body::Bytes;
 use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use pedagog_core::recipe::assignment::AssignmentYaml;
+use pedagog_core::recipe::assignment::{AssignmentYaml, Isolation};
 use pedagog_core::recipe::render::containerfile::Containerfile;
 use pedagog_core::recipe::render::{AssignmentFiles, FromSource, Render, RenderOptions};
 use pedagog_core::recipe::resolve::resolve;
@@ -128,6 +128,15 @@ pub fn check_upload(
     }
     if files.solution.is_none() {
         warnings.push("no reference solution: validation will be skipped".to_owned());
+    }
+    if assignment
+        .testing
+        .as_ref()
+        .is_some_and(|t| t.isolation == Isolation::InProcess)
+    {
+        warnings.push(
+            "testing.isolation is in-process: graded student code runs inside the test harness, so it can read the tests and alter its own results".to_owned(),
+        );
     }
     Ok(Checked {
         assignment,
@@ -405,5 +414,24 @@ mod tests {
         assert_eq!(checked.warnings.len(), 2, "{:?}", checked.warnings);
         assert!(checked.warnings[0].contains("pypi.org:443"));
         assert!(checked.warnings[1].contains("validation will be skipped"));
+    }
+
+    #[test]
+    fn in_process_isolation_is_a_warning() {
+        let original =
+            std::fs::read_to_string(recipes().join("examples/linked-list-python/assignment.yml"))
+                .unwrap();
+        let yml = original.replace(
+            "framework: pytest:1",
+            "framework: pytest:1\n  isolation: in-process",
+        );
+        let checked =
+            check_upload(&example(&[], Some(&yml)), &LIMITS, &recipes(), REGISTRY).unwrap();
+        assert_eq!(checked.warnings.len(), 1, "{:?}", checked.warnings);
+        assert!(
+            checked.warnings[0].contains("can read the tests"),
+            "{:?}",
+            checked.warnings
+        );
     }
 }
