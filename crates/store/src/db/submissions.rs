@@ -73,6 +73,7 @@ pub async fn record_submission(pool: &PgPool, s: &NewSubmission<'_>) -> sqlx::Re
     )
     .execute(&mut *tx)
     .await?;
+    crate::db::queue::wake(&mut *tx).await?;
     tx.commit().await?;
     Ok(Accepted {
         submission_id,
@@ -406,7 +407,15 @@ pub(crate) mod tests {
         upsert_assignment(pool, id, "Linked List").await?;
         let up =
             record_upload(pool, id, image, &format!("assignments/{id}/{image}.tgz"), 1).await?;
-        let build = start_build(pool, id, up.id, image, "reg/a:1").await?;
+        let build = start_build(
+            pool,
+            id,
+            up.id,
+            image,
+            "reg/a:1",
+            &crate::db::test_settings(),
+        )
+        .await?;
         finish_build(pool, build, true, None).await?;
         finish_validation(pool, build, ValidationStatus::Skipped, None, &[]).await?;
         Ok(build)

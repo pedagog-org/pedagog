@@ -5,7 +5,7 @@
 //! run shares); `grade` runs grading Jobs and reports test-run capacity.
 
 use k8s_openapi::api::batch::v1::Job;
-use k8s_openapi::api::core::v1::{ConfigMap, Pod};
+use k8s_openapi::api::core::v1::{ConfigMap, Pod, ResourceQuota};
 use k8s_openapi::api::networking::v1::NetworkPolicy;
 use kube::{Api, Client};
 
@@ -13,6 +13,7 @@ pub use kube::Error as KubeError;
 
 pub mod build;
 pub mod grade;
+pub mod runs;
 pub mod validate;
 
 /// Whether the API refused a request outright (a 4xx other than a conflict or
@@ -58,6 +59,10 @@ impl KubeClient {
     }
 
     pub(crate) fn configmaps(&self) -> Api<ConfigMap> {
+        Api::namespaced(self.client.clone(), &self.namespace)
+    }
+
+    pub(crate) fn resource_quotas(&self) -> Api<ResourceQuota> {
         Api::namespaced(self.client.clone(), &self.namespace)
     }
 

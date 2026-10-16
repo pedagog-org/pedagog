@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,\n                  validation_status, results::text AS \"results?\", validation_problems,\n                  error, finished_at IS NOT NULL AS \"finished!\"\n             FROM assignment_builds WHERE id = $1",
+  "query": "SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,\n                  validation_status, results::text AS \"results?\", validation_problems,\n                  error, finished_at IS NOT NULL AS \"finished!\", platform, isolation,\n                  egress::text AS \"egress?\", submission::text AS \"submission?\"\n             FROM assignment_builds\n            WHERE assignment_id = $1 AND id = $2",
   "describe": {
     "columns": [
       {
@@ -113,10 +113,45 @@
         "name": "finished!",
         "type_info": "Bool",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "platform",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "platform"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "isolation",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "isolation"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "egress?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 14,
+        "name": "submission?",
+        "type_info": "Text",
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
+        "Text",
         "Int8"
       ]
     },
@@ -131,8 +166,12 @@
       null,
       false,
       true,
+      null,
+      true,
+      true,
+      null,
       null
     ]
   },
-  "hash": "a0a160c6d6c5c5844e8ba9c0527b304eb663a70b77d2d4829710530d11f0ab78"
+  "hash": "6e443b74709f8f225a56eb0123fe8dd1491878187f5d911e4522e4ed12c6eb92"
 }

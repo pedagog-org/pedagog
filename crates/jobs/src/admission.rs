@@ -18,12 +18,16 @@ use std::time::Duration;
 use pedagog_k8s::{KubeError, is_refusal};
 use pedagog_store::QueuedRun;
 use pedagog_store::db::queue;
+use sqlx::postgres::PgListener;
 
 use crate::assignments;
 use crate::grading;
 use crate::state::AppState;
 
 const TICK: Duration = Duration::from_secs(2);
+/// After a release, how soon to check for room again: the released run's pod
+/// is usually created (and placed) by then.
+const RECHECK: Duration = Duration::from_millis(250);
 
 /// Why a released run didn't start.
 #[derive(Debug)]
@@ -54,19 +58,55 @@ impl Launch {
     }
 }
 
-pub fn spawn(state: &AppState) {
-    let state = state.clone();
-    tokio::spawn(async move {
-        loop {
-            match release_once(&state).await {
-                // Released one: check again at once, the next may fit too.
-                Ok(Some(_)) => continue,
-                Ok(None) => {}
-                Err(e) => tracing::warn!(error = %e, "admission tick failed"),
-            }
-            tokio::time::sleep(TICK).await;
+/// The release loop; runs for the life of the service. Besides its tick, it
+/// wakes when a run is queued or a test run ends (`queue::WAKE_CHANNEL`).
+pub async fn run(state: AppState) {
+    let mut wakes = None;
+    loop {
+        if wakes.is_none() {
+            // (Re)connect: at startup, and after the listener failed.
+            wakes = listen(&state).await;
         }
-    });
+        let pause = match release_once(&state).await {
+            // Released one: the next may fit as soon as its pod is placed.
+            Ok(Some(_)) => RECHECK,
+            Ok(None) => TICK,
+            Err(e) => {
+                tracing::warn!(error = %e, "admission tick failed");
+                TICK
+            }
+        };
+        match wakes.as_mut() {
+            Some(listener) => {
+                tokio::select! {
+                    () = tokio::time::sleep(pause) => {}
+                    woke = listener.recv() => {
+                        if let Err(e) = woke {
+                            tracing::warn!(error = %e, "admission's wake-ups failed; reconnecting");
+                            wakes = None;
+                        }
+                    }
+                }
+            }
+            None => tokio::time::sleep(pause).await,
+        }
+    }
+}
+
+/// A listener on the wake channel, or `None` (tick only) if it can't connect.
+async fn listen(state: &AppState) -> Option<PgListener> {
+    let connected = async {
+        let mut listener = PgListener::connect_with(&state.pool).await?;
+        listener.listen(queue::WAKE_CHANNEL).await?;
+        Ok::<_, sqlx::Error>(listener)
+    };
+    match connected.await {
+        Ok(listener) => Some(listener),
+        Err(e) => {
+            tracing::warn!(error = %e, "can't listen for admission wake-ups; ticking only");
+            None
+        }
+    }
 }
 
 /// Release at most one run. Returns it if it was released (started, or ended
@@ -83,6 +123,7 @@ async fn release_once(state: &AppState) -> anyhow::Result<Option<QueuedRun>> {
             .config
             .max_running
             .is_some_and(|max| backlog.unfinished >= max)
+        || !state.builder.run_fits(&state.config.run_sizes()).await?
     {
         return Ok(None);
     }
@@ -97,9 +138,6 @@ async fn release_once(state: &AppState) -> anyhow::Result<Option<QueuedRun>> {
         Ok(()) => {
             tx.commit().await?;
             tracing::info!(?next, "released");
-            if let QueuedRun::Grading(run) = next {
-                grading::watch(state, run);
-            }
             Ok(Some(next))
         }
         Err(Launch::Transient(e)) => {

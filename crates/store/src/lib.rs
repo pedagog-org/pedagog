@@ -94,6 +94,21 @@ pub struct AssignmentBuild {
     pub error: Option<String>,
     /// Whether the attempt (build and validation) is over.
     pub finished: bool,
+    /// What its test runs need; `None` for builds from before they were saved.
+    pub settings: Option<BuildSettings>,
+}
+
+/// A build's run settings as stored: `jobs` owns their meaning.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BuildSettings {
+    /// `workspace` or `upload`.
+    pub platform: String,
+    /// `process` or `in-process`.
+    pub isolation: String,
+    /// Egress as JSON text.
+    pub egress: String,
+    /// The parsed `submission:` rules as JSON text.
+    pub submission: String,
 }
 
 /// Where a submission came from; each platform kind takes one.
