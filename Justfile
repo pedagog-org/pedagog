@@ -108,8 +108,11 @@ kind-down:
 # Build the jobs image with podman and load it into the kind node.
 kind-load-jobs:
     podman build -f crates/jobs/Containerfile -t localhost/pedagog/jobs:dev .
+    podman build -f crates/jobs/Containerfile --target init -t localhost/pedagog/jobs-init:dev .
     podman save --format docker-archive -o target/jobs-image.tar localhost/pedagog/jobs:dev
+    podman save --format docker-archive -o target/jobs-init-image.tar localhost/pedagog/jobs-init:dev
     {{KIND}} load image-archive target/jobs-image.tar --name pedagog
+    {{KIND}} load image-archive target/jobs-init-image.tar --name pedagog
 
 # Apply the kind overlay (full base, dev-mode jobs, local-path storage).
 kind-deploy:

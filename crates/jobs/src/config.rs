@@ -17,6 +17,7 @@ pub const BUILD_NAMESPACE: &str = "PEDAGOG_BUILD_NAMESPACE";
 pub const RUN_NAMESPACE: &str = "PEDAGOG_RUN_NAMESPACE";
 pub const REGISTRY: &str = "PEDAGOG_REGISTRY";
 pub const JOBS_IMAGE: &str = "PEDAGOG_JOBS_IMAGE";
+pub const JOBS_INIT_IMAGE: &str = "PEDAGOG_JOBS_INIT_IMAGE";
 pub const RECIPES_HOSTPATH: &str = "PEDAGOG_RECIPES_HOSTPATH";
 pub const LISTEN_ADDR: &str = "PEDAGOG_LISTEN_ADDR";
 pub const MAX_UPLOAD_BYTES: &str = "PEDAGOG_MAX_UPLOAD_BYTES";
@@ -65,6 +66,9 @@ pub struct Config {
     pub registry: String,
     /// prod: image whose baked recipes the Kaniko initContainer stages.
     pub jobs_image: String,
+    /// The small image with only the jobs binary, for initContainers
+    /// (`await-egress`, `fetch-context`).
+    pub init_image: String,
     /// dev: node path to the recipes checkout mounted into Kaniko.
     pub recipes_hostpath: Option<String>,
     pub listen_addr: String,
@@ -107,6 +111,10 @@ impl Config {
             run_namespace: var_or(RUN_NAMESPACE, DEFAULT_RUN_NAMESPACE),
             registry: var_or(REGISTRY, DEFAULT_REGISTRY),
             jobs_image: std::env::var(JOBS_IMAGE).unwrap_or_default(),
+            // Falls back to the full image, which has the same binary.
+            init_image: std::env::var(JOBS_INIT_IMAGE)
+                .or_else(|_| std::env::var(JOBS_IMAGE))
+                .unwrap_or_default(),
             recipes_hostpath: std::env::var(RECIPES_HOSTPATH).ok(),
             listen_addr: var_or(LISTEN_ADDR, DEFAULT_LISTEN),
             objects: ObjectsConfig::from_env().map_err(|e| anyhow::anyhow!(e))?,
@@ -171,6 +179,7 @@ impl Config {
         BuildEnv {
             kind: self.env,
             jobs_image: self.jobs_image.clone(),
+            init_image: self.init_image.clone(),
             recipes_hostpath: self.recipes_hostpath.clone(),
             cache_repo: self
                 .build_cache

@@ -20,8 +20,8 @@ pub const SUBMISSION_DIR: &str = "/pedagog/submission";
 pub struct GradingRequest {
     pub run_id: i64,
     pub image: String,
-    /// Runs `await-egress` and `fetch-context`.
-    pub jobs_image: String,
+    /// Runs `await-egress` and `fetch-context` (`pedagog/jobs-init`).
+    pub init_image: String,
     /// Presigned GET of the submission's `.tgz`, and its tree hash.
     pub submission_url: String,
     pub tree_hash: String,
@@ -44,7 +44,7 @@ pub(crate) fn grading_job(name: &str, req: &GradingRequest) -> Job {
             run_id: req.run_id,
             container: "grade",
             image: &req.image,
-            jobs_image: &req.jobs_image,
+            init_image: &req.init_image,
             code: SUBMISSION_DIR,
             fetch: Some((&req.submission_url, &req.tree_hash)),
             isolation: &req.isolation,
@@ -223,7 +223,7 @@ mod tests {
         GradingRequest {
             run_id: 9,
             image: "reg:5000/pedagog/assignments/ll:abc".into(),
-            jobs_image: "localhost/pedagog/jobs:dev".into(),
+            init_image: "localhost/pedagog/jobs-init:dev".into(),
             submission_url: "http://garage/submissions/ll/t.tgz?sig".into(),
             tree_hash: "t".into(),
             results_url: "http://garage/results?sig".into(),

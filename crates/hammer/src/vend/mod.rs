@@ -24,6 +24,11 @@ struct RecipeTarget {
 
 pub fn run_vend(args: VendArgs, dirs: Vec<PathBuf>) -> Result<()> {
     let targets = collect_targets(&args, &dirs)?;
+    if args.prune {
+        for removed in prune(&dirs, &targets)? {
+            println!("Pruned {}", removed.display());
+        }
+    }
 
     if targets.is_empty() {
         println!("Nothing to vend.");
@@ -66,6 +71,47 @@ pub fn run_vend(args: VendArgs, dirs: Vec<PathBuf>) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+/// Delete files under each recipe directory's `ingredients/` that no target
+/// declares (keeping `.keep`), then the directories left empty. Returns what
+/// was removed, relative to its recipe directory.
+fn prune(dirs: &[PathBuf], targets: &[RecipeTarget]) -> Result<Vec<PathBuf>> {
+    let declared: std::collections::HashSet<PathBuf> = targets
+        .iter()
+        .flat_map(|t| {
+            t.ingredients.iter().map(|i| {
+                t.recipe_dir
+                    .join("ingredients")
+                    .join(&t.label)
+                    .join(&i.output)
+            })
+        })
+        .collect();
+    let mut removed = Vec::new();
+    for dir in dirs {
+        let root = dir.join("ingredients");
+        if !root.is_dir() {
+            continue;
+        }
+        // Deepest first, so a directory is visited after its contents.
+        for entry in WalkDir::new(&root).min_depth(1).contents_first(true) {
+            let entry = entry.map_err(|e| miette!("cannot read {}: {e}", root.display()))?;
+            let path = entry.path();
+            let relative = path.strip_prefix(dir).unwrap_or(path).to_owned();
+            if entry.file_type().is_dir() {
+                if std::fs::read_dir(path).is_ok_and(|mut d| d.next().is_none()) {
+                    std::fs::remove_dir(path)
+                        .map_err(|e| miette!("cannot remove {}: {e}", path.display()))?;
+                }
+            } else if entry.file_name() != ".keep" && !declared.contains(path) {
+                std::fs::remove_file(path)
+                    .map_err(|e| miette!("cannot remove {}: {e}", path.display()))?;
+                removed.push(relative);
+            }
+        }
+    }
+    Ok(removed)
 }
 
 fn fetch(ingredient: &Ingredient, out_path: &Path) -> Result<(), String> {
@@ -249,6 +295,47 @@ mod tests {
         let path = dir.join("file");
         std::fs::write(&path, content).unwrap();
         path
+    }
+
+    #[test]
+    fn prune_removes_only_what_no_recipe_declares() {
+        let dir = std::env::temp_dir().join(format!("hammer-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ing = dir.join("ingredients");
+        for (path, content) in [
+            ("platform/workspace/code-server.deb", "new"),
+            ("platform/interactive/code-server.deb", "stale"),
+            ("toolchain/python/3.12/notes.txt", "stale"),
+            (".keep", ""),
+        ] {
+            std::fs::create_dir_all(ing.join(path).parent().unwrap()).unwrap();
+            std::fs::write(ing.join(path), content).unwrap();
+        }
+        let ingredient: Ingredient =
+            serde_yaml::from_str("output: code-server.deb\nurl: https://example.com/cs.deb\n")
+                .unwrap();
+        let targets = [RecipeTarget {
+            label: "platform/workspace".into(),
+            ingredients: vec![ingredient],
+            recipe_dir: dir.clone(),
+        }];
+        let mut removed = prune(std::slice::from_ref(&dir), &targets).unwrap();
+        removed.sort();
+        assert_eq!(
+            removed,
+            [
+                PathBuf::from("ingredients/platform/interactive/code-server.deb"),
+                PathBuf::from("ingredients/toolchain/python/3.12/notes.txt"),
+            ]
+        );
+        assert!(ing.join("platform/workspace/code-server.deb").exists());
+        assert!(ing.join(".keep").exists());
+        assert!(
+            !ing.join("platform/interactive").exists(),
+            "empty dirs go too"
+        );
+        assert!(!ing.join("toolchain").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // sha256("hello")

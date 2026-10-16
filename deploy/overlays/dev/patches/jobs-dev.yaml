@@ -1,6 +1,7 @@
 # Dev: jobs builds against the live recipes checkout on the node via hostPath
 # (not baked recipes), and startup does not auto-build — the rebuild endpoint is
-# the trigger. Set BOTH host paths below to your recipes checkout on the node.
+# the trigger. Set BOTH host paths below to your recipes checkout on the node,
+# and both images to your pushed refs.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,6 +20,10 @@ spec:
             # node path handed to Kaniko pods as their /pedagog/recipes hostPath
             - name: PEDAGOG_RECIPES_HOSTPATH
               value: /REPLACE-WITH-HOST-CHECKOUT/recipes
+            - name: PEDAGOG_JOBS_IMAGE
+              value: REPLACE-WITH-REGISTRY-IP:5000/pedagog/jobs:dev
+            - name: PEDAGOG_JOBS_INIT_IMAGE
+              value: REPLACE-WITH-REGISTRY-IP:5000/pedagog/jobs-init:dev
           volumeMounts:
             - name: recipes-src
               mountPath: /host/recipes
