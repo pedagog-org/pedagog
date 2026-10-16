@@ -353,6 +353,10 @@ suit a small cluster. Set these on the `pedagog-jobs` Deployment when they don't
 | `PEDAGOG_VALIDATION_DEADLINE` | `600` | Seconds |
 | `PEDAGOG_VALIDATION_CPU` / `_MEMORY` | `1` / `1Gi` | Per validation pod |
 | `PEDAGOG_RUN_NAMESPACE` | `pedagog-grading` | Where validation and grading pods run |
+| `PEDAGOG_GRADING_DEADLINE` | `600` | Seconds |
+| `PEDAGOG_GRADING_CPU` / `_MEMORY` | `1` / `1Gi` | Per grading pod |
+| `PEDAGOG_MAX_RUNNING_TESTS` | (none) | Optional ceiling on test runs at once; otherwise the namespace's quota and the scheduler decide |
+| `PEDAGOG_MAX_SUBMISSION_BYTES` / `PEDAGOG_MAX_SUBMISSION_FILES` | 50 MiB / 1000 | Submission ceiling; an assignment's `max_size` can only lower it |
 | `PEDAGOG_MAX_UPLOAD_BYTES` / `PEDAGOG_MAX_UNPACKED_BYTES` / `PEDAGOG_MAX_UPLOAD_FILES` | 50 MiB / 200 MiB / 10 000 | Upload limits |
 
 - **Test-run namespace:** validation (and grading) pods run in `pedagog-grading`, with

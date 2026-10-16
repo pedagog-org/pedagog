@@ -59,6 +59,7 @@ pub enum JobKind {
     OsBuild,
     AssignmentBuild,
     AssignmentValidate,
+    Grading,
 }
 
 impl JobKind {
@@ -67,6 +68,7 @@ impl JobKind {
             JobKind::OsBuild => "os-build",
             JobKind::AssignmentBuild => "assignment-build",
             JobKind::AssignmentValidate => "assignment-validate",
+            JobKind::Grading => "grade",
         }
     }
 
@@ -75,6 +77,7 @@ impl JobKind {
             JobKind::OsBuild => "pedagog-os-build",
             JobKind::AssignmentBuild => "pedagog-assignment-build",
             JobKind::AssignmentValidate => "pedagog-assignment-validate",
+            JobKind::Grading => "pedagog-grade",
         }
     }
 }
@@ -110,6 +113,15 @@ impl JobKey {
             kind: JobKind::AssignmentValidate,
             id: id.into(),
             hash: build_id.to_string(),
+        }
+    }
+
+    /// One grading Job per grading run.
+    pub fn grading(id: &str, run_id: i64) -> Self {
+        Self {
+            kind: JobKind::Grading,
+            id: id.into(),
+            hash: run_id.to_string(),
         }
     }
 
@@ -226,7 +238,7 @@ impl Builder {
     /// The namespace a kind of Job runs in.
     pub(crate) fn client_for(&self, kind: JobKind) -> &KubeClient {
         match kind {
-            JobKind::AssignmentValidate => &self.runs,
+            JobKind::AssignmentValidate | JobKind::Grading => &self.runs,
             JobKind::OsBuild | JobKind::AssignmentBuild => &self.client,
         }
     }

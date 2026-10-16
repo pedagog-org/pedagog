@@ -25,6 +25,10 @@ pub const ASSIGNMENT_BUILD_DEADLINE: &str = "PEDAGOG_ASSIGNMENT_BUILD_DEADLINE";
 pub const VALIDATION_DEADLINE: &str = "PEDAGOG_VALIDATION_DEADLINE";
 pub const VALIDATION_CPU: &str = "PEDAGOG_VALIDATION_CPU";
 pub const VALIDATION_MEMORY: &str = "PEDAGOG_VALIDATION_MEMORY";
+pub const GRADING_DEADLINE: &str = "PEDAGOG_GRADING_DEADLINE";
+pub const GRADING_CPU: &str = "PEDAGOG_GRADING_CPU";
+pub const GRADING_MEMORY: &str = "PEDAGOG_GRADING_MEMORY";
+pub const MAX_RUNNING: &str = "PEDAGOG_MAX_RUNNING_TESTS";
 pub const BLOCKED_CIDRS: &str = "PEDAGOG_BLOCKED_CIDRS";
 pub const BUILD_CACHE: &str = "PEDAGOG_BUILD_CACHE";
 pub const MAX_SUBMISSION_BYTES: &str = "PEDAGOG_MAX_SUBMISSION_BYTES";
@@ -70,6 +74,9 @@ pub struct Config {
     /// An assignment build Job's `activeDeadlineSeconds`.
     pub assignment_build_deadline: std::time::Duration,
     pub validation: ValidationConfig,
+    pub grading: ValidationConfig,
+    /// Optional ceiling on test runs at once, on top of the cluster's capacity.
+    pub max_running: Option<usize>,
     /// Ranges excluded from `mode: allow` egress beyond the private ones (e.g. a
     /// cluster on public addresses).
     pub blocked_cidrs: Vec<String>,
@@ -79,8 +86,9 @@ pub struct Config {
     pub submission_limits: SubmissionLimits,
 }
 
+/// A kind of test run's limits.
 pub struct ValidationConfig {
-    /// A validation Job's `activeDeadlineSeconds`.
+    /// The Job's `activeDeadlineSeconds`.
     pub deadline: std::time::Duration,
     pub cpu: String,
     pub memory: String,
@@ -121,6 +129,21 @@ impl Config {
                 cpu: var_or(VALIDATION_CPU, DEFAULT_VALIDATION_CPU),
                 memory: var_or(VALIDATION_MEMORY, DEFAULT_VALIDATION_MEMORY),
             },
+            grading: ValidationConfig {
+                deadline: std::time::Duration::from_secs(num_or(
+                    GRADING_DEADLINE,
+                    DEFAULT_VALIDATION_DEADLINE,
+                )?),
+                cpu: var_or(GRADING_CPU, DEFAULT_VALIDATION_CPU),
+                memory: var_or(GRADING_MEMORY, DEFAULT_VALIDATION_MEMORY),
+            },
+            max_running: std::env::var(MAX_RUNNING)
+                .ok()
+                .map(|v| {
+                    v.parse()
+                        .map_err(|_| anyhow::anyhow!("{MAX_RUNNING} must be a number, got {v:?}"))
+                })
+                .transpose()?,
             build_cache: var_or(BUILD_CACHE, "true") != "false",
             submission_limits: SubmissionLimits {
                 max_bytes: num_or(MAX_SUBMISSION_BYTES, DEFAULT_SUBMISSION_LIMITS.max_bytes)?,

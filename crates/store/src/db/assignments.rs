@@ -135,17 +135,34 @@ pub async fn finish_build(
     Ok(done.rows_affected() == 1)
 }
 
-/// Mark validation as running. Returns false if the attempt is no longer in flight.
-pub async fn start_validation(pool: &PgPool, build: i64) -> sqlx::Result<bool> {
+/// Mark validation as running (admission does this in its release
+/// transaction). Returns false if the attempt is no longer in flight.
+pub async fn start_validation<'e>(db: impl sqlx::PgExecutor<'e>, build: i64) -> sqlx::Result<bool> {
     let done = sqlx::query!(
         "UPDATE assignment_builds SET validation_status = $2
           WHERE id = $1 AND finished_at IS NULL AND build_status = 'succeeded'",
         build,
         ValidationStatus::Running.to_string()
     )
-    .execute(pool)
+    .execute(db)
     .await?;
     Ok(done.rows_affected() == 1)
+}
+
+/// One attempt by id, whatever its assignment.
+pub async fn build_by_id(pool: &PgPool, build: i64) -> sqlx::Result<Option<AssignmentBuild>> {
+    sqlx::query_as!(
+        BuildRow,
+        r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
+                  validation_status, results::text AS "results?", validation_problems,
+                  error, finished_at IS NOT NULL AS "finished!"
+             FROM assignment_builds WHERE id = $1"#,
+        build
+    )
+    .fetch_optional(pool)
+    .await?
+    .map(AssignmentBuild::try_from)
+    .transpose()
 }
 
 /// Record validation's outcome and end the attempt. `results` is the parsed

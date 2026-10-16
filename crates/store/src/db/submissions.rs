@@ -147,6 +147,21 @@ pub async fn finish_run(pool: &PgPool, run: i64, outcome: &RunOutcome<'_>) -> sq
     Ok(done.rows_affected() == 1)
 }
 
+/// End a run that can't be graded (it can never start, or its watcher
+/// failed) as an error. Returns false if it had already finished.
+pub async fn abandon_run(pool: &PgPool, run: i64, error: &str) -> sqlx::Result<bool> {
+    let done = sqlx::query!(
+        "UPDATE grading_runs SET status = $2, error = $3, finished_at = now()
+          WHERE id = $1 AND status IN ('queued', 'grading')",
+        run,
+        RunStatus::Error.to_string(),
+        error
+    )
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected() == 1)
+}
+
 /// One submission by id.
 pub async fn get_submission(pool: &PgPool, id: i64) -> sqlx::Result<Option<Submission>> {
     sqlx::query_as!(
@@ -182,6 +197,35 @@ pub async fn submissions_for_student(
     .into_iter()
     .map(Submission::try_from)
     .collect()
+}
+
+/// What it takes to start a grading run: its submission and the build it runs against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunContext {
+    pub run_id: i64,
+    pub submission_id: i64,
+    pub assignment_id: String,
+    pub build_id: i64,
+    pub image_ref: String,
+    pub upload_id: i64,
+    /// The submission's stored tree.
+    pub object_key: String,
+    pub tree_hash: String,
+}
+
+pub async fn run_context(pool: &PgPool, run: i64) -> sqlx::Result<Option<RunContext>> {
+    sqlx::query_as!(
+        RunContext,
+        "SELECT g.id AS run_id, s.id AS submission_id, s.assignment_id, b.id AS build_id,
+                b.image_ref, b.upload_id, s.object_key, s.tree_hash
+           FROM grading_runs g
+           JOIN submissions s ON s.id = g.submission_id
+           JOIN assignment_builds b ON b.id = g.build_id
+          WHERE g.id = $1",
+        run
+    )
+    .fetch_optional(pool)
+    .await
 }
 
 /// One grading run by id.
@@ -437,6 +481,23 @@ pub(crate) mod tests {
     }
 
     #[sqlx::test]
+    async fn run_context_joins_submission_and_build(pool: PgPool) -> sqlx::Result<()> {
+        let build = current_build(&pool, "ll", "img-a").await?;
+        let acc = submit(&pool, "ll", "s1", build).await?;
+        let ctx = run_context(&pool, acc.run_id).await?.unwrap();
+        assert_eq!(
+            (ctx.submission_id, ctx.build_id, ctx.assignment_id.as_str()),
+            (acc.submission_id, build, "ll")
+        );
+        assert_eq!(
+            (ctx.image_ref.as_str(), ctx.tree_hash.as_str()),
+            ("reg/a:1", "t")
+        );
+        assert_eq!(run_context(&pool, 999).await?, None);
+        Ok(())
+    }
+
+    #[sqlx::test]
     async fn errors_keep_no_results(pool: PgPool) -> sqlx::Result<()> {
         let build = current_build(&pool, "ll", "img-a").await?;
         let acc = submit(&pool, "ll", "s1", build).await?;
@@ -455,6 +516,18 @@ pub(crate) mod tests {
         assert_eq!(run.results, None);
         assert_eq!(run.problems, problems);
         assert_eq!(run.log_tail.as_deref(), Some("Killed"));
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn abandoned_runs_end_as_errors_once(pool: PgPool) -> sqlx::Result<()> {
+        let build = current_build(&pool, "ll", "img-a").await?;
+        let acc = submit(&pool, "ll", "s1", build).await?;
+        assert!(abandon_run(&pool, acc.run_id, "couldn't start: no plan").await?);
+        assert!(!abandon_run(&pool, acc.run_id, "again").await?);
+        let run = get_run(&pool, acc.run_id).await?.unwrap();
+        assert_eq!(run.status, RunStatus::Error);
+        assert_eq!(run.error.as_deref(), Some("couldn't start: no plan"));
         Ok(())
     }
 

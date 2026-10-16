@@ -4,12 +4,14 @@
 //! Startup (prod) runs one dispatch pass over the pinned recipes, then idles
 //! serving the rebuild endpoint. Dev waits for the endpoint (live checkout).
 
+mod admission;
 mod archive;
 mod assignments;
 mod config;
 mod dispatch;
 mod egress;
 mod fetch;
+mod grading;
 mod http;
 mod intake;
 mod state;
@@ -86,6 +88,7 @@ async fn serve() -> anyhow::Result<()> {
         objects,
         config: Arc::new(config),
         dispatch_lock: Arc::new(Mutex::new(())),
+        plans: Arc::default(),
     };
 
     // prod builds the pinned recipes at startup; dev waits for the endpoint
@@ -112,6 +115,10 @@ async fn serve() -> anyhow::Result<()> {
             tracing::error!(error = %e, "assignment reconcile failed");
         }
     });
+    if let Err(e) = grading::reconcile(&state).await {
+        tracing::error!(error = %e, "grading reconcile failed");
+    }
+    admission::spawn(&state);
 
     let addr = state.config.listen_addr.clone();
     let listener = TcpListener::bind(&addr).await?;

@@ -116,7 +116,12 @@ pub fn submission_key(assignment_id: &str, tree_hash: &str) -> String {
     format!("submissions/{assignment_id}/{tree_hash}.tgz")
 }
 
-/// Object key a run uploads its `results.yaml` to.
+/// Object key a grading run uploads its `results.yaml` to.
+pub fn grading_results_key(run_id: i64) -> String {
+    format!("results/grading/{run_id}/results.yaml")
+}
+
+/// Object key a validation run (by build id) uploads its `results.yaml` to.
 pub fn results_key(run_id: i64) -> String {
     format!("results/{run_id}/results.yaml")
 }

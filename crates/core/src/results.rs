@@ -6,6 +6,9 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+/// How helpers mark a test file that failed to load: `<file>::<collection>`.
+pub const COLLECTION_SUFFIX: &str = "::<collection>";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Results {
@@ -224,6 +227,15 @@ impl Results {
             ));
         }
         problems
+    }
+
+    /// Entries the helper reports for test files that couldn't be loaded at
+    /// all (e.g. the submission doesn't import), so their tests never ran.
+    pub fn collection_errors(&self) -> Vec<&TestResult> {
+        self.tests
+            .iter()
+            .filter(|t| t.node.ends_with(COLLECTION_SUFFIX))
+            .collect()
     }
 
     /// Tests whose outcome with the reference solution contradicts their
@@ -521,6 +533,14 @@ visibility:
         let mut r = with_rubric_tests();
         r.summary.total = 30.0;
         assert_eq!(r.problems().len(), 1, "{:?}", r.problems());
+    }
+
+    #[test]
+    fn collection_errors_are_found_by_their_node() {
+        let mut r = with_rubric_tests();
+        assert!(r.collection_errors().is_empty());
+        r.tests[0].node = "test_ll.py::<collection>".into();
+        assert_eq!(r.collection_errors().len(), 1);
     }
 
     #[test]

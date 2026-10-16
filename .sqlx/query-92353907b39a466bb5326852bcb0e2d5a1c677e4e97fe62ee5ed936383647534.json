@@ -1,0 +1,112 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT g.id AS run_id, s.id AS submission_id, s.assignment_id, b.id AS build_id,\n                b.image_ref, b.upload_id, s.object_key, s.tree_hash\n           FROM grading_runs g\n           JOIN submissions s ON s.id = g.submission_id\n           JOIN assignment_builds b ON b.id = g.build_id\n          WHERE g.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "run_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grading_runs",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "submission_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "assignment_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "assignment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "build_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "image_ref",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "image_ref"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "upload_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "upload_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "object_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "object_key"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "tree_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "tree_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "92353907b39a466bb5326852bcb0e2d5a1c677e4e97fe62ee5ed936383647534"
+}
