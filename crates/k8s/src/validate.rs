@@ -20,7 +20,9 @@ use k8s_openapi::api::networking::v1::{
     NetworkPolicySpec,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
+    LabelSelector, LabelSelectorRequirement, ObjectMeta, OwnerReference,
+};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::api::{Patch, PatchParams};
 
@@ -33,6 +35,12 @@ const APP_LABEL: &str = "pedagog-assignment-validate";
 const RUN_TESTS: &str = "/pedagog/bin/run-tests";
 const SOLUTION_DIR: &str = "/pedagog/solution";
 const TTL_SECONDS: i32 = 3600;
+/// Always up, in the pod range, and blocked in every network mode
+/// (`validate-base` allows DNS only on port 53): until a connection to it
+/// fails, the pod's policies aren't in force yet.
+pub const EGRESS_PROBE: &str = "kube-dns.kube-system.svc:9153";
+/// How long a test-run pod waits for its policies before failing.
+const EGRESS_WAIT_SECONDS: u32 = 30;
 /// What the launcher needs: drop to grader/runner (SETUID, SETGID), copy the
 /// grader-only solution and hand it to runner (DAC_OVERRIDE, CHOWN, FOWNER),
 /// and kill runner's leftover processes (KILL).
@@ -67,6 +75,8 @@ impl Egress {
 #[derive(Clone, Debug)]
 pub struct ValidationRequest {
     pub image: String,
+    /// Runs the `await-egress` initContainer.
+    pub jobs_image: String,
     /// Presigned PUT for results.yaml.
     pub results_url: String,
     /// `process` or `in-process`.
@@ -125,6 +135,7 @@ pub(crate) fn validation_job(name: &str, req: &ValidationRequest) -> Job {
         ..Default::default()
     };
     let pod = PodSpec {
+        init_containers: Some(vec![await_egress(&req.jobs_image)]),
         containers: vec![container],
         restart_policy: Some("Never".into()),
         automount_service_account_token: Some(false),
@@ -150,6 +161,58 @@ pub(crate) fn validation_job(name: &str, req: &ValidationRequest) -> Job {
             },
             ..Default::default()
         }),
+        ..Default::default()
+    }
+}
+
+/// Blocks until the pod's network policies are in force (they apply a few
+/// seconds after a pod starts), so test code never runs with open egress.
+pub(crate) fn await_egress(jobs_image: &str) -> Container {
+    let tiny = BTreeMap::from([
+        ("cpu".to_string(), Quantity("50m".into())),
+        ("memory".to_string(), Quantity("32Mi".into())),
+    ]);
+    Container {
+        name: "await-egress".into(),
+        image: Some(jobs_image.to_string()),
+        image_pull_policy: Some("IfNotPresent".into()),
+        // The jobs image's entrypoint is the jobs binary.
+        args: Some(vec![
+            "await-egress".into(),
+            EGRESS_PROBE.into(),
+            EGRESS_WAIT_SECONDS.to_string(),
+        ]),
+        resources: Some(ResourceRequirements {
+            requests: Some(tiny.clone()),
+            limits: Some(tiny),
+            ..Default::default()
+        }),
+        security_context: Some(SecurityContext {
+            run_as_non_root: Some(true),
+            run_as_user: Some(65534),
+            allow_privilege_escalation: Some(false),
+            capabilities: Some(Capabilities {
+                drop: Some(vec!["ALL".into()]),
+                ..Default::default()
+            }),
+            seccomp_profile: Some(SeccompProfile {
+                type_: "RuntimeDefault".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// Every pod carrying `key`, whatever its value.
+fn has_label(key: &str) -> LabelSelector {
+    LabelSelector {
+        match_expressions: Some(vec![LabelSelectorRequirement {
+            key: key.to_string(),
+            operator: "Exists".into(),
+            values: None,
+        }]),
         ..Default::default()
     }
 }
@@ -204,9 +267,10 @@ const PRIVATE_CIDRS: [&str; 7] = [
     "fe80::/10",
 ];
 
-/// The policies every validation pod gets, selected by label: `validate-base`
-/// (DNS and Garage, no ingress) and `validate-internet` (public addresses
-/// only, minus `blocked_cidrs`) for pods labeled `allow`.
+/// The policies every test-run pod (validation, grading) gets, selected by its
+/// network label: `validate-base` (DNS and Garage, no ingress) and
+/// `validate-internet` (public addresses only, minus `blocked_cidrs`) for pods
+/// labeled `allow`.
 pub fn base_policies(blocked_cidrs: &[String]) -> Vec<NetworkPolicy> {
     let dns = NetworkPolicyEgressRule {
         to: Some(vec![NetworkPolicyPeer {
@@ -240,14 +304,10 @@ pub fn base_policies(blocked_cidrs: &[String]) -> Vec<NetworkPolicy> {
         ports: None,
     };
     vec![
-        policy(
-            "validate-base",
-            selector(&[(ROLE_LABEL, ROLE)]),
-            vec![dns, garage],
-        ),
+        policy("validate-base", has_label(NETWORK_LABEL), vec![dns, garage]),
         policy(
             "validate-internet",
-            selector(&[(ROLE_LABEL, ROLE), (NETWORK_LABEL, "allow")]),
+            selector(&[(NETWORK_LABEL, "allow")]),
             vec![internet],
         ),
     ]
@@ -309,10 +369,19 @@ impl Builder {
         req: &ValidationRequest,
     ) -> kube::Result<Outcome> {
         let name = key.name();
-        if self.client.jobs().get_opt(&name).await?.is_some() {
+        if self
+            .client_for(key.kind)
+            .jobs()
+            .get_opt(&name)
+            .await?
+            .is_some()
+        {
             return Ok(Outcome::Skipped);
         }
-        let Some(created) = self.create_job(&validation_job(&name, req)).await? else {
+        let Some(created) = self
+            .create_job(key.kind, &validation_job(&name, req))
+            .await?
+        else {
             return Ok(Outcome::Skipped);
         };
         if let Egress::Cidrs(cidrs) = &req.egress {
@@ -333,7 +402,7 @@ impl Builder {
 
     async fn apply_policy(&self, policy: &NetworkPolicy) -> kube::Result<()> {
         let name = policy.metadata.name.clone().unwrap_or_default();
-        self.client
+        self.runs
             .network_policies()
             .patch(
                 &name,
@@ -352,6 +421,7 @@ mod tests {
     fn request(egress: Egress) -> ValidationRequest {
         ValidationRequest {
             image: "reg:5000/pedagog/assignments/ll:abc".into(),
+            jobs_image: "localhost/pedagog/jobs:dev".into(),
             results_url: "http://garage/results?sig".into(),
             isolation: "process".into(),
             egress,
@@ -385,6 +455,15 @@ mod tests {
             ]
         );
         assert_eq!(c.env.clone().unwrap()[0].name, "PEDAGOG_RESULTS_URL");
+        let init = &pod.init_containers.clone().unwrap()[0];
+        assert_eq!(init.image.as_deref(), Some("localhost/pedagog/jobs:dev"));
+        assert_eq!(
+            init.args.clone().unwrap(),
+            ["await-egress", EGRESS_PROBE, "30"]
+        );
+        let init_sc = init.security_context.clone().unwrap();
+        assert_eq!(init_sc.run_as_non_root, Some(true));
+        assert!(init_sc.capabilities.unwrap().add.is_none());
         let sc = c.security_context.clone().unwrap();
         assert_eq!(sc.run_as_user, Some(0));
         assert_eq!(sc.allow_privilege_escalation, Some(false));
@@ -419,6 +498,16 @@ mod tests {
         let [base, internet] = base_policies(&blocked).try_into().unwrap();
         let base_spec = base.spec.unwrap();
         assert!(base_spec.ingress.is_none());
+        let selects = base_spec
+            .pod_selector
+            .clone()
+            .unwrap()
+            .match_expressions
+            .unwrap();
+        assert_eq!(
+            (selects[0].key.as_str(), selects[0].operator.as_str()),
+            (NETWORK_LABEL, "Exists")
+        );
         assert_eq!(base_spec.egress.unwrap().len(), 2, "DNS and Garage");
         let rules = internet.spec.unwrap().egress.unwrap();
         let peers = rules[0].to.clone().unwrap();

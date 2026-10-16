@@ -1,0 +1,16 @@
+# Defaults for any container without resources, so the ResourceQuota applies
+# to every pod (jobs sets explicit resources on its own containers).
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: grading-defaults
+  namespace: pedagog-grading
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      default:
+        cpu: 500m
+        memory: 256Mi

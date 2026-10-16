@@ -18,6 +18,9 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: pedagog-builds
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: pedagog-grading
       ports:
         - protocol: TCP
           port: 3900

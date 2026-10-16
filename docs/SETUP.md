@@ -352,14 +352,19 @@ suit a small cluster. Set these on the `pedagog-jobs` Deployment when they don't
 | `PEDAGOG_ASSIGNMENT_BUILD_DEADLINE` | `1800` | Seconds |
 | `PEDAGOG_VALIDATION_DEADLINE` | `600` | Seconds |
 | `PEDAGOG_VALIDATION_CPU` / `_MEMORY` | `1` / `1Gi` | Per validation pod |
+| `PEDAGOG_RUN_NAMESPACE` | `pedagog-grading` | Where validation and grading pods run |
 | `PEDAGOG_MAX_UPLOAD_BYTES` / `PEDAGOG_MAX_UNPACKED_BYTES` / `PEDAGOG_MAX_UPLOAD_FILES` | 50 MiB / 200 MiB / 10 000 | Upload limits |
 
-- **Pod Security:** validation pods start as root with a few added capabilities (see
-  ARCHITECTURE.md, Assignment Uploads), which fits the `baseline` profile. If you label
-  `pedagog-builds` for Pod Security, use `baseline`; `restricted` would refuse them.
-- **Network policies:** `jobs` installs the validation policies itself at startup (RBAC
-  in `deploy/base/jobs/rbac.yaml`); the cluster's CNI must enforce NetworkPolicy (k3s
-  does).
+- **Test-run namespace:** validation (and grading) pods run in `pedagog-grading`, with
+  their own quota (`deploy/base/grading/resource-quota.yaml`: three 1-CPU runs at once by
+  default; raise it with your nodes). They start as root with a few added capabilities
+  (see ARCHITECTURE.md, Assignment Uploads), so the namespace enforces Pod Security
+  `baseline`; `restricted` would refuse them.
+- **Network policies:** `jobs` installs the test-run policies in `pedagog-grading` itself
+  at startup (RBAC in `deploy/base/grading/rbac.yaml`); the cluster's CNI must enforce
+  NetworkPolicy (k3s does). Each run waits until its policies are in force before
+  starting (`await-egress`, which probes CoreDNS on port 9153: keep the CoreDNS metrics
+  port enabled, as k3s does by default).
 - **Registry pulls:** validation pods pull the built image by its in-cluster name
   (`registry-service.pedagog-data.svc:5000/...`) through each node's containerd, which
   can't resolve cluster DNS. Add that name to each node's

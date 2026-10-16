@@ -206,6 +206,7 @@ async fn run(state: &AppState, build_id: i64, plan: &Plan, from: Resume) -> anyh
             .await?;
         let request = ValidationRequest {
             image: image_ref,
+            jobs_image: state.config.jobs_image.clone(),
             results_url: results_url.to_string(),
             isolation: plan.isolation.clone(),
             egress: plan.egress.clone(),
