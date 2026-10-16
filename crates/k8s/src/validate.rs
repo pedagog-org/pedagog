@@ -82,8 +82,8 @@ pub struct ValidationRequest {
     /// The build being validated.
     pub build_id: i64,
     pub image: String,
-    /// Runs the `await-egress` initContainer.
-    pub jobs_image: String,
+    /// Runs the `await-egress` initContainer (`pedagog/jobs-init`).
+    pub init_image: String,
     /// Presigned PUT for results.yaml.
     pub results_url: String,
     /// `process` or `in-process`.
@@ -103,7 +103,7 @@ pub(crate) fn validation_job(name: &str, req: &ValidationRequest) -> Job {
             run_id: req.build_id,
             container: "validate",
             image: &req.image,
-            jobs_image: &req.jobs_image,
+            init_image: &req.init_image,
             code: SOLUTION_DIR,
             fetch: None,
             isolation: &req.isolation,
@@ -123,7 +123,7 @@ pub(crate) struct TestRun<'a> {
     pub run_id: i64,
     pub container: &'a str,
     pub image: &'a str,
-    pub jobs_image: &'a str,
+    pub init_image: &'a str,
     /// The code under test, as `run-tests --code` sees it.
     pub code: &'a str,
     /// `(presigned GET, tree hash)` of an archive fetched into `code` first.
@@ -149,7 +149,7 @@ pub(crate) fn test_run_job(name: &str, run: &TestRun<'_>) -> Job {
         ("cpu".to_string(), Quantity(run.cpu.to_string())),
         ("memory".to_string(), Quantity(run.memory.to_string())),
     ]);
-    let mut init = vec![await_egress(run.jobs_image)];
+    let mut init = vec![await_egress(run.init_image)];
     let mut volumes = Vec::new();
     let mut mounts = Vec::new();
     if let Some((url, tree)) = run.fetch {
@@ -166,7 +166,7 @@ pub(crate) fn test_run_job(name: &str, run: &TestRun<'_>) -> Job {
         });
         init.push(Container {
             name: "fetch-context".into(),
-            image: Some(run.jobs_image.to_string()),
+            image: Some(run.init_image.to_string()),
             image_pull_policy: Some("IfNotPresent".into()),
             args: Some(vec![
                 "fetch-context".into(),
@@ -288,9 +288,9 @@ fn helper_container(name: &str) -> Container {
 
 /// Blocks until the pod's network policies are in force (they apply a few
 /// seconds after a pod starts), so test code never runs with open egress.
-pub(crate) fn await_egress(jobs_image: &str) -> Container {
+pub(crate) fn await_egress(init_image: &str) -> Container {
     Container {
-        image: Some(jobs_image.to_string()),
+        image: Some(init_image.to_string()),
         image_pull_policy: Some("IfNotPresent".into()),
         // The jobs image's entrypoint is the jobs binary.
         args: Some(vec![
@@ -519,7 +519,7 @@ mod tests {
         ValidationRequest {
             build_id: 7,
             image: "reg:5000/pedagog/assignments/ll:abc".into(),
-            jobs_image: "localhost/pedagog/jobs:dev".into(),
+            init_image: "localhost/pedagog/jobs-init:dev".into(),
             results_url: "http://garage/results?sig".into(),
             isolation: "process".into(),
             egress,
@@ -554,7 +554,10 @@ mod tests {
         );
         assert_eq!(c.env.clone().unwrap()[0].name, "PEDAGOG_RESULTS_URL");
         let init = &pod.init_containers.clone().unwrap()[0];
-        assert_eq!(init.image.as_deref(), Some("localhost/pedagog/jobs:dev"));
+        assert_eq!(
+            init.image.as_deref(),
+            Some("localhost/pedagog/jobs-init:dev")
+        );
         assert_eq!(
             init.args.clone().unwrap(),
             ["await-egress", EGRESS_PROBE, "30"]

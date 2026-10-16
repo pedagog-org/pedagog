@@ -61,7 +61,7 @@ pub async fn launch(state: &AppState, conn: &mut PgConnection, run: i64) -> Resu
     let request = GradingRequest {
         run_id: run,
         image: ctx.image_ref,
-        jobs_image: state.config.jobs_image.clone(),
+        init_image: state.config.init_image.clone(),
         submission_url: submission_url.to_string(),
         tree_hash: ctx.tree_hash,
         results_url: results_url.to_string(),

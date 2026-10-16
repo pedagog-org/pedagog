@@ -46,6 +46,8 @@ pub struct BuildEnv {
     pub kind: Env,
     /// prod: image whose baked recipes the initContainer stages.
     pub jobs_image: String,
+    /// The small image (`pedagog/jobs-init`) that runs `fetch-context`.
+    pub init_image: String,
     /// dev: node path to the recipes checkout mounted straight into kaniko.
     pub recipes_hostpath: Option<String>,
     /// Repository for Kaniko's layer cache (e.g. `<registry>/pedagog/cache`);
@@ -511,7 +513,7 @@ fn kaniko_job(env: &BuildEnv, name: &str, kind: JobKind, req: &BuildRequest, cm:
             mounts.push(volume_mount("workspace", WORKSPACE, true));
             init.push(Container {
                 name: "fetch-context".into(),
-                image: Some(env.jobs_image.clone()),
+                image: Some(env.init_image.clone()),
                 args: Some(vec![
                     "fetch-context".into(),
                     url.clone(),
@@ -629,6 +631,7 @@ mod tests {
         BuildEnv {
             kind: Env::Dev,
             jobs_image: "unused".into(),
+            init_image: "unused-init".into(),
             recipes_hostpath: Some("/srv/recipes".into()),
             cache_repo: None,
         }
@@ -638,6 +641,7 @@ mod tests {
         BuildEnv {
             kind: Env::Prod,
             jobs_image: "registry/pedagog/jobs:1".into(),
+            init_image: "registry/pedagog/jobs-init:1".into(),
             recipes_hostpath: None,
             cache_repo: Some("registry:5000/pedagog/cache".into()),
         }
@@ -808,7 +812,7 @@ mod tests {
             // fetch-context runs last, after prod's recipe staging
             let fetch = init.last().unwrap();
             assert_eq!(fetch.name, "fetch-context");
-            assert_eq!(fetch.image.as_deref(), Some(env.jobs_image.as_str()));
+            assert_eq!(fetch.image.as_deref(), Some(env.init_image.as_str()));
             assert_eq!(
                 fetch.args.clone().unwrap(),
                 [

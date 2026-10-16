@@ -104,6 +104,11 @@ pub struct VendArgs {
     #[arg(long, value_name = "DIR", action = clap::ArgAction::Append)]
     pub recipes: Vec<PathBuf>,
 
+    /// Afterwards, delete vended files no recipe declares any more (e.g.
+    /// after a recipe was renamed). Not with a filter.
+    #[arg(long, conflicts_with_all = ["os", "platform", "toolchain", "assignment"])]
+    pub prune: bool,
+
     /// Suppress non-fatal warnings.
     #[arg(short = 'q', long)]
     pub quiet: bool,
