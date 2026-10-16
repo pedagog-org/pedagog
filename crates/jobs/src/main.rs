@@ -26,7 +26,6 @@ use pedagog_k8s::build::Builder;
 use pedagog_store::db;
 use pedagog_store::objects::Objects;
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
 use crate::config::Config;
@@ -88,7 +87,6 @@ async fn serve() -> anyhow::Result<()> {
         builder,
         objects,
         config: Arc::new(config),
-        dispatch_lock: Arc::new(Mutex::new(())),
     };
 
     // prod builds the pinned recipes at startup; dev waits for the endpoint

@@ -10,8 +10,8 @@ use std::time::Duration;
 use pedagog_core::results::Results;
 use pedagog_k8s::build::{BuildRequest, Context, IfBuilt, JobKey, JobState, Waited};
 use pedagog_k8s::validate::ValidationRequest;
-use pedagog_store::db::assignments as db;
 use pedagog_store::db::queue;
+use pedagog_store::db::{self as store_db, assignments as db};
 use pedagog_store::objects::results_key;
 use pedagog_store::{AssignmentBuild, AssignmentBuildStatus, AssignmentUpload, ValidationStatus};
 use serde::Serialize;
@@ -73,20 +73,24 @@ pub enum Decision {
 }
 
 pub async fn dispatch(state: &AppState, plan: Plan) -> anyhow::Result<Decision> {
-    let _guard = state.dispatch_lock.lock().await;
     let id = &plan.assignment_id;
+    // One dispatch decision per assignment at a time, across replicas. The
+    // decision's queries run on the lock's own connection, so concurrent
+    // dispatches can't exhaust the pool waiting for a second one.
+    let mut tx = state.pool.begin().await?;
+    store_db::lock(&mut tx, &format!("dispatch:{id}")).await?;
     let image_hash = plan.image_hash();
     if !plan.force
-        && let Some(build_id) = db::usable_build_for(&state.pool, id, &image_hash).await?
+        && let Some(build_id) = db::usable_build_for(&mut *tx, id, &image_hash).await?
     {
         return Ok(Decision::AlreadyBuilt { build_id });
     }
-    if let Some(running) = db::in_flight_for(&state.pool, id).await? {
-        supersede(state, &running).await?;
+    if let Some(running) = db::in_flight_for(&mut *tx, id).await? {
+        supersede(state, &mut tx, &running).await?;
     }
     let image_ref = plan.image_ref(&state.config.registry);
     let build_id = db::start_build(
-        &state.pool,
+        &mut *tx,
         id,
         plan.upload_id,
         &image_hash,
@@ -94,13 +98,18 @@ pub async fn dispatch(state: &AppState, plan: Plan) -> anyhow::Result<Decision> 
         &plan.settings.to_stored()?,
     )
     .await?;
+    tx.commit().await?;
     tracing::info!(assignment = %id, build = build_id, image = %image_ref, "build dispatched");
     spawn(state, build_id, plan, Resume::Build);
     Ok(Decision::Dispatched { build_id })
 }
 
 /// Latest upload wins: stop the older attempt's Jobs and mark it superseded.
-async fn supersede(state: &AppState, running: &AssignmentBuild) -> anyhow::Result<()> {
+async fn supersede(
+    state: &AppState,
+    conn: &mut PgConnection,
+    running: &AssignmentBuild,
+) -> anyhow::Result<()> {
     let id = &running.assignment_id;
     for key in [
         JobKey::assignment(id, &running.image_hash),
@@ -110,7 +119,7 @@ async fn supersede(state: &AppState, running: &AssignmentBuild) -> anyhow::Resul
             tracing::warn!(build = running.id, error = %e, "deleting a superseded Job failed");
         }
     }
-    db::supersede(&state.pool, running.id).await?;
+    db::supersede(conn, running.id).await?;
     tracing::info!(assignment = %id, build = running.id, "superseded");
     Ok(())
 }

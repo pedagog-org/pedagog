@@ -5,7 +5,6 @@ use std::sync::Arc;
 use pedagog_k8s::build::Builder;
 use pedagog_store::objects::Objects;
 use sqlx::PgPool;
-use tokio::sync::Mutex;
 
 use crate::config::Config;
 
@@ -15,7 +14,4 @@ pub struct AppState {
     pub builder: Arc<Builder>,
     pub objects: Objects,
     pub config: Arc<Config>,
-    /// Serializes the *dispatch decision* (detect → ensure → start_run); released
-    /// before builds are awaited, so overlapping triggers don't block on builds.
-    pub dispatch_lock: Arc<Mutex<()>>,
 }

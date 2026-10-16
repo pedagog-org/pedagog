@@ -63,8 +63,8 @@ pub async fn record_upload(
 
 /// The latest attempt for this image hash that succeeded with a usable
 /// validation (passed or skipped): an upload that needs no rebuild.
-pub async fn usable_build_for(
-    pool: &PgPool,
+pub async fn usable_build_for<'e>(
+    db: impl sqlx::PgExecutor<'e>,
     assignment_id: &str,
     image_hash: &str,
 ) -> sqlx::Result<Option<i64>> {
@@ -77,7 +77,7 @@ pub async fn usable_build_for(
         assignment_id,
         image_hash
     )
-    .fetch_optional(pool)
+    .fetch_optional(db)
     .await?;
     Ok(row.map(|r| r.id))
 }
@@ -87,8 +87,8 @@ pub async fn usable_build_for(
 ///
 /// Fails with a unique violation if the assignment already has an attempt in
 /// flight; supersede it first.
-pub async fn start_build(
-    pool: &PgPool,
+pub async fn start_build<'e>(
+    db: impl sqlx::PgExecutor<'e>,
     assignment_id: &str,
     upload_id: i64,
     image_hash: &str,
@@ -111,7 +111,7 @@ pub async fn start_build(
         settings.egress,
         settings.submission
     )
-    .fetch_one(pool)
+    .fetch_one(db)
     .await?;
     Ok(row.id)
 }
@@ -306,8 +306,9 @@ pub async fn request_regrade(pool: &PgPool, build: i64, notify: Notify) -> sqlx:
 /// Cancel an in-flight attempt because a newer upload replaces it, dropping
 /// its validation from the queue if it's waiting there. Returns false if it
 /// had already finished.
-pub async fn supersede(pool: &PgPool, build: i64) -> sqlx::Result<bool> {
-    let mut tx = pool.begin().await?;
+pub async fn supersede(conn: &mut sqlx::PgConnection, build: i64) -> sqlx::Result<bool> {
+    // A savepoint when the caller is already in a transaction.
+    let mut tx = sqlx::Connection::begin(conn).await?;
     let done = sqlx::query!(
         "UPDATE assignment_builds SET build_status = $2, finished_at = now()
           WHERE id = $1 AND finished_at IS NULL",
@@ -327,8 +328,8 @@ pub async fn supersede(pool: &PgPool, build: i64) -> sqlx::Result<bool> {
 }
 
 /// The assignment's attempt in flight, if any.
-pub async fn in_flight_for(
-    pool: &PgPool,
+pub async fn in_flight_for<'e>(
+    db: impl sqlx::PgExecutor<'e>,
     assignment_id: &str,
 ) -> sqlx::Result<Option<AssignmentBuild>> {
     sqlx::query_as!(
@@ -341,7 +342,7 @@ pub async fn in_flight_for(
             WHERE assignment_id = $1 AND finished_at IS NULL"#,
         assignment_id
     )
-    .fetch_optional(pool)
+    .fetch_optional(db)
     .await?
     .map(AssignmentBuild::try_from)
     .transpose()
@@ -639,8 +640,11 @@ mod tests {
             .is_err()
         );
 
-        assert!(supersede(&pool, first).await?);
-        assert!(!supersede(&pool, first).await?, "already finished");
+        assert!(supersede(&mut *pool.acquire().await?, first).await?);
+        assert!(
+            !supersede(&mut *pool.acquire().await?, first).await?,
+            "already finished"
+        );
         // The superseded attempt's late Job can't overwrite it.
         assert!(!finish_build(&pool, first, true, None).await?);
         assert!(!start_validation(&pool, first).await?);
@@ -752,7 +756,7 @@ mod tests {
         request_regrade(&pool, superseded, Notify::Always).await?;
         finish_build(&pool, superseded, true, None).await?;
         enqueue_validation(&pool, superseded).await?;
-        assert!(supersede(&pool, superseded).await?);
+        assert!(supersede(&mut *pool.acquire().await?, superseded).await?);
         assert_eq!(
             position(&pool, QueuedRun::Validation(superseded)).await?,
             None,

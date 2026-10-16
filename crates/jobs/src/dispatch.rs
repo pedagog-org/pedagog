@@ -37,7 +37,11 @@ pub async fn dispatch(
     force: bool,
     only: Option<&str>,
 ) -> anyhow::Result<Dispatched> {
-    let _guard = state.dispatch_lock.lock().await;
+    // One OS dispatch pass at a time, across replicas; held until `_lock`
+    // drops at the end (a rollback: nothing is written through it). Only one
+    // pass holds it, so its queries borrowing other connections can't starve.
+    let mut _lock = state.pool.begin().await?;
+    db::lock(&mut _lock, "dispatch:os").await?;
 
     // 1. reconcile still-running rows as concurrent adopt tasks (completion-order)
     for run in db::builds::running(&state.pool).await? {
