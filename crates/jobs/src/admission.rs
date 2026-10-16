@@ -18,6 +18,7 @@ use std::time::Duration;
 use pedagog_k8s::{KubeError, is_refusal};
 use pedagog_store::QueuedRun;
 use pedagog_store::db::queue;
+use sqlx::postgres::PgListener;
 
 use crate::assignments;
 use crate::grading;
@@ -57,9 +58,15 @@ impl Launch {
     }
 }
 
-/// The release loop; runs for the life of the service.
+/// The release loop; runs for the life of the service. Besides its tick, it
+/// wakes when a run is queued or a test run ends (`queue::WAKE_CHANNEL`).
 pub async fn run(state: AppState) {
+    let mut wakes = None;
     loop {
+        if wakes.is_none() {
+            // (Re)connect: at startup, and after the listener failed.
+            wakes = listen(&state).await;
+        }
         let pause = match release_once(&state).await {
             // Released one: the next may fit as soon as its pod is placed.
             Ok(Some(_)) => RECHECK,
@@ -69,7 +76,36 @@ pub async fn run(state: AppState) {
                 TICK
             }
         };
-        tokio::time::sleep(pause).await;
+        match wakes.as_mut() {
+            Some(listener) => {
+                tokio::select! {
+                    () = tokio::time::sleep(pause) => {}
+                    woke = listener.recv() => {
+                        if let Err(e) = woke {
+                            tracing::warn!(error = %e, "admission's wake-ups failed; reconnecting");
+                            wakes = None;
+                        }
+                    }
+                }
+            }
+            None => tokio::time::sleep(pause).await,
+        }
+    }
+}
+
+/// A listener on the wake channel, or `None` (tick only) if it can't connect.
+async fn listen(state: &AppState) -> Option<PgListener> {
+    let connected = async {
+        let mut listener = PgListener::connect_with(&state.pool).await?;
+        listener.listen(queue::WAKE_CHANNEL).await?;
+        Ok::<_, sqlx::Error>(listener)
+    };
+    match connected.await {
+        Ok(listener) => Some(listener),
+        Err(e) => {
+            tracing::warn!(error = %e, "can't listen for admission wake-ups; ticking only");
+            None
+        }
     }
 }
 

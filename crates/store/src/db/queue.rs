@@ -13,6 +13,19 @@ use crate::db::submissions::SUBMISSION_PRIORITY;
 /// Advisory lock key serializing releases across `jobs` replicas.
 const ADMISSION_LOCK: i64 = 0x7065_6461_676f_6701;
 
+/// Notified when the queue gains a run or a test run ends, so admission
+/// doesn't wait for its next tick.
+pub const WAKE_CHANNEL: &str = "pedagog_run_queue";
+
+/// Wake admission (every replica listening). Inside a transaction, the
+/// notification is delivered when it commits.
+pub async fn wake<'e>(db: impl sqlx::PgExecutor<'e>) -> sqlx::Result<()> {
+    sqlx::query!("SELECT pg_notify($1, '')", WAKE_CHANNEL)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 /// Queue a succeeded build's validation. Returns false if the attempt isn't
 /// waiting to validate (finished, superseded, or already queued).
 pub async fn enqueue_validation(pool: &PgPool, build: i64) -> sqlx::Result<bool> {
@@ -36,6 +49,7 @@ pub async fn enqueue_validation(pool: &PgPool, build: i64) -> sqlx::Result<bool>
     )
     .execute(&mut *tx)
     .await?;
+    wake(&mut *tx).await?;
     tx.commit().await?;
     Ok(true)
 }
@@ -197,6 +211,26 @@ mod tests {
                 QueuedRun::Grading(regrade.run_id),
             ]
         );
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn queueing_wakes_listeners_on_commit(pool: PgPool) -> sqlx::Result<()> {
+        let mut listener = sqlx::postgres::PgListener::connect_with(&pool).await?;
+        listener.listen(WAKE_CHANNEL).await?;
+        let build = current_build(&pool, "ll", "img-a").await?;
+        submit(&pool, "ll", "s1", build).await?;
+        let woke = tokio::time::timeout(std::time::Duration::from_secs(5), listener.recv()).await;
+        assert!(woke.is_ok(), "a submission wakes admission");
+
+        let mut tx = pool.begin().await?;
+        wake(&mut *tx).await?;
+        let early =
+            tokio::time::timeout(std::time::Duration::from_millis(200), listener.recv()).await;
+        assert!(early.is_err(), "not before the commit");
+        tx.commit().await?;
+        let woke = tokio::time::timeout(std::time::Duration::from_secs(5), listener.recv()).await;
+        assert!(woke.is_ok(), "delivered on commit");
         Ok(())
     }
 

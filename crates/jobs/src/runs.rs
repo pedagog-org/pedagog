@@ -9,7 +9,7 @@ use std::time::Duration;
 use pedagog_k8s::build::{JobKey, JobState};
 use pedagog_k8s::runs::{RunEnded, RunKind};
 use pedagog_store::ValidationStatus;
-use pedagog_store::db::{assignments as builds_db, submissions as db};
+use pedagog_store::db::{assignments as builds_db, queue, submissions as db};
 
 use crate::assignments;
 use crate::grading;
@@ -34,6 +34,10 @@ async fn settle(state: &AppState, ended: RunEnded) {
     };
     if let Err(e) = settled {
         tracing::warn!(?ended, error = %e, "settling a test run failed; the sweep retries");
+    }
+    // Its slot is free (or about to be): let admission look now.
+    if let Err(e) = queue::wake(&state.pool).await {
+        tracing::warn!(error = %e, "waking admission failed");
     }
 }
 

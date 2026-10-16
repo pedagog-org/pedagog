@@ -73,6 +73,7 @@ pub async fn record_submission(pool: &PgPool, s: &NewSubmission<'_>) -> sqlx::Re
     )
     .execute(&mut *tx)
     .await?;
+    crate::db::queue::wake(&mut *tx).await?;
     tx.commit().await?;
     Ok(Accepted {
         submission_id,

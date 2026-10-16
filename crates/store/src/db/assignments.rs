@@ -280,6 +280,7 @@ async fn queue_regrades(
     )
     .execute(&mut *tx)
     .await?;
+    crate::db::queue::wake(&mut *tx).await?;
     sqlx::query!(
         "UPDATE regrade_batches SET runs = $2 WHERE id = $1",
         batch,
