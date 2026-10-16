@@ -24,12 +24,26 @@ HAMMER=target/debug/hammer
 upload() { "$HAMMER" upload "$1" --jobs-url "$URL" -q "${@:2}" 2>&1; }
 build_id() { grep -oE "build [0-9]+" | head -1 | grep -oE "[0-9]+"; }
 
-k -n "$NS" port-forward svc/pedagog-jobs "$PORT:8080" >/dev/null 2>&1 &
-PF=$!
-disown $PF
+# Forward to jobs and wait until it answers (a forward opened during a rollout
+# can attach to a terminating pod and die with it).
+forward() {
+    k -n "$NS" rollout status deploy/pedagog-jobs --timeout=180s >/dev/null
+    for _ in $(seq 1 30); do
+        k -n "$NS" port-forward svc/pedagog-jobs "$PORT:8080" >/dev/null 2>&1 &
+        PF=$!
+        disown $PF
+        for _ in $(seq 1 10); do
+            curl -s -o /dev/null "$URL/" && return 0
+            sleep 0.5
+        done
+        kill $PF 2>/dev/null
+    done
+    echo "cannot reach jobs through a port-forward" >&2
+    exit 1
+}
+forward
 work=$(mktemp -d)
 trap 'kill $PF 2>/dev/null; rm -rf "$work"' EXIT
-sleep 2
 
 echo "== 1. the example builds and validates"
 out=$(upload "$EXAMPLE" --force --wait)
@@ -73,9 +87,7 @@ done
 if [ "$final" = passed ]; then pass "build $second resumed and passed (restarted during '$stage')"; else fail "build ${second:-?} after restart: '$final'"; fi
 # The restart dropped the port-forward.
 kill $PF 2>/dev/null
-k -n "$NS" port-forward svc/pedagog-jobs "$PORT:8080" >/dev/null 2>&1 &
-PF=$!
-disown $PF
+forward
 
 echo "== 6. validation pods can reach Garage but not the internet (mode: deny)"
 k -n "$NS" delete pod e2e-netprobe --ignore-not-found >/dev/null
