@@ -154,6 +154,40 @@ pub enum RunReason {
     Regrade,
 }
 
+/// A person, identified by email.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct User {
+    pub id: i64,
+    pub email: String,
+    pub name: String,
+    pub is_admin: bool,
+}
+
+/// A course offering.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Course {
+    pub id: String,
+    pub name: String,
+}
+
+/// What a user is in a course.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
+pub enum Role {
+    /// An instructor: everything in the course.
+    Staff,
+    /// Enrolled (and not dropped).
+    Student,
+}
+
+/// Where a session was opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
+pub enum SessionKind {
+    Web,
+    Cli,
+}
+
 pub use pedagog_core::changes::Notify;
 pub use pedagog_core::recipe::assignment::Isolation;
 pub use pedagog_core::recipe::platform::PlatformKind;

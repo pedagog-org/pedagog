@@ -39,6 +39,8 @@ sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio",
 strum = "0.26"
 strum_macros = "0.26"
 tar = "0.4"
+# RFC 3339 dates in assignment.yml and the api.
+time = { version = "0.3", features = ["parsing", "formatting", "serde"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

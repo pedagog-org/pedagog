@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO login_codes (email, code_hash, expires_at)\n         VALUES ($1, $2, now() + make_interval(secs => $3))\n         ON CONFLICT (email) DO UPDATE\n           SET code_hash = EXCLUDED.code_hash, attempts = 0, sent_at = now(),\n               expires_at = EXCLUDED.expires_at\n         WHERE login_codes.sent_at <= now() - make_interval(secs => $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "782d958e10645f0f4e72a57dc457d9cb3aaff17e269eba5e45b15d955528fa55"
+}
