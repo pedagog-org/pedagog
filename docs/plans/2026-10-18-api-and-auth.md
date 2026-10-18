@@ -154,6 +154,12 @@ becomes current, like the rest of the upload.
   earlier on release; with no end, only on release. **`after_publish`** opens only on
   release. `hammer results release` / `--undo` (warns that students may already have
   seen them).
+- **Inspecting it:** `hammer visibility show <assignment> --course <c> [--test <id>]
+  [--verbose]` (and `GET …/{a}/visibility`) lists every test from the current
+  build's validation results, with each field's resolved value, the layer that decided
+  it, whether students see it now and why (e.g. "not yet: until the end
+  (2026-09-10T23:59-04:00) or release"); `--verbose` shows every layer's setting for a
+  test. Built on `core`'s `ResultsPolicy::explain` and `Visibility::shown_now`.
 - **What's filtered** for students: scores, outputs, feedback and items per test as
   resolved; the summary counts only what's visible; traces, logs, problems and change
   summaries never. Staff see everything.
@@ -271,7 +277,7 @@ set|clear|show`; `results release [--undo]`, `results list`.
 4. **Assignments through the api** (`feat/api-assignments`): course-scoped `jobs`
    (routes, image names), policy from the current build, upload with the date diff and
    `--take-dates`, submit with the acceptance window and `late`/`staff`, status
-   filtered by visibility, dates / visibility / release commands.
+   filtered by visibility, dates / visibility / release commands, `visibility show`.
 5. **Notices, e2e and docs** (`test/api-e2e`): regrade notices by email; kind-e2e
    through the api (login codes from Mailpit, roles, a closed and a late submission,
    visibility before and after release); ARCHITECTURE (Roles, Courses, Auth, Result
