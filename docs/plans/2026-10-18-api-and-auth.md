@@ -49,9 +49,12 @@ hammer ──token──▶ api (pedagog-system, Traefik + cert-manager TLS)
   deletes the row.
 - **Behind an interface** (`Authenticator`): the email code is the first implementation;
   UF SSO can be added later without touching the rest.
-- **Mail:** SMTP via `lettre` (`PEDAGOG_MAIL=smtp://…`, `PEDAGOG_MAIL_FROM`). On kind
-  and in local dev, a Mailpit container catches every message and shows it in a web
-  inbox (and kind-e2e reads codes from its API).
+- **Mail:** SMTP via `lettre`, to a trusted relay without a login or with one:
+  `PEDAGOG_SMTP_HOST`, `PEDAGOG_SMTP_PORT` (default by TLS mode: 25, 587, 465),
+  `PEDAGOG_SMTP_TLS` (`none` | `starttls` | `tls`), optional `PEDAGOG_SMTP_USER` /
+  `PEDAGOG_SMTP_PASSWORD` (from a Secret), `PEDAGOG_MAIL_FROM`. On kind and in local dev,
+  a Mailpit container catches every message and shows it in a web inbox (and kind-e2e
+  reads codes from its API).
 - **First admin:** `pedagog-api add-admin <email>` (run once, e.g. through `kubectl
   exec`); afterwards admins manage admins through the api.
 
@@ -101,25 +104,26 @@ assignment:
   Effective = the course's value for each field, else the file's.
 - **Re-upload keeps the course's edits and shows the difference at once** (the upload
   reply comes before any build); `hammer upload --take-dates` adopts the file's (clears
-  the course's date edits). Re-uploading only to take dates supersedes the queued
-  build, or builds nothing (below).
+  the course's date edits), superseding the queued build if there is one.
 - **Acceptance:** from `open` until `late_due` (or `due`); submissions after `due` are
   flagged `late`. Penalties are later.
 - Dates without an offset, and orders that don't make sense (`due` before `open`), are
   refused at upload and on `dates set`.
 
-### Policy is not part of the image
+### Policy travels with the build
 
-Today the image hash covers the whole uploaded tree, `assignment.yml` included, so
-changing a date would rebuild and revalidate. Dates, visibility and submission rules
-don't change the image or what validation tests:
+The image hash keeps covering the whole uploaded tree, `assignment.yml` included, so
+an upload that changes only the file's dates or visibility still makes a build
+attempt. Every layer comes from the cache (about 35 s on kind, including validation);
+its policy (file dates, visibility defaults, submission rules) applies when that build
+becomes current, like the rest of the upload.
 
-- The image hash covers the rendered Containerfile, the files baked into the image
-  (starter, tests, solution) and the run settings that change test runs (isolation,
-  egress); not the rest of `assignment.yml`.
-- **Policy** (dates, visibility overrides, submission rules) moves from the build to
-  the assignment, from the latest upload: applied when that upload's build becomes
-  current, or at once when the upload needs no build.
+- Course edits (`hammer dates set`, `visibility set`, `release`) never build: they're
+  a database write and apply at once, so they're the way to move a deadline
+  mid-semester. The upload reply says so when the file's dates differ.
+- Considered and declined in review: leaving policy out of the image hash so file
+  edits apply at once (rules for what counts as policy; a failed build couldn't hold
+  them back), and a separate policy file (two files per assignment).
 
 ### What students see
 
@@ -210,6 +214,9 @@ set|clear|show`; `results release [--undo]`, `results list`.
 - **JWTs:** no lookup per request, but revocation needs a deny list anyway and a leaked
   key forges anyone.
 - **Admins from config (`PEDAGOG_ADMINS`):** changing admins is a redeploy.
+- **Policy outside the image hash, or in its own file:** file dates would apply
+  without a rebuild, but at the cost of rules for what counts as policy, or a second
+  file per assignment; course edits already apply at once.
 - **Intake moved into `api`, or one service:** moves freshly tested code, or puts the
   internet-facing process next to Kubernetes credentials.
 - **Global assignment ids:** every course reusing an assignment would need a new id.
@@ -259,7 +266,7 @@ set|clear|show`; `results release [--undo]`, `results list`.
 3. **Courses, staff and roster** (`feat/courses-roster`): admin and staff endpoints, CSV
    and Canvas import; `hammer admins|courses|roster`.
 4. **Assignments through the api** (`feat/api-assignments`): course-scoped `jobs`
-   (routes, image names), policy outside the image hash, upload with the date diff and
+   (routes, image names), policy from the current build, upload with the date diff and
    `--take-dates`, submit with the acceptance window and `late`/`staff`, status
    filtered by visibility, dates / visibility / release commands.
 5. **Notices, e2e and docs** (`test/api-e2e`): regrade notices by email; kind-e2e
