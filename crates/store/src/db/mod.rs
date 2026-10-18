@@ -48,8 +48,8 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), MigrateError> {
 #[cfg(test)]
 pub(crate) fn test_settings() -> crate::BuildSettings {
     crate::BuildSettings {
-        platform: "upload".into(),
-        isolation: "process".into(),
+        platform: crate::PlatformKind::Upload,
+        isolation: crate::Isolation::Process,
         egress: r#"{"mode":"deny"}"#.into(),
         submission: "{}".into(),
     }

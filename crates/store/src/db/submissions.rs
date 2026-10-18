@@ -9,7 +9,7 @@ use std::str::FromStr;
 
 use sqlx::{PgConnection, PgPool};
 
-use crate::{GradingRun, Notify, RunReason, RunStatus, Submission, SubmissionSource};
+use crate::{GradingRun, Isolation, Notify, RunReason, RunStatus, Submission, SubmissionSource};
 
 /// Queue priority of a submission's first run (validations share it).
 pub const SUBMISSION_PRIORITY: i16 = 0;
@@ -87,7 +87,7 @@ pub async fn start_grading(
     conn: &mut PgConnection,
     run: i64,
     job_name: &str,
-    isolation: &str,
+    isolation: Isolation,
 ) -> sqlx::Result<bool> {
     let done = sqlx::query!(
         "UPDATE grading_runs
@@ -96,7 +96,7 @@ pub async fn start_grading(
         run,
         RunStatus::Grading.to_string(),
         job_name,
-        isolation
+        isolation.to_string()
     )
     .execute(conn)
     .await?;
@@ -379,7 +379,11 @@ impl TryFrom<RunRow> for GradingRun {
             reason: RunReason::from_str(&row.reason).map_err(decode)?,
             regrade_batch_id: row.regrade_batch_id,
             status: RunStatus::from_str(&row.status).map_err(decode)?,
-            isolation: row.isolation,
+            isolation: row
+                .isolation
+                .map(|i| Isolation::from_str(&i))
+                .transpose()
+                .map_err(decode)?,
             job_name: row.job_name,
             score: row.score,
             total: row.total,
@@ -486,8 +490,8 @@ pub(crate) mod tests {
         );
 
         let mut conn = pool.acquire().await?;
-        assert!(start_grading(&mut conn, acc.run_id, "grade-1", "process").await?);
-        assert!(!start_grading(&mut conn, acc.run_id, "grade-1", "process").await?);
+        assert!(start_grading(&mut conn, acc.run_id, "grade-1", Isolation::Process).await?);
+        assert!(!start_grading(&mut conn, acc.run_id, "grade-1", Isolation::Process).await?);
         assert_eq!(grading_in_flight(&pool).await?.len(), 1);
         assert!(finish_run(&pool, acc.run_id, &graded).await?);
         assert!(!finish_run(&pool, acc.run_id, &RunOutcome::default()).await?);
@@ -495,7 +499,7 @@ pub(crate) mod tests {
         let run = get_run(&pool, acc.run_id).await?.unwrap();
         assert_eq!(run.status, RunStatus::Graded);
         assert_eq!((run.score, run.total), (Some(7.5), Some(10.0)));
-        assert_eq!(run.isolation.as_deref(), Some("process"));
+        assert_eq!(run.isolation, Some(Isolation::Process));
         assert!(grading_in_flight(&pool).await?.is_empty());
         Ok(())
     }
@@ -522,7 +526,7 @@ pub(crate) mod tests {
         let build = current_build(&pool, "ll", "img-a").await?;
         let acc = submit(&pool, "ll", "s1", build).await?;
         let mut conn = pool.acquire().await?;
-        start_grading(&mut conn, acc.run_id, "grade-1", "in-process").await?;
+        start_grading(&mut conn, acc.run_id, "grade-1", Isolation::InProcess).await?;
         let problems = vec!["results.yaml is missing".to_string()];
         let outcome = RunOutcome {
             problems: &problems,
@@ -571,7 +575,7 @@ pub(crate) mod tests {
         let build = current_build(&pool, "ll", "img-a").await?;
         let acc = submit(&pool, "ll", "s1", build).await?;
         let mut conn = pool.acquire().await?;
-        start_grading(&mut conn, acc.run_id, "g", "process").await?;
+        start_grading(&mut conn, acc.run_id, "g", Isolation::Process).await?;
         let graded = RunOutcome {
             score: Some((5.0, 10.0)),
             results: Some("{}"),

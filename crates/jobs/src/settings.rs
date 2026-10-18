@@ -3,7 +3,7 @@
 //! instead of re-deriving it from the stored archive. Builds from before it was
 //! saved get it derived once and backfilled.
 
-use pedagog_core::recipe::assignment::AssignmentYaml;
+use pedagog_core::recipe::assignment::{AssignmentYaml, Isolation};
 use pedagog_core::recipe::network::{EgressTarget, NetworkSpec};
 use pedagog_core::recipe::platform::PlatformKind;
 use pedagog_core::recipe::submission::SubmissionRules;
@@ -17,8 +17,7 @@ use crate::state::AppState;
 #[derive(Debug, Clone)]
 pub struct RunSettings {
     pub platform: PlatformKind,
-    /// `process` or `in-process`.
-    pub isolation: String,
+    pub isolation: Isolation,
     pub egress: Egress,
     pub submission: SubmissionRules,
 }
@@ -39,8 +38,8 @@ impl RunSettings {
             isolation: assignment
                 .testing
                 .as_ref()
-                .map(|t| t.isolation.to_string())
-                .unwrap_or_else(|| "process".to_owned()),
+                .map(|t| t.isolation)
+                .unwrap_or_default(),
             egress: egress(&assignment.environment.network),
             submission: assignment.submission.clone(),
         }
@@ -55,8 +54,8 @@ impl RunSettings {
             },
         };
         Ok(BuildSettings {
-            platform: self.platform.as_str().to_owned(),
-            isolation: self.isolation.clone(),
+            platform: self.platform.clone(),
+            isolation: self.isolation,
             egress: serde_json::to_string(&egress)?,
             submission: serde_json::to_string(&self.submission)?,
         })
@@ -69,9 +68,8 @@ impl RunSettings {
             StoredEgress::Cidrs { cidrs } => Egress::Cidrs(cidrs),
         };
         Ok(Self {
-            platform: PlatformKind::try_from(stored.platform.clone())
-                .map_err(anyhow::Error::msg)?,
-            isolation: stored.isolation.clone(),
+            platform: stored.platform.clone(),
+            isolation: stored.isolation,
             egress,
             submission: serde_json::from_str(&stored.submission)?,
         })
@@ -157,7 +155,7 @@ mod tests {
         let settings = RunSettings::of(&a);
         let back = RunSettings::from_stored(&settings.to_stored().unwrap()).unwrap();
         assert_eq!(back.platform, PlatformKind::Upload);
-        assert_eq!(back.isolation, "in-process");
+        assert_eq!(back.isolation, Isolation::InProcess);
         assert_eq!(
             back.egress,
             Egress::Cidrs(vec![("10.20.0.0/16".into(), vec![5432])])
@@ -168,7 +166,7 @@ mod tests {
     #[test]
     fn defaults_are_process_isolation_and_no_egress() {
         let settings = RunSettings::of(&assignment(""));
-        assert_eq!(settings.isolation, "process");
+        assert_eq!(settings.isolation, Isolation::Process);
         assert_eq!(settings.egress, Egress::Deny);
         let stored = settings.to_stored().unwrap();
         assert_eq!(stored.egress, r#"{"mode":"deny"}"#);

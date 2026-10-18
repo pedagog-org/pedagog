@@ -494,7 +494,7 @@ async fn status_of(
             build_id: run.build_id,
             status: run.status.to_string(),
             queue_position,
-            isolation: run.isolation,
+            isolation: run.isolation.map(|i| i.to_string()),
             score: run.score,
             total: run.total,
             problems: run.problems,

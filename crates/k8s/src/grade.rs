@@ -8,6 +8,7 @@ use std::time::Duration;
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::{Pod, ResourceQuota};
 use kube::api::ListParams;
+use pedagog_core::recipe::assignment::Isolation;
 
 use crate::build::{Builder, JobKey, Outcome};
 use crate::validate::{Egress, NETWORK_LABEL, TEST_RUN_LABEL, TestRun, run_policy, test_run_job};
@@ -27,8 +28,7 @@ pub struct GradingRequest {
     pub tree_hash: String,
     /// Presigned PUT for results.yaml.
     pub results_url: String,
-    /// `process` or `in-process`.
-    pub isolation: String,
+    pub isolation: Isolation,
     pub egress: Egress,
     pub deadline: Duration,
     pub cpu: String,
@@ -47,7 +47,7 @@ pub(crate) fn grading_job(name: &str, req: &GradingRequest) -> Job {
             init_image: &req.init_image,
             code: SUBMISSION_DIR,
             fetch: Some((&req.submission_url, &req.tree_hash)),
-            isolation: &req.isolation,
+            isolation: req.isolation,
             results_url: &req.results_url,
             egress: &req.egress,
             deadline: req.deadline,
@@ -227,7 +227,7 @@ mod tests {
             submission_url: "http://garage/submissions/ll/t.tgz?sig".into(),
             tree_hash: "t".into(),
             results_url: "http://garage/results?sig".into(),
-            isolation: "process".into(),
+            isolation: Isolation::Process,
             egress,
             deadline: Duration::from_secs(600),
             cpu: "1".into(),

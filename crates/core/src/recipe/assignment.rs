@@ -125,24 +125,28 @@ impl Testing {
 /// Helper toolchain ids are the framework id with this prefix.
 pub const HELPER_PREFIX: &str = "pedagog-";
 
-/// Whether student code shares the test harness's process.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+/// Whether student code shares the test harness's process. Written
+/// `process` / `in-process` everywhere: YAML, the launcher's flag, the database.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Deserialize,
+    serde::Serialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum Isolation {
     /// Student code runs as `runner` in its own process; tests can't be read from it.
     #[default]
     Process,
     /// Student code runs inside the harness process (faster; can read the tests).
     InProcess,
-}
-
-impl fmt::Display for Isolation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Isolation::Process => "process",
-            Isolation::InProcess => "in-process",
-        })
-    }
 }
 
 #[derive(Debug, Deserialize)]

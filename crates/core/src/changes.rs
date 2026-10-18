@@ -3,6 +3,7 @@
 //! stable id when they declare one, else by their framework node.
 
 use serde::{Deserialize, Serialize};
+use strum_macros::{Display, EnumString};
 
 use crate::results::{Results, Status, TestResult};
 
@@ -31,6 +32,29 @@ pub struct Outcome {
     pub status: Status,
     pub score: f64,
     pub max: f64,
+}
+
+/// When a regrade tells students about their new results.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString, Serialize, Deserialize)]
+#[strum(serialize_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum Notify {
+    /// Never (the default: the instructor may be testing).
+    Never,
+    /// Only if their results changed.
+    Changed,
+    Always,
+}
+
+impl Notify {
+    /// Whether a regrade with these changes tells the student.
+    pub fn tells(self, changes: &Changes) -> bool {
+        match self {
+            Notify::Never => false,
+            Notify::Changed => !changes.is_empty(),
+            Notify::Always => true,
+        }
+    }
 }
 
 impl Changes {
@@ -100,6 +124,22 @@ mod tests {
 
     fn results() -> Results {
         serde_yaml::from_str(FIXTURE).unwrap()
+    }
+
+    #[test]
+    fn notify_round_trips_and_decides() {
+        use std::str::FromStr;
+        for n in [Notify::Never, Notify::Changed, Notify::Always] {
+            assert_eq!(Notify::from_str(&n.to_string()).unwrap(), n);
+        }
+        let none = Changes::default();
+        let some = Changes {
+            added: vec!["t".into()],
+            ..Default::default()
+        };
+        assert!(!Notify::Never.tells(&some));
+        assert!(!Notify::Changed.tells(&none) && Notify::Changed.tells(&some));
+        assert!(Notify::Always.tells(&none));
     }
 
     #[test]

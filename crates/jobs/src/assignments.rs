@@ -468,7 +468,7 @@ mod tests {
             has_solution: true,
             settings: crate::settings::RunSettings {
                 platform: pedagog_core::recipe::platform::PlatformKind::Upload,
-                isolation: "process".into(),
+                isolation: pedagog_core::recipe::assignment::Isolation::Process,
                 egress: pedagog_k8s::validate::Egress::Deny,
                 submission: Default::default(),
             },

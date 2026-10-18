@@ -9,10 +9,10 @@ use pedagog_core::changes::compare;
 use pedagog_core::results::{COLLECTION_SUFFIX, Results};
 use pedagog_k8s::build::JobKey;
 use pedagog_k8s::grade::GradingRequest;
+use pedagog_store::RunStatus;
 use pedagog_store::db::assignments as builds_db;
 use pedagog_store::db::submissions::{self as db, RunOutcome};
 use pedagog_store::objects::grading_results_key;
-use pedagog_store::{Notify, RunStatus};
 use sqlx::PgConnection;
 
 use crate::admission::Launch;
@@ -52,7 +52,7 @@ pub async fn launch(state: &AppState, conn: &mut PgConnection, run: i64) -> Resu
         .presign_put(&grading_results_key(run), limits.deadline + URL_MARGIN)
         .await
         .map_err(Launch::transient)?;
-    if !db::start_grading(&mut *conn, run, &key.name(), &settings.isolation)
+    if !db::start_grading(&mut *conn, run, &key.name(), settings.isolation)
         .await
         .map_err(Launch::transient)?
     {
@@ -137,11 +137,9 @@ async fn regrade_changes(
     let previous = db::previous_graded_run(&state.pool, ctx.submission_id, ctx.run_id).await?;
     let before = parse(previous.as_ref().and_then(|r| r.results.as_deref()));
     let changes = compare(before.as_ref(), parse(results).as_ref());
-    let notify = match db::batch_notify(&state.pool, batch).await? {
-        Some(Notify::Always) => true,
-        Some(Notify::Changed) => !changes.is_empty(),
-        Some(Notify::Never) | None => false,
-    };
+    let notify = db::batch_notify(&state.pool, batch)
+        .await?
+        .is_some_and(|n| n.tells(&changes));
     Ok((serde_json::to_string(&changes).ok(), notify))
 }
 

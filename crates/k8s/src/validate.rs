@@ -25,6 +25,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
 };
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::api::{Patch, PatchParams};
+use pedagog_core::recipe::assignment::Isolation;
 
 use crate::build::{Builder, JobKey, Outcome};
 
@@ -86,8 +87,7 @@ pub struct ValidationRequest {
     pub init_image: String,
     /// Presigned PUT for results.yaml.
     pub results_url: String,
-    /// `process` or `in-process`.
-    pub isolation: String,
+    pub isolation: Isolation,
     pub egress: Egress,
     pub deadline: Duration,
     pub cpu: String,
@@ -106,7 +106,7 @@ pub(crate) fn validation_job(name: &str, req: &ValidationRequest) -> Job {
             init_image: &req.init_image,
             code: SOLUTION_DIR,
             fetch: None,
-            isolation: &req.isolation,
+            isolation: req.isolation,
             results_url: &req.results_url,
             egress: &req.egress,
             deadline: req.deadline,
@@ -128,7 +128,7 @@ pub(crate) struct TestRun<'a> {
     pub code: &'a str,
     /// `(presigned GET, tree hash)` of an archive fetched into `code` first.
     pub fetch: Option<(&'a str, &'a str)>,
-    pub isolation: &'a str,
+    pub isolation: Isolation,
     pub results_url: &'a str,
     pub egress: &'a Egress,
     pub deadline: Duration,
@@ -521,7 +521,7 @@ mod tests {
             image: "reg:5000/pedagog/assignments/ll:abc".into(),
             init_image: "localhost/pedagog/jobs-init:dev".into(),
             results_url: "http://garage/results?sig".into(),
-            isolation: "process".into(),
+            isolation: Isolation::Process,
             egress,
             deadline: Duration::from_secs(600),
             cpu: "1".into(),

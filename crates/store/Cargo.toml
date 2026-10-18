@@ -12,6 +12,7 @@ db = ["dep:sqlx"]
 objects = ["dep:object_store"]
 
 [dependencies]
+pedagog-core = { path = "../core" }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 sqlx = { workspace = true, optional = true }

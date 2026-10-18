@@ -98,13 +98,11 @@ pub struct AssignmentBuild {
     pub settings: Option<BuildSettings>,
 }
 
-/// A build's run settings as stored: `jobs` owns their meaning.
+/// A build's run settings as stored; `jobs` owns what the JSON means.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BuildSettings {
-    /// `workspace` or `upload`.
-    pub platform: String,
-    /// `process` or `in-process`.
-    pub isolation: String,
+    pub platform: PlatformKind,
+    pub isolation: Isolation,
     /// Egress as JSON text.
     pub egress: String,
     /// The parsed `submission:` rules as JSON text.
@@ -156,15 +154,9 @@ pub enum RunReason {
     Regrade,
 }
 
-/// When students hear about a regrade's results.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
-#[strum(serialize_all = "lowercase")]
-pub enum Notify {
-    Never,
-    /// Only if the results changed.
-    Changed,
-    Always,
-}
+pub use pedagog_core::changes::Notify;
+pub use pedagog_core::recipe::assignment::Isolation;
+pub use pedagog_core::recipe::platform::PlatformKind;
 
 /// A `grading_runs` row.
 #[derive(Clone, Debug, PartialEq)]
@@ -175,7 +167,7 @@ pub struct GradingRun {
     pub reason: RunReason,
     pub regrade_batch_id: Option<i64>,
     pub status: RunStatus,
-    pub isolation: Option<String>,
+    pub isolation: Option<Isolation>,
     pub job_name: Option<String>,
     pub score: Option<f64>,
     pub total: Option<f64>,
@@ -246,9 +238,6 @@ mod tests {
             RunStatus::Error,
         ] {
             assert_eq!(RunStatus::from_str(&s.to_string()).unwrap(), s);
-        }
-        for n in [Notify::Never, Notify::Changed, Notify::Always] {
-            assert_eq!(Notify::from_str(&n.to_string()).unwrap(), n);
         }
         assert_eq!(RunReason::Regrade.to_string(), "regrade");
         assert_eq!(SubmissionSource::Workspace.to_string(), "workspace");

@@ -12,8 +12,8 @@ use sqlx::PgPool;
 
 use crate::db::submissions::REGRADE_PRIORITY;
 use crate::{
-    AssignmentBuild, AssignmentBuildStatus, AssignmentUpload, BuildSettings, Notify, RunReason,
-    ValidationStatus,
+    AssignmentBuild, AssignmentBuildStatus, AssignmentUpload, BuildSettings, Isolation, Notify,
+    PlatformKind, RunReason, ValidationStatus,
 };
 
 /// Create the assignment, or update its name.
@@ -106,8 +106,8 @@ pub async fn start_build<'e>(
         image_hash,
         image_ref,
         AssignmentBuildStatus::Running.to_string(),
-        settings.platform,
-        settings.isolation,
+        settings.platform.as_str(),
+        settings.isolation.to_string(),
         settings.egress,
         settings.submission
     )
@@ -155,8 +155,8 @@ pub async fn set_build_settings(
             SET platform = $2, isolation = $3, egress = $4::text::jsonb, submission = $5::text::jsonb
           WHERE id = $1",
         build,
-        settings.platform,
-        settings.isolation,
+        settings.platform.as_str(),
+        settings.isolation.to_string(),
         settings.egress,
         settings.submission
     )
@@ -469,8 +469,9 @@ impl TryFrom<BuildRow> for AssignmentBuild {
             settings: match (row.platform, row.isolation, row.egress, row.submission) {
                 (Some(platform), Some(isolation), Some(egress), Some(submission)) => {
                     Some(BuildSettings {
-                        platform,
-                        isolation,
+                        platform: PlatformKind::try_from(platform)
+                            .map_err(|e| sqlx::Error::Decode(e.into()))?,
+                        isolation: Isolation::from_str(&isolation).map_err(decode)?,
                         egress,
                         submission,
                     })
@@ -786,8 +787,8 @@ mod tests {
         let row = build_by_id(&pool, build).await?.unwrap();
         let settings = row.settings.unwrap();
         assert_eq!(
-            (settings.platform.as_str(), settings.isolation.as_str()),
-            ("upload", "process")
+            (settings.platform, settings.isolation),
+            (PlatformKind::Upload, Isolation::Process)
         );
         assert_eq!(serde_json_like(&settings.egress), r#"{"mode":"deny"}"#);
 
