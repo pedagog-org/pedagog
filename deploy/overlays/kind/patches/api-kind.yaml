@@ -1,0 +1,23 @@
+# kind: mail goes to Mailpit; the api is reached through a port-forward
+# (`just kind-api`), over plain HTTP.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pedagog-api
+  namespace: pedagog-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          env:
+            - name: PEDAGOG_PUBLIC_URL
+              value: http://localhost:18082
+            - name: PEDAGOG_COOKIE_SECURE
+              value: "false"
+            - name: PEDAGOG_SMTP_HOST
+              value: mailpit.pedagog-data.svc
+            - name: PEDAGOG_SMTP_PORT
+              value: "1025"
+            - name: PEDAGOG_MAIL_FROM_ADDRESS
+              value: pedagog@kind.local

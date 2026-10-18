@@ -1,0 +1,18 @@
+# The api image. Build context is the repo root:
+#   podman build -f crates/api/Containerfile -t <ref> .
+# Cache mounts keep crates.io downloads and compiled dependencies between builds.
+
+FROM docker.io/library/rust:1.97.1-bookworm AS build
+WORKDIR /src
+COPY . .
+ENV SQLX_OFFLINE=true
+RUN --mount=type=cache,id=pedagog-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=pedagog-api-target,target=/src/target \
+    cargo build --release --locked -p pedagog-api \
+    && mkdir -p /out && cp target/release/pedagog-api /out/
+
+# Built against Debian 12's glibc, as is this base (with CA certificates for SMTP TLS).
+FROM gcr.io/distroless/cc-debian12:nonroot
+COPY --from=build /out/pedagog-api /usr/local/bin/pedagog-api
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/pedagog-api"]

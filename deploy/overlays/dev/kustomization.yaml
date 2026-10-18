@@ -14,3 +14,6 @@ images:
   - name: pedagog-jobs
     newName: REPLACE-WITH-REGISTRY-IP:5000/pedagog/jobs
     newTag: dev
+  - name: pedagog-api
+    newName: REPLACE-WITH-REGISTRY-IP:5000/pedagog/api
+    newTag: dev

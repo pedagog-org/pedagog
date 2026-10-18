@@ -623,6 +623,12 @@ Default per-test visibility is defined in the test suite source code. The `visib
 
 Students and instructors authenticate via email: the platform sends a short word-phrase to the user's email address. The auth layer is abstracted behind an interface to allow the mechanism to be swapped later (e.g. SSO, OAuth).
 
+- **The api** (`crates/api`, `pedagog-system`, behind Traefik) is the only public entry point; a NetworkPolicy lets only it reach `jobs`, which stays internal.
+- **Login:** `POST /auth/start {email}` mails a three-word code (the EFF short word list; about 2.2 × 10⁹ possibilities) to a known user, and gives everyone the same reply, so it doesn't reveal who's registered. Codes last 10 minutes and die after 5 wrong tries; a new one once a minute per email. `POST /auth/finish {email, code, client}` opens a session.
+- **Sessions:** a random 32-byte token; Postgres stores only its blake3 hash, with the user, kind and expiry. The web gets an `HttpOnly; Secure; SameSite=Lax` cookie (12 h); `hammer login` saves a 30-day token (mode 0600) in `~/.config/pedagog/session.json` and sends it as a bearer token. Logging out deletes the row; expired sessions and codes are swept hourly.
+- **Mail** goes over SMTP to a relay, with or without a login and TLS (`PEDAGOG_SMTP_*`); on kind, Mailpit catches it.
+- **The first admin** is made with `pedagog-api add-admin <email>`; admins manage admins afterwards.
+
 ---
 
 ## Infrastructure

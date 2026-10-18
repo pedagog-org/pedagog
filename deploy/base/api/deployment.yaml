@@ -1,0 +1,72 @@
+# The public api: login, courses, rosters; in front of jobs (internal only).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pedagog-api
+  namespace: pedagog-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pedagog-api
+  template:
+    metadata:
+      labels:
+        app: pedagog-api
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: pedagog-api # overridden per overlay via kustomize images
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: pedagog-api-db
+                  key: url
+            # Overlays set the public URL and the SMTP relay.
+            - name: PEDAGOG_PUBLIC_URL
+              value: https://REPLACE-WITH-HOSTNAME
+            - name: PEDAGOG_SMTP_HOST
+              value: REPLACE-WITH-SMTP-HOST
+            - name: PEDAGOG_SMTP_TLS
+              value: none
+            - name: PEDAGOG_MAIL_FROM_NAME
+              value: Pedagog
+            - name: PEDAGOG_MAIL_FROM_ADDRESS
+              value: REPLACE-WITH-SENDER-ADDRESS
+            # Only if the relay wants a login (the Secret is optional).
+            - name: PEDAGOG_SMTP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: pedagog-api-smtp
+                  key: user
+                  optional: true
+            - name: PEDAGOG_SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pedagog-api-smtp
+                  key: password
+                  optional: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi

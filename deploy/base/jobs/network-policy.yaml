@@ -1,0 +1,24 @@
+# jobs is internal: only the api reaches it over the network. (Operators use
+# kubectl port-forward, which isn't subject to network policies.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pedagog-jobs
+  namespace: pedagog-builds
+spec:
+  podSelector:
+    matchLabels:
+      app: pedagog-jobs
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: pedagog-system
+          podSelector:
+            matchLabels:
+              app: pedagog-api
+      ports:
+        - protocol: TCP
+          port: 8080

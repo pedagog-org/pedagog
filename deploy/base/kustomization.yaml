@@ -27,6 +27,10 @@ resources:
   - jobs/resource-quota.yaml
   - jobs/deployment.yaml
   - jobs/service.yaml
+  - jobs/network-policy.yaml
+  - api/deployment.yaml
+  - api/service.yaml
+  - api/ingress.yaml
   - grading/rbac.yaml
   - grading/limit-range.yaml
   - grading/resource-quota.yaml
