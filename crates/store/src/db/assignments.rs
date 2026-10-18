@@ -16,6 +16,23 @@ use crate::{
     PlatformKind, RunReason, ValidationStatus,
 };
 
+/// `assignment_builds` as [`BuildRow`] reads it: one copy of the column list
+/// for every query, still checked at compile time (sqlx joins `+`-separated
+/// literals).
+macro_rules! select_builds {
+    ($tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query_as!(
+            BuildRow,
+            r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
+                      validation_status, results::text AS "results?", validation_problems,
+                      error, finished_at IS NOT NULL AS "finished!", platform, isolation,
+                      egress::text AS "egress?", submission::text AS "submission?"
+                 FROM assignment_builds "# + $tail
+            $(, $arg)*
+        )
+    };
+}
+
 /// Create the assignment, or update its name.
 pub async fn upsert_assignment(pool: &PgPool, id: &str, name: &str) -> sqlx::Result<()> {
     sqlx::query!(
@@ -181,19 +198,11 @@ pub async fn start_validation<'e>(db: impl sqlx::PgExecutor<'e>, build: i64) -> 
 
 /// One attempt by id, whatever its assignment.
 pub async fn build_by_id(pool: &PgPool, build: i64) -> sqlx::Result<Option<AssignmentBuild>> {
-    sqlx::query_as!(
-        BuildRow,
-        r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
-                  validation_status, results::text AS "results?", validation_problems,
-                  error, finished_at IS NOT NULL AS "finished!", platform, isolation,
-                  egress::text AS "egress?", submission::text AS "submission?"
-             FROM assignment_builds WHERE id = $1"#,
-        build
-    )
-    .fetch_optional(pool)
-    .await?
-    .map(AssignmentBuild::try_from)
-    .transpose()
+    select_builds!("WHERE id = $1", build)
+        .fetch_optional(pool)
+        .await?
+        .map(AssignmentBuild::try_from)
+        .transpose()
 }
 
 /// Record validation's outcome and end the attempt. `results` is the parsed
@@ -333,14 +342,8 @@ pub async fn in_flight_for<'e>(
     db: impl sqlx::PgExecutor<'e>,
     assignment_id: &str,
 ) -> sqlx::Result<Option<AssignmentBuild>> {
-    sqlx::query_as!(
-        BuildRow,
-        r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
-                  validation_status, results::text AS "results?", validation_problems,
-                  error, finished_at IS NOT NULL AS "finished!", platform, isolation,
-                  egress::text AS "egress?", submission::text AS "submission?"
-             FROM assignment_builds
-            WHERE assignment_id = $1 AND finished_at IS NULL"#,
+    select_builds!(
+        "WHERE assignment_id = $1 AND finished_at IS NULL",
         assignment_id
     )
     .fetch_optional(db)
@@ -351,21 +354,12 @@ pub async fn in_flight_for<'e>(
 
 /// Every attempt in flight: what reconcile adopts after a restart.
 pub async fn in_flight(pool: &PgPool) -> sqlx::Result<Vec<AssignmentBuild>> {
-    sqlx::query_as!(
-        BuildRow,
-        r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
-                  validation_status, results::text AS "results?", validation_problems,
-                  error, finished_at IS NOT NULL AS "finished!", platform, isolation,
-                  egress::text AS "egress?", submission::text AS "submission?"
-             FROM assignment_builds
-            WHERE finished_at IS NULL
-            ORDER BY started_at"#
-    )
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(AssignmentBuild::try_from)
-    .collect()
+    select_builds!("WHERE finished_at IS NULL ORDER BY started_at")
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(AssignmentBuild::try_from)
+        .collect()
 }
 
 /// One attempt of an assignment (for the status endpoint).
@@ -374,21 +368,11 @@ pub async fn get_build(
     assignment_id: &str,
     build: i64,
 ) -> sqlx::Result<Option<AssignmentBuild>> {
-    sqlx::query_as!(
-        BuildRow,
-        r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
-                  validation_status, results::text AS "results?", validation_problems,
-                  error, finished_at IS NOT NULL AS "finished!", platform, isolation,
-                  egress::text AS "egress?", submission::text AS "submission?"
-             FROM assignment_builds
-            WHERE assignment_id = $1 AND id = $2"#,
-        assignment_id,
-        build
-    )
-    .fetch_optional(pool)
-    .await?
-    .map(AssignmentBuild::try_from)
-    .transpose()
+    select_builds!("WHERE assignment_id = $1 AND id = $2", assignment_id, build)
+        .fetch_optional(pool)
+        .await?
+        .map(AssignmentBuild::try_from)
+        .transpose()
 }
 
 /// Uploads that never got a build attempt (jobs stopped between storing and

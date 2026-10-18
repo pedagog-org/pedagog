@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, submission_id, build_id, reason, regrade_batch_id, status, isolation,\n                  job_name, score, total, results::text AS \"results?\", problems, error,\n                  log_tail, changes::text AS \"changes?\", notify\n             FROM grading_runs WHERE submission_id = $1\n            ORDER BY id DESC",
+  "query": "SELECT id, submission_id, build_id, reason, regrade_batch_id, status, isolation,\n                      job_name, score, total, results::text AS \"results?\", problems, error,\n                      log_tail, changes::text AS \"changes?\", notify\n                 FROM grading_runs WHERE submission_id = $1 AND id < $2 AND status = 'graded' ORDER BY id DESC LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -172,6 +172,7 @@
     ],
     "parameters": {
       "Left": [
+        "Int8",
         "Int8"
       ]
     },
@@ -194,5 +195,5 @@
       false
     ]
   },
-  "hash": "24c90c2e126235bf153dade549b1ce66ed78f04ffccf910b60aaa3cfcee05b3b"
+  "hash": "95d35929b05258ef719456c1e0adf76ee90b79d5329c3b976920d0226e89aef6"
 }
