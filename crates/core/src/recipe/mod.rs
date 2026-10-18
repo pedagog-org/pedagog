@@ -2,6 +2,7 @@ pub mod assignment;
 pub mod network;
 pub mod os;
 pub mod platform;
+pub mod policy;
 pub mod primitives;
 pub mod render;
 pub mod resolve;

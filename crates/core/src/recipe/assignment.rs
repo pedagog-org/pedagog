@@ -8,6 +8,7 @@ use serde::{Deserialize, Deserializer};
 
 use super::network::NetworkSpec;
 use super::platform::PlatformSpec;
+use super::policy::AssignmentPolicy;
 use super::primitives::{
     AssignmentId, Id, OsId, Step, ToolchainId, ToolchainRef, Version, Versioned,
 };
@@ -25,6 +26,10 @@ pub struct AssignmentYaml {
     /// Which files make up a submission (the platform decides where they come from).
     #[serde(default)]
     pub submission: SubmissionRules,
+    /// When submissions are accepted and what students see: defaults a course
+    /// can edit.
+    #[serde(default)]
+    pub assignment: AssignmentPolicy,
 }
 
 /// Where the archive keeps the directories baked into the image. Only the
