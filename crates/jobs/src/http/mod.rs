@@ -1,6 +1,8 @@
 //! HTTP surface: the dispatch-and-return rebuild endpoint, assignment uploads
 //! and submissions.
 
+pub mod error;
+
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::{Query, State};

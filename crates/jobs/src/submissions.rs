@@ -27,7 +27,7 @@ use pedagog_store::objects::submission_key;
 use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, ArchiveError, Entry, Limits, TreeFile};
-use crate::intake::{Refused, internal, refused};
+use crate::http::error::{Refused, internal, refused};
 use crate::settings::{RunSettings, settings_of};
 use crate::state::AppState;
 
