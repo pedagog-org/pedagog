@@ -106,8 +106,10 @@ assignment:
 - **Re-upload keeps the course's edits and shows the difference at once** (the upload
   reply comes before any build); `hammer upload --take-dates` adopts the file's (clears
   the course's date edits), superseding the queued build if there is one.
-- **Acceptance:** from `open` until `late_due` (or `due`); submissions after `due` are
-  flagged `late`. Penalties are later.
+- **Acceptance:** from `open` until `late_due` (or `due`), decided by the dates in
+  effect when a submission arrives. **Late** isn't stored: it's computed when shown,
+  from the submission's time and the dates in effect for that student now, so moving a
+  deadline (or, later, a student's extension) changes it. Penalties are later.
 - Dates without an offset, and orders that don't make sense (`due` before `open`), are
   refused at upload and on `dates set`.
 
@@ -194,7 +196,7 @@ set|clear|show`; `results release [--undo]`, `results list`.
 
 - `assignments` gains `course_id` (key: course and id), the file's policy defaults,
   and the course's `date_overrides`, `visibility_overrides` and `released_at`.
-- `submissions.student_id` becomes a user; submissions gain `late` and `staff`.
+- `submissions.student_id` becomes a user; submissions gain `staff` (late is computed).
 - `grading_runs` gains `notified_at`.
 
 ## Dependencies (approved)

@@ -51,10 +51,9 @@ CREATE TABLE login_codes (
     expires_at TIMESTAMPTZ NOT NULL
 );
 
--- Submissions after the due date, and instructors' own (staff) submissions.
-ALTER TABLE submissions
-    ADD COLUMN late  BOOLEAN NOT NULL DEFAULT false,
-    ADD COLUMN staff BOOLEAN NOT NULL DEFAULT false;
+-- Instructors' own submissions. (Whether one is late isn't stored: it depends
+-- on the dates in effect for that student, which can change afterwards.)
+ALTER TABLE submissions ADD COLUMN staff BOOLEAN NOT NULL DEFAULT false;
 
 -- When a regrade notice was sent (runs with notify = true).
 ALTER TABLE grading_runs ADD COLUMN notified_at TIMESTAMPTZ;
