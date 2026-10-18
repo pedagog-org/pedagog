@@ -246,7 +246,7 @@ fn run_upload(args: UploadArgs) -> Result<()> {
 
     let url = jobs_url(args.jobs_url);
     let archive = upload::pack(&dir).map_err(|e| miette!("{e}"))?;
-    let regrade = args.regrade.then(|| args.notify.as_str());
+    let regrade = args.regrade.then_some(args.notify);
     let uploaded = upload::send(&url, archive, args.force, regrade).map_err(|e| miette!("{e}"))?;
     println!(
         "uploaded {} (tree {}, {} bytes) as upload {}",

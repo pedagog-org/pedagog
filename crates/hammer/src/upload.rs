@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use pedagog_core::changes::Notify;
 use serde::Deserialize;
 use tar::{Builder, EntryType, Header};
 use walkdir::WalkDir;
@@ -193,19 +194,20 @@ fn is_executable(_: &Path) -> bool {
 }
 
 /// POSTs the archive; jobs' refusals come back as their message. `regrade`
-/// is the notify setting (`never`, `changed`, `always`) of a requested regrade.
+/// asks for a regrade, telling students per its `Notify`.
 pub fn send(
     jobs_url: &str,
     archive: Vec<u8>,
     force: bool,
-    regrade: Option<&str>,
+    regrade: Option<Notify>,
 ) -> Result<Uploaded, String> {
     let mut params = Vec::new();
     if force {
         params.push(("force", "true"));
     }
-    if let Some(notify) = regrade {
-        params.push(("regrade", notify));
+    let notify = regrade.map(|n| n.to_string());
+    if let Some(notify) = &notify {
+        params.push(("regrade", notify.as_str()));
     }
     let url = reqwest::Url::parse_with_params(
         &format!("{}/internal/assignments", jobs_url.trim_end_matches('/')),

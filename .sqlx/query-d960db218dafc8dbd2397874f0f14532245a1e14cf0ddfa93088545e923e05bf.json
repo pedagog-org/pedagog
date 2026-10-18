@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,\n                  validation_status, results::text AS \"results?\", validation_problems,\n                  error, finished_at IS NOT NULL AS \"finished!\", platform, isolation,\n                  egress::text AS \"egress?\", submission::text AS \"submission?\"\n             FROM assignment_builds\n            WHERE assignment_id = $1 AND id = $2",
+  "query": "SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,\n                      validation_status, results::text AS \"results?\", validation_problems,\n                      error, finished_at IS NOT NULL AS \"finished!\", platform, isolation,\n                      egress::text AS \"egress?\", submission::text AS \"submission?\"\n                 FROM assignment_builds WHERE assignment_id = $1 AND finished_at IS NULL",
   "describe": {
     "columns": [
       {
@@ -151,8 +151,7 @@
     ],
     "parameters": {
       "Left": [
-        "Text",
-        "Int8"
+        "Text"
       ]
     },
     "nullable": [
@@ -173,5 +172,5 @@
       null
     ]
   },
-  "hash": "6e443b74709f8f225a56eb0123fe8dd1491878187f5d911e4522e4ed12c6eb92"
+  "hash": "d960db218dafc8dbd2397874f0f14532245a1e14cf0ddfa93088545e923e05bf"
 }

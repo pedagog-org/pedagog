@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
+use clap::builder::TypedValueParser;
 use clap::{ArgGroup, Parser, ValueEnum};
+use pedagog_core::changes::Notify;
 
 #[derive(Parser)]
 #[command(
@@ -154,7 +156,13 @@ pub struct UploadArgs {
     pub regrade: bool,
 
     /// With --regrade: when students are told about their new results.
-    #[arg(long, value_enum, default_value_t = Notify::Never, requires = "regrade")]
+    #[arg(
+        long,
+        default_value = "never",
+        requires = "regrade",
+        value_parser = clap::builder::PossibleValuesParser::new(["never", "changed", "always"])
+            .try_map(|s| s.parse::<Notify>()),
+    )]
     pub notify: Notify,
 
     /// Wait for the build and validation, print the outcome, and fail if either fails.
@@ -209,27 +217,6 @@ pub struct SubmitArgs {
     /// jobs service URL [env: PEDAGOG_JOBS_URL] [default: http://localhost:18081].
     #[arg(long, value_name = "URL")]
     pub jobs_url: Option<String>,
-}
-
-/// When a regrade tells students about their new results.
-#[derive(ValueEnum, Clone, Copy, PartialEq, Debug)]
-pub enum Notify {
-    /// Never (the default: the instructor may be testing).
-    Never,
-    /// Only if their results changed.
-    Changed,
-    /// Always.
-    Always,
-}
-
-impl Notify {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Notify::Never => "never",
-            Notify::Changed => "changed",
-            Notify::Always => "always",
-        }
-    }
 }
 
 #[derive(ValueEnum, Clone, PartialEq)]

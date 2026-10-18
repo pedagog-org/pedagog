@@ -27,7 +27,7 @@ use pedagog_store::objects::submission_key;
 use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, ArchiveError, Entry, Limits, TreeFile};
-use crate::intake::{Refused, internal, refused};
+use crate::http::error::{Refused, internal, refused};
 use crate::settings::{RunSettings, settings_of};
 use crate::state::AppState;
 
@@ -494,7 +494,7 @@ async fn status_of(
             build_id: run.build_id,
             status: run.status.to_string(),
             queue_position,
-            isolation: run.isolation,
+            isolation: run.isolation.map(|i| i.to_string()),
             score: run.score,
             total: run.total,
             problems: run.problems,

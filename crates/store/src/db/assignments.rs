@@ -12,9 +12,26 @@ use sqlx::PgPool;
 
 use crate::db::submissions::REGRADE_PRIORITY;
 use crate::{
-    AssignmentBuild, AssignmentBuildStatus, AssignmentUpload, BuildSettings, Notify, RunReason,
-    ValidationStatus,
+    AssignmentBuild, AssignmentBuildStatus, AssignmentUpload, BuildSettings, Isolation, Notify,
+    PlatformKind, RunReason, ValidationStatus,
 };
+
+/// `assignment_builds` as [`BuildRow`] reads it: one copy of the column list
+/// for every query, still checked at compile time (sqlx joins `+`-separated
+/// literals).
+macro_rules! select_builds {
+    ($tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query_as!(
+            BuildRow,
+            r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
+                      validation_status, results::text AS "results?", validation_problems,
+                      error, finished_at IS NOT NULL AS "finished!", platform, isolation,
+                      egress::text AS "egress?", submission::text AS "submission?"
+                 FROM assignment_builds "# + $tail
+            $(, $arg)*
+        )
+    };
+}
 
 /// Create the assignment, or update its name.
 pub async fn upsert_assignment(pool: &PgPool, id: &str, name: &str) -> sqlx::Result<()> {
@@ -106,8 +123,8 @@ pub async fn start_build<'e>(
         image_hash,
         image_ref,
         AssignmentBuildStatus::Running.to_string(),
-        settings.platform,
-        settings.isolation,
+        settings.platform.as_str(),
+        settings.isolation.to_string(),
         settings.egress,
         settings.submission
     )
@@ -155,8 +172,8 @@ pub async fn set_build_settings(
             SET platform = $2, isolation = $3, egress = $4::text::jsonb, submission = $5::text::jsonb
           WHERE id = $1",
         build,
-        settings.platform,
-        settings.isolation,
+        settings.platform.as_str(),
+        settings.isolation.to_string(),
         settings.egress,
         settings.submission
     )
@@ -181,19 +198,11 @@ pub async fn start_validation<'e>(db: impl sqlx::PgExecutor<'e>, build: i64) -> 
 
 /// One attempt by id, whatever its assignment.
 pub async fn build_by_id(pool: &PgPool, build: i64) -> sqlx::Result<Option<AssignmentBuild>> {
-    sqlx::query_as!(
-        BuildRow,
-        r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
-                  validation_status, results::text AS "results?", validation_problems,
-                  error, finished_at IS NOT NULL AS "finished!", platform, isolation,
-                  egress::text AS "egress?", submission::text AS "submission?"
-             FROM assignment_builds WHERE id = $1"#,
-        build
-    )
-    .fetch_optional(pool)
-    .await?
-    .map(AssignmentBuild::try_from)
-    .transpose()
+    select_builds!("WHERE id = $1", build)
+        .fetch_optional(pool)
+        .await?
+        .map(AssignmentBuild::try_from)
+        .transpose()
 }
 
 /// Record validation's outcome and end the attempt. `results` is the parsed
@@ -333,14 +342,8 @@ pub async fn in_flight_for<'e>(
     db: impl sqlx::PgExecutor<'e>,
     assignment_id: &str,
 ) -> sqlx::Result<Option<AssignmentBuild>> {
-    sqlx::query_as!(
-        BuildRow,
-        r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
-                  validation_status, results::text AS "results?", validation_problems,
-                  error, finished_at IS NOT NULL AS "finished!", platform, isolation,
-                  egress::text AS "egress?", submission::text AS "submission?"
-             FROM assignment_builds
-            WHERE assignment_id = $1 AND finished_at IS NULL"#,
+    select_builds!(
+        "WHERE assignment_id = $1 AND finished_at IS NULL",
         assignment_id
     )
     .fetch_optional(db)
@@ -351,21 +354,12 @@ pub async fn in_flight_for<'e>(
 
 /// Every attempt in flight: what reconcile adopts after a restart.
 pub async fn in_flight(pool: &PgPool) -> sqlx::Result<Vec<AssignmentBuild>> {
-    sqlx::query_as!(
-        BuildRow,
-        r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
-                  validation_status, results::text AS "results?", validation_problems,
-                  error, finished_at IS NOT NULL AS "finished!", platform, isolation,
-                  egress::text AS "egress?", submission::text AS "submission?"
-             FROM assignment_builds
-            WHERE finished_at IS NULL
-            ORDER BY started_at"#
-    )
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(AssignmentBuild::try_from)
-    .collect()
+    select_builds!("WHERE finished_at IS NULL ORDER BY started_at")
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(AssignmentBuild::try_from)
+        .collect()
 }
 
 /// One attempt of an assignment (for the status endpoint).
@@ -374,21 +368,11 @@ pub async fn get_build(
     assignment_id: &str,
     build: i64,
 ) -> sqlx::Result<Option<AssignmentBuild>> {
-    sqlx::query_as!(
-        BuildRow,
-        r#"SELECT id, assignment_id, upload_id, image_hash, image_ref, build_status,
-                  validation_status, results::text AS "results?", validation_problems,
-                  error, finished_at IS NOT NULL AS "finished!", platform, isolation,
-                  egress::text AS "egress?", submission::text AS "submission?"
-             FROM assignment_builds
-            WHERE assignment_id = $1 AND id = $2"#,
-        assignment_id,
-        build
-    )
-    .fetch_optional(pool)
-    .await?
-    .map(AssignmentBuild::try_from)
-    .transpose()
+    select_builds!("WHERE assignment_id = $1 AND id = $2", assignment_id, build)
+        .fetch_optional(pool)
+        .await?
+        .map(AssignmentBuild::try_from)
+        .transpose()
 }
 
 /// Uploads that never got a build attempt (jobs stopped between storing and
@@ -469,8 +453,9 @@ impl TryFrom<BuildRow> for AssignmentBuild {
             settings: match (row.platform, row.isolation, row.egress, row.submission) {
                 (Some(platform), Some(isolation), Some(egress), Some(submission)) => {
                     Some(BuildSettings {
-                        platform,
-                        isolation,
+                        platform: PlatformKind::try_from(platform)
+                            .map_err(|e| sqlx::Error::Decode(e.into()))?,
+                        isolation: Isolation::from_str(&isolation).map_err(decode)?,
                         egress,
                         submission,
                     })
@@ -786,8 +771,8 @@ mod tests {
         let row = build_by_id(&pool, build).await?.unwrap();
         let settings = row.settings.unwrap();
         assert_eq!(
-            (settings.platform.as_str(), settings.isolation.as_str()),
-            ("upload", "process")
+            (settings.platform, settings.isolation),
+            (PlatformKind::Upload, Isolation::Process)
         );
         assert_eq!(serde_json_like(&settings.egress), r#"{"mode":"deny"}"#);
 

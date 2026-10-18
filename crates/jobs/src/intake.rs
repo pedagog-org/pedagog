@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, ArchiveError, Limits};
 use crate::assignments::{self, Decision, Plan};
+use crate::http::error::{Refused, internal, refused};
 use crate::settings::RunSettings;
 use crate::state::AppState;
 
@@ -54,27 +55,6 @@ pub struct Checked {
     pub containerfile: String,
     pub has_solution: bool,
     pub warnings: Vec<String>,
-}
-
-/// Why an upload was refused, with its HTTP status.
-#[derive(Debug, PartialEq, Eq)]
-pub struct Refused {
-    pub status: StatusCode,
-    pub error: String,
-}
-
-impl IntoResponse for Refused {
-    fn into_response(self) -> Response {
-        let body = serde_json::json!({ "error": self.error });
-        (self.status, Json(body)).into_response()
-    }
-}
-
-pub(crate) fn refused(status: StatusCode, error: impl Into<String>) -> Refused {
-    Refused {
-        status,
-        error: error.into(),
-    }
 }
 
 /// Everything about an upload that needs no database or object store: the
@@ -284,14 +264,6 @@ impl Plan {
             force,
         }
     }
-}
-
-pub(crate) fn internal(what: &str, e: impl std::fmt::Display) -> Refused {
-    tracing::error!(error = %e, "{what} failed");
-    refused(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        format!("{what} failed: {e}"),
-    )
 }
 
 #[cfg(test)]

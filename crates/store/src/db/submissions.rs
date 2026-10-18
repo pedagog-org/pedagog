@@ -9,7 +9,23 @@ use std::str::FromStr;
 
 use sqlx::{PgConnection, PgPool};
 
-use crate::{GradingRun, Notify, RunReason, RunStatus, Submission, SubmissionSource};
+use crate::{GradingRun, Isolation, Notify, RunReason, RunStatus, Submission, SubmissionSource};
+
+/// `grading_runs` as [`RunRow`] reads it: one copy of the column list for
+/// every query, still checked at compile time (sqlx joins `+`-separated
+/// literals).
+macro_rules! select_runs {
+    ($tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query_as!(
+            RunRow,
+            r#"SELECT id, submission_id, build_id, reason, regrade_batch_id, status, isolation,
+                      job_name, score, total, results::text AS "results?", problems, error,
+                      log_tail, changes::text AS "changes?", notify
+                 FROM grading_runs "# + $tail
+            $(, $arg)*
+        )
+    };
+}
 
 /// Queue priority of a submission's first run (validations share it).
 pub const SUBMISSION_PRIORITY: i16 = 0;
@@ -87,7 +103,7 @@ pub async fn start_grading(
     conn: &mut PgConnection,
     run: i64,
     job_name: &str,
-    isolation: &str,
+    isolation: Isolation,
 ) -> sqlx::Result<bool> {
     let done = sqlx::query!(
         "UPDATE grading_runs
@@ -96,7 +112,7 @@ pub async fn start_grading(
         run,
         RunStatus::Grading.to_string(),
         job_name,
-        isolation
+        isolation.to_string()
     )
     .execute(conn)
     .await?;
@@ -242,36 +258,21 @@ pub async fn run_context(pool: &PgPool, run: i64) -> sqlx::Result<Option<RunCont
 
 /// One grading run by id.
 pub async fn get_run(pool: &PgPool, run: i64) -> sqlx::Result<Option<GradingRun>> {
-    sqlx::query_as!(
-        RunRow,
-        r#"SELECT id, submission_id, build_id, reason, regrade_batch_id, status, isolation,
-                  job_name, score, total, results::text AS "results?", problems, error,
-                  log_tail, changes::text AS "changes?", notify
-             FROM grading_runs WHERE id = $1"#,
-        run
-    )
-    .fetch_optional(pool)
-    .await?
-    .map(GradingRun::try_from)
-    .transpose()
+    select_runs!("WHERE id = $1", run)
+        .fetch_optional(pool)
+        .await?
+        .map(GradingRun::try_from)
+        .transpose()
 }
 
 /// A submission's runs, latest first (the first is the one shown).
 pub async fn runs_for_submission(pool: &PgPool, submission: i64) -> sqlx::Result<Vec<GradingRun>> {
-    sqlx::query_as!(
-        RunRow,
-        r#"SELECT id, submission_id, build_id, reason, regrade_batch_id, status, isolation,
-                  job_name, score, total, results::text AS "results?", problems, error,
-                  log_tail, changes::text AS "changes?", notify
-             FROM grading_runs WHERE submission_id = $1
-            ORDER BY id DESC"#,
-        submission
-    )
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(GradingRun::try_from)
-    .collect()
+    select_runs!("WHERE submission_id = $1 ORDER BY id DESC", submission)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(GradingRun::try_from)
+        .collect()
 }
 
 /// The submission's latest graded run before `run`: what a regrade compares against.
@@ -280,15 +281,8 @@ pub async fn previous_graded_run(
     submission: i64,
     run: i64,
 ) -> sqlx::Result<Option<GradingRun>> {
-    sqlx::query_as!(
-        RunRow,
-        r#"SELECT id, submission_id, build_id, reason, regrade_batch_id, status, isolation,
-                  job_name, score, total, results::text AS "results?", problems, error,
-                  log_tail, changes::text AS "changes?", notify
-             FROM grading_runs
-            WHERE submission_id = $1 AND id < $2 AND status = 'graded'
-            ORDER BY id DESC
-            LIMIT 1"#,
+    select_runs!(
+        "WHERE submission_id = $1 AND id < $2 AND status = 'graded' ORDER BY id DESC LIMIT 1",
         submission,
         run
     )
@@ -300,19 +294,12 @@ pub async fn previous_graded_run(
 
 /// Every run grading in a Job: what reconcile adopts after a restart.
 pub async fn grading_in_flight(pool: &PgPool) -> sqlx::Result<Vec<GradingRun>> {
-    sqlx::query_as!(
-        RunRow,
-        r#"SELECT id, submission_id, build_id, reason, regrade_batch_id, status, isolation,
-                  job_name, score, total, results::text AS "results?", problems, error,
-                  log_tail, changes::text AS "changes?", notify
-             FROM grading_runs WHERE status = 'grading'
-            ORDER BY id"#
-    )
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(GradingRun::try_from)
-    .collect()
+    select_runs!("WHERE status = 'grading' ORDER BY id")
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(GradingRun::try_from)
+        .collect()
 }
 
 fn decode(e: strum::ParseError) -> sqlx::Error {
@@ -379,7 +366,11 @@ impl TryFrom<RunRow> for GradingRun {
             reason: RunReason::from_str(&row.reason).map_err(decode)?,
             regrade_batch_id: row.regrade_batch_id,
             status: RunStatus::from_str(&row.status).map_err(decode)?,
-            isolation: row.isolation,
+            isolation: row
+                .isolation
+                .map(|i| Isolation::from_str(&i))
+                .transpose()
+                .map_err(decode)?,
             job_name: row.job_name,
             score: row.score,
             total: row.total,
@@ -486,8 +477,8 @@ pub(crate) mod tests {
         );
 
         let mut conn = pool.acquire().await?;
-        assert!(start_grading(&mut conn, acc.run_id, "grade-1", "process").await?);
-        assert!(!start_grading(&mut conn, acc.run_id, "grade-1", "process").await?);
+        assert!(start_grading(&mut conn, acc.run_id, "grade-1", Isolation::Process).await?);
+        assert!(!start_grading(&mut conn, acc.run_id, "grade-1", Isolation::Process).await?);
         assert_eq!(grading_in_flight(&pool).await?.len(), 1);
         assert!(finish_run(&pool, acc.run_id, &graded).await?);
         assert!(!finish_run(&pool, acc.run_id, &RunOutcome::default()).await?);
@@ -495,7 +486,7 @@ pub(crate) mod tests {
         let run = get_run(&pool, acc.run_id).await?.unwrap();
         assert_eq!(run.status, RunStatus::Graded);
         assert_eq!((run.score, run.total), (Some(7.5), Some(10.0)));
-        assert_eq!(run.isolation.as_deref(), Some("process"));
+        assert_eq!(run.isolation, Some(Isolation::Process));
         assert!(grading_in_flight(&pool).await?.is_empty());
         Ok(())
     }
@@ -522,7 +513,7 @@ pub(crate) mod tests {
         let build = current_build(&pool, "ll", "img-a").await?;
         let acc = submit(&pool, "ll", "s1", build).await?;
         let mut conn = pool.acquire().await?;
-        start_grading(&mut conn, acc.run_id, "grade-1", "in-process").await?;
+        start_grading(&mut conn, acc.run_id, "grade-1", Isolation::InProcess).await?;
         let problems = vec!["results.yaml is missing".to_string()];
         let outcome = RunOutcome {
             problems: &problems,
@@ -571,7 +562,7 @@ pub(crate) mod tests {
         let build = current_build(&pool, "ll", "img-a").await?;
         let acc = submit(&pool, "ll", "s1", build).await?;
         let mut conn = pool.acquire().await?;
-        start_grading(&mut conn, acc.run_id, "g", "process").await?;
+        start_grading(&mut conn, acc.run_id, "g", Isolation::Process).await?;
         let graded = RunOutcome {
             score: Some((5.0, 10.0)),
             results: Some("{}"),
