@@ -1,3 +1,4 @@
+mod account;
 mod cli;
 mod submit;
 mod upload;
@@ -9,7 +10,7 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use miette::{GraphicalReportHandler, MietteDiagnostic, Report, Result, Severity, miette};
 
-use cli::{Cli, Command, Format, PlanArgs, SubmitArgs, UploadArgs, VendArgs};
+use cli::{Cli, Command, Format, LoginArgs, PlanArgs, SubmitArgs, UploadArgs, VendArgs};
 use pedagog_core::recipe::assignment::{AssignmentYaml, FileSources};
 use pedagog_core::recipe::primitives::Id;
 use pedagog_core::recipe::render::containerfile::Containerfile;
@@ -29,6 +30,9 @@ fn main() -> Result<()> {
         Command::Vend(args) => run_vend(args),
         Command::Upload(args) => run_upload(args),
         Command::Submit(args) => run_submit(args),
+        Command::Login(args) => run_login(args),
+        Command::Logout => run_logout(),
+        Command::Whoami => run_whoami(),
     }
 }
 
@@ -181,6 +185,42 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
 fn run_vend(args: VendArgs) -> Result<()> {
     let dirs = recipe_dirs(&args.recipes, args.quiet)?;
     vend::run_vend(args, dirs)
+}
+
+fn run_login(args: LoginArgs) -> Result<()> {
+    let api = args
+        .api
+        .or_else(|| std::env::var(account::API_URL_ENV).ok())
+        .or_else(|| account::load().map(|s| s.api))
+        .ok_or_else(|| {
+            miette!(
+                "which api? pass --api <URL> or set {}",
+                account::API_URL_ENV
+            )
+        })?;
+    let (session, path) = account::login(&api, &args.email, &mut std::io::stdin().lock())
+        .map_err(|e| miette!("{e}"))?;
+    println!(
+        "logged in as {} (saved in {})",
+        session.email,
+        path.display()
+    );
+    Ok(())
+}
+
+fn run_logout() -> Result<()> {
+    match account::logout().map_err(|e| miette!("{e}"))? {
+        Some(email) => println!("logged out {email}"),
+        None => println!("not logged in"),
+    }
+    Ok(())
+}
+
+fn run_whoami() -> Result<()> {
+    for line in account::whoami().map_err(|e| miette!("{e}"))? {
+        println!("{line}");
+    }
+    Ok(())
 }
 
 fn run_submit(args: SubmitArgs) -> Result<()> {
