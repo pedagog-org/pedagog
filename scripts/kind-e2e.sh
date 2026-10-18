@@ -114,7 +114,7 @@ spec:
   restartPolicy: Never
   initContainers:
     - name: await-egress
-      image: localhost/pedagog/jobs:dev
+      image: localhost/pedagog/jobs-init:dev
       imagePullPolicy: IfNotPresent
       args: [await-egress, "kube-dns.kube-system.svc:9153", "30"]
   containers:

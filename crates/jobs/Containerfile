@@ -3,7 +3,11 @@
 #
 # build   -> compile the jobs + hammer binaries (sqlx offline via committed .sqlx/)
 # vend    -> hammer vend the pinned recipes (fetch ingredients at image-build time)
-# runtime -> slim image with the binary + baked recipes at /opt/pedagog/recipes
+# init    -> pedagog/jobs-init: only the binary, for test-run and build pods'
+#            initContainers (await-egress, fetch-context):
+#              podman build -f crates/jobs/Containerfile --target init -t <ref> .
+# runtime -> pedagog/jobs (the default target): the binary + baked recipes at
+#            /opt/pedagog/recipes
 #
 # hammer is a build-time tool only; it is not in the runtime image.
 #
@@ -23,10 +27,16 @@ RUN --mount=type=cache,id=pedagog-cargo-registry,target=/usr/local/cargo/registr
 
 FROM build AS vend
 # Needs network + the recipes' pinned upstream tags. Baked so Kaniko builds are hermetic.
-# Ingredients with a pinned checksum are reused from the cache when they still match.
+# Ingredients with a pinned checksum are reused from the cache when they still
+# match; --prune drops cached files no recipe declares any more (e.g. renamed).
 RUN --mount=type=cache,id=pedagog-ingredients,target=/src/recipes/ingredients \
-    /out/hammer vend --recipes /src/recipes --quiet \
+    /out/hammer vend --recipes /src/recipes --quiet --prune \
     && cp -a /src/recipes/ingredients /out/ingredients
+
+# Built against Debian 12's glibc (rust:*-bookworm), as is this base.
+FROM gcr.io/distroless/cc-debian12:nonroot AS init
+COPY --from=build /out/pedagog-jobs /usr/local/bin/pedagog-jobs
+ENTRYPOINT ["/usr/local/bin/pedagog-jobs"]
 
 FROM docker.io/library/debian:stable-slim AS runtime
 RUN apt-get update \

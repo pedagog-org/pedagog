@@ -216,19 +216,24 @@ spec:
     email: <your-email>   # Let's Encrypt sends expiry notifications here
 ```
 
-Build and push the `jobs` image, then point the overlay at it (substitute your
-registry IP from `kubectl get svc registry-service -n pedagog-data`):
+Build and push the `jobs` images, then point the overlay at them (substitute your
+registry IP from `kubectl get svc registry-service -n pedagog-data`). `pedagog/jobs`
+is the service, with the recipes baked in; `pedagog/jobs-init` (~66 MB) has only its
+binary, for the initContainers of every test run and build, so a node pulls the big
+image only for builds:
 
 ```sh
 podman build -f crates/jobs/Containerfile -t <registry-ip>:5000/pedagog/jobs:dev .
+podman build -f crates/jobs/Containerfile --target init -t <registry-ip>:5000/pedagog/jobs-init:dev .
 podman push <registry-ip>:5000/pedagog/jobs:dev
+podman push <registry-ip>:5000/pedagog/jobs-init:dev
 ```
 
 Then edit for your target overlay:
 
 - `deploy/overlays/{dev,prod}/kustomization.yaml` → `images:` `newName` = `<registry-ip>:5000/pedagog/jobs`
-- **dev:** `deploy/overlays/dev/patches/jobs-dev.yaml` → set both host paths to your recipes checkout on the node
-- **prod:** `deploy/overlays/prod/patches/jobs-prod.yaml` → `PEDAGOG_JOBS_IMAGE` = the same pushed ref
+- **dev:** `deploy/overlays/dev/patches/jobs-dev.yaml` → set both host paths to your recipes checkout on the node, and `PEDAGOG_JOBS_IMAGE` / `PEDAGOG_JOBS_INIT_IMAGE` to the pushed refs
+- **prod:** `deploy/overlays/prod/patches/jobs-prod.yaml` → `PEDAGOG_JOBS_IMAGE` / `PEDAGOG_JOBS_INIT_IMAGE` = the same pushed refs
 
 ---
 

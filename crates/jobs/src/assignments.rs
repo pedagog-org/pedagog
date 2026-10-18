@@ -284,7 +284,7 @@ pub async fn launch_validation(
     let request = ValidationRequest {
         build_id,
         image: build.image_ref.clone(),
-        jobs_image: state.config.jobs_image.clone(),
+        init_image: state.config.init_image.clone(),
         results_url: results_url.to_string(),
         isolation: settings.isolation,
         egress: settings.egress,
