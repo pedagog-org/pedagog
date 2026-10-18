@@ -1,0 +1,37 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id, c.name, 'staff' AS \"role!\"\n             FROM course_staff s JOIN courses c ON c.id = s.course_id WHERE s.user_id = $1\n           UNION\n           SELECT c.id, c.name, 'student'\n             FROM enrollments e JOIN courses c ON c.id = e.course_id\n            WHERE e.user_id = $1 AND e.dropped_at IS NULL\n              AND NOT EXISTS (SELECT 1 FROM course_staff s\n                               WHERE s.course_id = c.id AND s.user_id = $1)\n           ORDER BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "role!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "cb61ddabe4f08a1d92fe593afa8e6c74db1be868b6f9665fbf77794b6e8b7970"
+}

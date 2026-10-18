@@ -1,11 +1,12 @@
 //! Postgres access (`feature = "db"`): generic pool/migration infra here, the
-//! per-domain queries in submodules (`builds`, `assignments`, `submissions`,
-//! `queue`).
+//! per-domain queries in submodules (`accounts`, `builds`, `assignments`,
+//! `submissions`, `queue`).
 
 use sqlx::PgPool;
 use sqlx::migrate::MigrateError;
 use sqlx::postgres::PgPoolOptions;
 
+pub mod accounts;
 pub mod assignments;
 pub mod builds;
 pub mod queue;
