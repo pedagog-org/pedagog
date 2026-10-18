@@ -52,7 +52,8 @@ hammer ──token──▶ api (pedagog-system, Traefik + cert-manager TLS)
 - **Mail:** SMTP via `lettre`, to a trusted relay without a login or with one:
   `PEDAGOG_SMTP_HOST`, `PEDAGOG_SMTP_PORT` (default by TLS mode: 25, 587, 465),
   `PEDAGOG_SMTP_TLS` (`none` | `starttls` | `tls`), optional `PEDAGOG_SMTP_USER` /
-  `PEDAGOG_SMTP_PASSWORD` (from a Secret), `PEDAGOG_MAIL_FROM`. On kind and in local dev,
+  `PEDAGOG_SMTP_PASSWORD` (from a Secret), `PEDAGOG_MAIL_FROM_NAME`,
+  `PEDAGOG_MAIL_FROM_ADDRESS`, optional `PEDAGOG_MAIL_REPLY_TO`. On kind and in local dev,
   a Mailpit container catches every message and shows it in a web inbox (and kind-e2e
   reads codes from its API).
 - **First admin:** `pedagog-api add-admin <email>` (run once, e.g. through `kubectl
