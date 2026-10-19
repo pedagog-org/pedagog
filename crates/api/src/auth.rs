@@ -204,7 +204,7 @@ impl FromRequestParts<AppState> for CurrentUser {
         let user = db::session_user(&state.pool, &token_hash)
             .await
             .map_err(|e| crate::error::internal("reading the session", e))?
-            .ok_or_else(|| unauthorized("your session has expired: log in again"))?;
+            .ok_or_else(|| unauthorized("your session has ended or expired: log in again"))?;
         Ok(CurrentUser { user, token_hash })
     }
 }

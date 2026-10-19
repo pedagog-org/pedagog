@@ -369,7 +369,7 @@ fn run_members(cmd: MembersCmd) -> Result<()> {
                         &format!("/courses/{}/members/{}", segment(&course), segment(email)),
                         &serde_json::json!({ "role": role, "name": name.clone().unwrap_or_default() }),
                     )
-                    .map_err(|e| miette!("{email}: {e}"))?;
+                    .map_err(|e| several(&emails, email, e))?;
                 lines.push(manage::added(&added));
             }
             lines
@@ -382,7 +382,7 @@ fn run_members(cmd: MembersCmd) -> Result<()> {
                     segment(&course),
                     segment(email)
                 ))
-                .map_err(|e| miette!("{email}: {e}"))?;
+                .map_err(|e| several(&emails, email, e))?;
                 lines.push(format!("dropped {email} from {course}"));
             }
             lines
@@ -421,6 +421,16 @@ fn run_members(cmd: MembersCmd) -> Result<()> {
         }
     };
     print_lines(lines)
+}
+
+/// An error for one of several emails names it; the api's message already
+/// names a single one.
+fn several(emails: &[String], email: &str, e: String) -> miette::Report {
+    if emails.len() > 1 {
+        miette!("{email}: {e}")
+    } else {
+        miette!("{e}")
+    }
 }
 
 /// Ask before a sync drops students.
