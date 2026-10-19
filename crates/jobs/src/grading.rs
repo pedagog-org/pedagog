@@ -16,6 +16,7 @@ use pedagog_store::objects::grading_results_key;
 use sqlx::PgConnection;
 
 use crate::admission::Launch;
+use crate::assignments::job_id;
 use crate::settings::settings_of;
 use crate::state::AppState;
 
@@ -40,7 +41,7 @@ pub async fn launch(state: &AppState, conn: &mut PgConnection, run: i64) -> Resu
     let settings = settings_of(state, &build)
         .await
         .map_err(Launch::permanent)?;
-    let key = JobKey::grading(&ctx.assignment_id, run);
+    let key = JobKey::grading(&job_id(&ctx.course_id, &ctx.slug), run);
     let limits = &state.config.grading;
     let submission_url = state
         .objects
@@ -76,7 +77,7 @@ pub async fn launch(state: &AppState, conn: &mut PgConnection, run: i64) -> Resu
         .ensure_grading(&key, &request)
         .await
         .map_err(Launch::kube)?;
-    tracing::info!(run, assignment = %ctx.assignment_id, ?outcome, "grading Job ensured");
+    tracing::info!(run, course = %ctx.course_id, assignment = %ctx.slug, ?outcome, "grading Job ensured");
     Ok(())
 }
 
@@ -99,7 +100,7 @@ pub async fn settle(state: &AppState, run: i64, succeeded: bool) -> anyhow::Resu
     if verdict.results.is_none() && !succeeded {
         let logs = state
             .builder
-            .logs(&JobKey::grading(&ctx.assignment_id, run))
+            .logs(&JobKey::grading(&job_id(&ctx.course_id, &ctx.slug), run))
             .await;
         log_tail = Some(logs[logs.len().saturating_sub(LOG_TAIL)..].to_owned());
         verdict.error = Some("the run crashed or timed out".to_owned());

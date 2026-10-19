@@ -27,16 +27,25 @@ const URL_MARGIN: Duration = Duration::from_secs(600);
 /// How much of a failed validation pod's log is kept with its problems.
 const LOG_TAIL: usize = 4000;
 
+/// The assignment part of its Jobs' names: course and slug.
+pub fn job_id(course: &str, slug: &str) -> String {
+    format!("{course}-{slug}")
+}
+
 /// An upload, rendered and ready to build and validate.
 #[derive(Clone, Debug)]
 pub struct Plan {
-    pub assignment_id: String,
+    pub assignment_id: i64,
+    pub course: String,
+    pub slug: String,
     pub upload_id: i64,
     pub tree_hash: String,
     pub object_key: String,
     pub containerfile: String,
     pub has_solution: bool,
     pub settings: RunSettings,
+    /// The file's `assignment:` policy as JSON.
+    pub policy: String,
     pub force: bool,
 }
 
@@ -54,10 +63,15 @@ impl Plan {
     pub fn image_ref(&self, registry: &str) -> String {
         let hash = self.image_hash();
         format!(
-            "{registry}/pedagog/assignments/{}:{}",
-            self.assignment_id,
+            "{registry}/pedagog/assignments/{}/{}:{}",
+            self.course,
+            self.slug,
             &hash[..16]
         )
+    }
+
+    fn build_key(&self) -> JobKey {
+        JobKey::assignment(&job_id(&self.course, &self.slug), &self.image_hash())
     }
 }
 
@@ -71,7 +85,7 @@ pub enum Decision {
 }
 
 pub async fn dispatch(state: &AppState, plan: Plan) -> anyhow::Result<Decision> {
-    let id = &plan.assignment_id;
+    let id = plan.assignment_id;
     // One dispatch decision per assignment at a time, across replicas. The
     // decision's queries run on the lock's own connection, so concurrent
     // dispatches can't exhaust the pool waiting for a second one.
@@ -89,15 +103,18 @@ pub async fn dispatch(state: &AppState, plan: Plan) -> anyhow::Result<Decision> 
     let image_ref = plan.image_ref(&state.config.registry);
     let build_id = db::start_build(
         &mut *tx,
-        id,
-        plan.upload_id,
-        &image_hash,
-        &image_ref,
-        &plan.settings.to_stored()?,
+        &db::NewBuild {
+            assignment_id: id,
+            upload_id: plan.upload_id,
+            image_hash: &image_hash,
+            image_ref: &image_ref,
+            settings: &plan.settings.to_stored()?,
+            policy: &plan.policy,
+        },
     )
     .await?;
     tx.commit().await?;
-    tracing::info!(assignment = %id, build = build_id, image = %image_ref, "build dispatched");
+    tracing::info!(course = %plan.course, assignment = %plan.slug, build = build_id, image = %image_ref, "build dispatched");
     spawn(state, build_id, plan, Resume::Build);
     Ok(Decision::Dispatched { build_id })
 }
@@ -108,17 +125,17 @@ async fn supersede(
     conn: &mut PgConnection,
     running: &AssignmentBuild,
 ) -> anyhow::Result<()> {
-    let id = &running.assignment_id;
+    let id = job_id(&running.course_id, &running.slug);
     for key in [
-        JobKey::assignment(id, &running.image_hash),
-        JobKey::validation(id, running.id),
+        JobKey::assignment(&id, &running.image_hash),
+        JobKey::validation(&id, running.id),
     ] {
         if let Err(e) = state.builder.remove(&key).await {
             tracing::warn!(build = running.id, error = %e, "deleting a superseded Job failed");
         }
     }
     db::supersede(conn, running.id).await?;
-    tracing::info!(assignment = %id, build = running.id, "superseded");
+    tracing::info!(course = %running.course_id, assignment = %running.slug, build = running.id, "superseded");
     Ok(())
 }
 
@@ -161,9 +178,8 @@ fn spawn(state: &AppState, build_id: i64, plan: Plan, from: Resume) {
 }
 
 async fn run(state: &AppState, build_id: i64, plan: &Plan, from: Resume) -> anyhow::Result<()> {
-    let image_hash = plan.image_hash();
     let image_ref = plan.image_ref(&state.config.registry);
-    let build_key = JobKey::assignment(&plan.assignment_id, &image_hash);
+    let build_key = plan.build_key();
     let deadline = state.config.assignment_build_deadline;
     if let Resume::Build = from {
         let url = state
@@ -236,7 +252,10 @@ pub async fn settle_validation(
     if uploaded.is_none() && !succeeded {
         let logs = state
             .builder
-            .logs(&JobKey::validation(&build.assignment_id, build_id))
+            .logs(&JobKey::validation(
+                &job_id(&build.course_id, &build.slug),
+                build_id,
+            ))
             .await;
         let tail = &logs[logs.len().saturating_sub(LOG_TAIL)..];
         verdict
@@ -292,7 +311,7 @@ pub async fn launch_validation(
         cpu: state.config.validation.cpu.clone(),
         memory: state.config.validation.memory.clone(),
     };
-    let key = JobKey::validation(&build.assignment_id, build_id);
+    let key = JobKey::validation(&job_id(&build.course_id, &build.slug), build_id);
     let outcome = state
         .builder
         .ensure_validation(&key, &request)
@@ -383,7 +402,10 @@ pub async fn reconcile(state: &AppState) -> anyhow::Result<()> {
             AssignmentBuildStatus::Running => {
                 match state
                     .builder
-                    .poll(&JobKey::assignment(&build.assignment_id, &build.image_hash))
+                    .poll(&JobKey::assignment(
+                        &job_id(&build.course_id, &build.slug),
+                        &build.image_hash,
+                    ))
                     .await?
                 {
                     JobState::Gone => {
@@ -434,6 +456,9 @@ pub(crate) async fn plan_for(
     upload: &AssignmentUpload,
     force: bool,
 ) -> anyhow::Result<Plan> {
+    let assignment = db::assignment_by_id(&state.pool, upload.assignment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("upload {} has no assignment", upload.id))?;
     let bytes = state.objects.get(&upload.object_key).await?;
     let config = state.config.clone();
     let checked = tokio::task::spawn_blocking(move || {
@@ -446,12 +471,13 @@ pub(crate) async fn plan_for(
     })
     .await?
     .map_err(|r| anyhow::anyhow!(r.error))?;
-    Ok(Plan::from_checked(
+    Plan::from_checked(
         checked,
+        &assignment,
         upload.id,
         upload.object_key.clone(),
         force,
-    ))
+    )
 }
 
 #[cfg(test)]
@@ -460,10 +486,12 @@ mod tests {
 
     fn plan(containerfile: &str, tree: &str) -> Plan {
         Plan {
-            assignment_id: "ll".into(),
+            assignment_id: 1,
+            course: "cop3502-f26".into(),
+            slug: "ll".into(),
             upload_id: 1,
             tree_hash: tree.into(),
-            object_key: "assignments/ll/t.tgz".into(),
+            object_key: "assignments/cop3502-f26/ll/t.tgz".into(),
             containerfile: containerfile.into(),
             has_solution: true,
             settings: crate::settings::RunSettings {
@@ -472,6 +500,7 @@ mod tests {
                 egress: pedagog_k8s::validate::Egress::Deny,
                 submission: Default::default(),
             },
+            policy: "{}".into(),
             force: false,
         }
     }
@@ -484,7 +513,7 @@ mod tests {
         assert_ne!(base.image_hash(), plan("FROM a\n", "tree-2").image_hash());
         let image = base.image_ref("reg:5000");
         assert!(
-            image.starts_with("reg:5000/pedagog/assignments/ll:"),
+            image.starts_with("reg:5000/pedagog/assignments/cop3502-f26/ll:"),
             "{image}"
         );
         assert_eq!(image.rsplit(':').next().unwrap().len(), 16);
