@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "DELETE FROM course_staff WHERE course_id = $1 AND user_id = $2",
+  "query": "UPDATE memberships SET dropped_at = now() WHERE course_id = $1 AND user_id = $2",
   "describe": {
     "columns": [],
     "parameters": {
@@ -11,5 +11,5 @@
     },
     "nullable": []
   },
-  "hash": "ff1550fe5cdaf1e8de718bc4d6316329420cf9dfa25c4eb50755cb8440f171db"
+  "hash": "1b6c8c624f5647acc1a67e535304aa201f5e5787324d10879a42ee3eaeb3c1b7"
 }

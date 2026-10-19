@@ -6,10 +6,16 @@
 
 mod auth;
 mod config;
+mod courses;
 mod error;
 mod http;
 mod mail;
+mod members;
+mod roster;
 mod state;
+#[cfg(test)]
+mod testing;
+mod users;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,8 +61,10 @@ async fn add_admin(email: &str) -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("{} must be set", config::DATABASE_URL))?;
     let pool = db::connect(&url).await?;
     db::run_migrations(&pool).await?;
-    let user = db::accounts::set_admin(&pool, email, true).await?;
-    println!("{} is an admin", user.email);
+    match db::accounts::set_role(&pool, email, pedagog_store::GlobalRole::Admin).await? {
+        db::accounts::RoleSet::Set { user, .. } => println!("{} is an admin", user.email),
+        db::accounts::RoleSet::LastAdmin => unreachable!("making an admin never removes one"),
+    }
     Ok(())
 }
 

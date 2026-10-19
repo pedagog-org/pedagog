@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"n!\" FROM courses\n            WHERE $1::text IS NULL OR id ILIKE $1 ESCAPE '\\' OR name ILIKE $1 ESCAPE '\\'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d89b3951781e5b5ce3539c2012233dec45444bb59a17427775652fe8d1ae1b82"
+}

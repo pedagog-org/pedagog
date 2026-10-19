@@ -168,10 +168,9 @@ fn describe(me: &serde_json::Value, api: &str) -> Vec<String> {
     let mut lines = vec![format!(
         "{}{} at {api}",
         user["email"].as_str().unwrap_or("?"),
-        if user["is_admin"].as_bool() == Some(true) {
-            " (admin)"
-        } else {
-            ""
+        match user["role"].as_str() {
+            Some(role @ ("admin" | "staff")) => format!(" ({role})"),
+            _ => String::new(),
         }
     )];
     match me["courses"].as_array().map(Vec::as_slice) {
@@ -197,18 +196,18 @@ mod tests {
     #[test]
     fn whoami_lists_the_user_and_their_courses() {
         let me = serde_json::json!({
-            "user": {"email": "conder@ufl.edu", "name": "", "is_admin": true},
-            "courses": [{"id": "cop3502-f26", "name": "COP3502", "role": "staff"}]
+            "user": {"email": "conder@ufl.edu", "name": "", "role": "admin"},
+            "courses": [{"id": "cop3502-f26", "name": "COP3502", "role": "instructor"}]
         });
         assert_eq!(
             describe(&me, "https://pedagog.example"),
             [
                 "conder@ufl.edu (admin) at https://pedagog.example",
-                "  cop3502-f26 (staff): COP3502"
+                "  cop3502-f26 (instructor): COP3502"
             ]
         );
         let none =
-            serde_json::json!({"user": {"email": "a@ufl.edu", "is_admin": false}, "courses": []});
+            serde_json::json!({"user": {"email": "a@ufl.edu", "role": "student"}, "courses": []});
         assert_eq!(describe(&none, "x")[1], "no courses");
     }
 

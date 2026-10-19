@@ -437,6 +437,21 @@ The api is the public entry point: people log in with a code sent to their email
    hammer whoami
    ```
 
+Then let an instructor create their course (or create it for them with
+`--instructor`), and fill it:
+
+```sh
+hammer users role prof@ufl.edu staff                    # admin: prof may create courses
+hammer courses create cop3502-f26 "COP3502 (Fall 2026)" # prof: and teaches it
+hammer members import cop3502-f26 canvas-gradebook.csv  # students; --sync also drops missing ones
+hammer members add cop3502-f26 ta@ufl.edu --role grader
+hammer members list cop3502-f26
+hammer members show cop3502-f26 gator                   # part of an email or name
+```
+
+Admins find people with `hammer users list --role staff`, `hammer users show <email or
+name>`, and every course with `hammer courses list --all --search cop3502`.
+
 On kind: `just kind-load-api`, `just kind-deploy`, `just kind-add-admin <email>`, then
 `just kind-api` port-forwards the api (http://localhost:18082) and Mailpit's inbox
 (http://localhost:18025), where the login code arrives.

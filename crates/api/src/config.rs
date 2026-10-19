@@ -14,6 +14,7 @@ pub const SMTP_PASSWORD: &str = "PEDAGOG_SMTP_PASSWORD";
 pub const MAIL_FROM_NAME: &str = "PEDAGOG_MAIL_FROM_NAME";
 pub const MAIL_FROM_ADDRESS: &str = "PEDAGOG_MAIL_FROM_ADDRESS";
 pub const MAIL_REPLY_TO: &str = "PEDAGOG_MAIL_REPLY_TO";
+pub const LOGIN_DOMAIN: &str = "PEDAGOG_LOGIN_DOMAIN";
 
 const DEFAULT_LISTEN: &str = "0.0.0.0:8080";
 
@@ -26,6 +27,8 @@ pub struct Config {
     pub cookie_secure: bool,
     pub smtp: Smtp,
     pub limits: AuthLimits,
+    /// Canvas roster logins become `<login>@<this>`.
+    pub login_domain: String,
 }
 
 /// How mail leaves: a relay that may or may not want a login, with or
@@ -129,6 +132,7 @@ impl Config {
                 reply_to: var(MAIL_REPLY_TO).filter(|r| !r.is_empty()),
             },
             limits: AuthLimits::default(),
+            login_domain: var(LOGIN_DOMAIN).unwrap_or_else(|| "ufl.edu".to_owned()),
         })
     }
 }

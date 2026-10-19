@@ -1,5 +1,6 @@
 mod account;
 mod cli;
+mod manage;
 mod submit;
 mod upload;
 mod vend;
@@ -10,7 +11,10 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use miette::{GraphicalReportHandler, MietteDiagnostic, Report, Result, Severity, miette};
 
-use cli::{Cli, Command, Format, LoginArgs, PlanArgs, SubmitArgs, UploadArgs, VendArgs};
+use cli::{
+    Cli, Command, CoursesCmd, Format, LoginArgs, MembersCmd, PlanArgs, SubmitArgs, UploadArgs,
+    UsersCmd, VendArgs,
+};
 use pedagog_core::recipe::assignment::{AssignmentYaml, FileSources};
 use pedagog_core::recipe::primitives::Id;
 use pedagog_core::recipe::render::containerfile::Containerfile;
@@ -33,6 +37,9 @@ fn main() -> Result<()> {
         Command::Login(args) => run_login(args),
         Command::Logout => run_logout(),
         Command::Whoami => run_whoami(),
+        Command::Users(cmd) => run_users(cmd),
+        Command::Courses(cmd) => run_courses(cmd),
+        Command::Members(cmd) => run_members(cmd),
     }
 }
 
@@ -221,6 +228,221 @@ fn run_whoami() -> Result<()> {
         println!("{line}");
     }
     Ok(())
+}
+
+fn print_lines(lines: Vec<String>) -> Result<()> {
+    for line in lines {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// Path segments the user typed (emails, ids) go into URLs as-is apart from
+/// these, which would change the path.
+fn segment(s: &str) -> String {
+    s.replace('%', "%25")
+        .replace('/', "%2F")
+        .replace('?', "%3F")
+        .replace('#', "%23")
+}
+
+fn api() -> Result<manage::Api> {
+    manage::Api::from_session().map_err(|e| miette!("{e}"))
+}
+
+fn run_users(cmd: UsersCmd) -> Result<()> {
+    let api = api()?;
+    let lines = match cmd {
+        UsersCmd::List { role, search, page } => manage::users(
+            &api.get(&format!(
+                "/users{}",
+                manage::query(&[
+                    ("role", role),
+                    ("search", search),
+                    ("page", Some(page.to_string()))
+                ])
+            ))
+            .map_err(|e| miette!("{e}"))?,
+        ),
+        UsersCmd::Show { query } => manage::user(
+            &api.get(&format!("/users/{}", segment(&query)))
+                .map_err(|e| miette!("{e}"))?,
+        ),
+        UsersCmd::Role { email, role } => manage::role_set(
+            &api.put(
+                &format!("/users/{}/role", segment(&email)),
+                &serde_json::json!({ "role": role }),
+            )
+            .map_err(|e| miette!("{e}"))?,
+        ),
+        UsersCmd::Signout { email } => {
+            let ended = api
+                .delete(&format!("/users/{}/sessions", segment(&email)))
+                .map_err(|e| miette!("{e}"))?;
+            vec![format!("{} session(s) ended", ended["ended"])]
+        }
+    };
+    print_lines(lines)
+}
+
+fn run_courses(cmd: CoursesCmd) -> Result<()> {
+    let api = api()?;
+    let lines = match cmd {
+        CoursesCmd::List { all, search, page } => {
+            let q = if all {
+                manage::query(&[
+                    ("all", Some("true".into())),
+                    ("search", search),
+                    ("page", Some(page.to_string())),
+                ])
+            } else {
+                String::new()
+            };
+            manage::courses(
+                &api.get(&format!("/courses{q}"))
+                    .map_err(|e| miette!("{e}"))?,
+            )
+        }
+        CoursesCmd::Show { course } => manage::course(
+            &api.get(&format!("/courses/{}", segment(&course)))
+                .map_err(|e| miette!("{e}"))?,
+        ),
+        CoursesCmd::Create {
+            id,
+            name,
+            instructors,
+        } => {
+            let made = api
+                .post(
+                    "/courses",
+                    &serde_json::json!({ "id": id, "name": name, "instructors": instructors }),
+                )
+                .map_err(|e| miette!("{e}"))?;
+            let who: Vec<&str> = made["instructors"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|e| e.as_str())
+                .collect();
+            vec![format!("created {id}; instructors: {}", who.join(", "))]
+        }
+    };
+    print_lines(lines)
+}
+
+fn run_members(cmd: MembersCmd) -> Result<()> {
+    let api = api()?;
+    let lines = match cmd {
+        MembersCmd::List {
+            course,
+            role,
+            dropped,
+        } => manage::members(
+            &api.get(&format!(
+                "/courses/{}/members{}",
+                segment(&course),
+                manage::query(&[("role", role), ("dropped", dropped.then(|| "true".into()))])
+            ))
+            .map_err(|e| miette!("{e}"))?,
+        ),
+        MembersCmd::Show { course, query } => manage::member(
+            &api.get(&format!(
+                "/courses/{}/members/{}",
+                segment(&course),
+                segment(&query)
+            ))
+            .map_err(|e| miette!("{e}"))?,
+        ),
+        MembersCmd::Add {
+            course,
+            emails,
+            role,
+            name,
+        } => {
+            if name.is_some() && emails.len() > 1 {
+                return Err(miette!("--name goes with a single email"));
+            }
+            let mut lines = Vec::new();
+            for email in &emails {
+                let added = api
+                    .put(
+                        &format!("/courses/{}/members/{}", segment(&course), segment(email)),
+                        &serde_json::json!({ "role": role, "name": name.clone().unwrap_or_default() }),
+                    )
+                    .map_err(|e| several(&emails, email, e))?;
+                lines.push(manage::added(&added));
+            }
+            lines
+        }
+        MembersCmd::Drop { course, emails } => {
+            let mut lines = Vec::new();
+            for email in &emails {
+                api.delete(&format!(
+                    "/courses/{}/members/{}",
+                    segment(&course),
+                    segment(email)
+                ))
+                .map_err(|e| several(&emails, email, e))?;
+                lines.push(format!("dropped {email} from {course}"));
+            }
+            lines
+        }
+        MembersCmd::Import {
+            course,
+            file,
+            sync,
+            yes,
+        } => {
+            let file = expand_tilde(file);
+            let csv = std::fs::read_to_string(&file)
+                .map_err(|e| miette!("cannot read {}: {e}", file.display()))?;
+            let path = format!("/courses/{}/members/import", segment(&course));
+            if sync && !yes {
+                let dry = api
+                    .post_text(
+                        &format!("{path}?sync=true&dry_run=true"),
+                        "text/csv",
+                        csv.clone(),
+                    )
+                    .map_err(|e| miette!("{e}"))?;
+                let drops = manage::would_drop(&dry);
+                if !drops.is_empty() && !confirm(&drops)? {
+                    return print_lines(vec!["nothing changed".to_owned()]);
+                }
+            }
+            manage::imported(
+                &api.post_text(
+                    &format!("{path}{}", if sync { "?sync=true" } else { "" }),
+                    "text/csv",
+                    csv,
+                )
+                .map_err(|e| miette!("{e}"))?,
+            )
+        }
+    };
+    print_lines(lines)
+}
+
+/// An error for one of several emails names it; the api's message already
+/// names a single one.
+fn several(emails: &[String], email: &str, e: String) -> miette::Report {
+    if emails.len() > 1 {
+        miette!("{email}: {e}")
+    } else {
+        miette!("{e}")
+    }
+}
+
+/// Ask before a sync drops students.
+fn confirm(drops: &[String]) -> Result<bool> {
+    println!("would drop {}: {}", drops.len(), drops.join(", "));
+    print!("drop them? [y/N] ");
+    std::io::stdout().flush().map_err(|e| miette!("{e}"))?;
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .map_err(|e| miette!("{e}"))?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
 }
 
 fn run_submit(args: SubmitArgs) -> Result<()> {

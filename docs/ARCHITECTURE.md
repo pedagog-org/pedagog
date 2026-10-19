@@ -13,23 +13,35 @@ Two assignment platforms (`environment.platform.kind`); the platform decides whe
 
 ## Roles
 
-| Role | Scope |
-| --- | --- |
-| **Admin** | Full platform access: creates courses, manages resource limits, manages platform config |
-| **Instructor** | Manages their own courses: uploads assignments, configures policies, views results |
-| **Student** | Enrolls in courses, takes exams, submits work |
-| **Grader** | _(future)_ Per-course elevated access for grading workflows |
+Everyone has one **global role**, and one **course role** in each course they're in.
 
-Instructors may only manage courses they own. Admins may manage any course.
+| Global role | Can |
+| --- | --- |
+| **Admin** | Everything: sets global roles, sees every user and course, and acts as an instructor in any course (logged) |
+| **Staff** | Creates courses |
+| **Student** | The default; only the course roles they're given |
+
+| Course role | Can |
+| --- | --- |
+| **Instructor** | Everything in the course: assignments, dates, visibility, release, results, and its members |
+| **Grader** | Sees the members and every result, and submits; changes nothing (may leave the course) |
+| **Student** | Submits and sees their own work |
+
+- Course roles don't depend on global ones: a grad TA can be an instructor without being able to create courses.
+- Instructors add instructors, graders and students, and may remove themselves. Removing or demoting another instructor takes an admin, and a course always keeps one active instructor.
+- Only admins set global roles; the last admin can't be demoted.
 
 ---
 
 ## Courses & Enrollment
 
-- A **course** is a per-semester entity (e.g. COP3502 Fall 2026).
-- Courses are created by admins and assigned to an instructor.
+- A **course** is a per-semester entity (e.g. COP3502 Fall 2026): an id slug like `cop3502-f26` and a display name.
+- Staff and admins create courses; the creator teaches it unless they name its instructors.
+- **Members** (`memberships`): one row per course and person, with their role, how they joined (`created`, `manual`, `import`), who added them, and when. Adding someone again with another role changes it.
+- **Drops are soft**: a dropped member loses access and keeps their history and submissions; adding them again restores them.
+- **Roster import** enrolls students from a CSV of `email,name`, or Canvas's gradebook export (its SIS login becomes `<login>@<PEDAGOG_LOGIN_DOMAIN>`, default `ufl.edu`; Canvas's points row and test student are skipped). An import only adds; with `sync` it also drops students missing from the file (hammer lists them and asks first). Staff in the file keep their role. Self-registration is not supported.
+- **Finding people:** admins list users by role or search, and `show` a user's logins, sessions and courses; course staff `show` a member of their course. Both take part of an email or name; an exact email wins, several matches are listed.
 - Each course gets its own Kubernetes namespace for isolation.
-- Students are enrolled via roster import (CSV). Self-registration is not supported.
 - Resource limits are set at the platform level as defaults; admins may raise them per course.
 - Separate limits apply to workspace sessions (code-server) and queued grading runs.
 
@@ -627,7 +639,7 @@ Students and instructors authenticate via email: the platform sends a short word
 - **Login:** `POST /auth/start {email}` mails a three-word code (the EFF short word list; about 2.2 × 10⁹ possibilities) to a known user, and gives everyone the same reply, so it doesn't reveal who's registered. Codes last 10 minutes and die after 5 wrong tries; a new one once a minute per email. `POST /auth/finish {email, code, client}` opens a session.
 - **Sessions:** a random 32-byte token; Postgres stores only its blake3 hash, with the user, kind and expiry. The web gets an `HttpOnly; Secure; SameSite=Lax` cookie (12 h); `hammer login` saves a 30-day token (mode 0600) in `~/.config/pedagog/session.json` and sends it as a bearer token. Logging out deletes the row; expired sessions and codes are swept hourly.
 - **Mail** goes over SMTP to a relay, with or without a login and TLS (`PEDAGOG_SMTP_*`); on kind, Mailpit catches it.
-- **The first admin** is made with `pedagog-api add-admin <email>`; admins manage admins afterwards.
+- **The first admin** is made with `pedagog-api add-admin <email>`; admins set global roles afterwards, and can sign a user out everywhere.
 
 ---
 
@@ -650,7 +662,7 @@ Students and instructors authenticate via email: the platform sends a short word
 - **Podman Compose** brings up infra services (Postgres, cluster registry, Traefik) for local dev.
 - **Traefik** handles ingress and per-student routing to code-server instances.
 - **Longhorn** provides distributed block storage for student workspace PVCs, replicated across nodes.
-- **Postgres** stores platform state (courses, enrollments, assignments, submissions, results).
+- **Postgres** stores platform state (users, courses, memberships, assignments, submissions, results).
 - **Cluster registry** stores built assignment images.
 - One **Kubernetes namespace per course**.
 - Designed to run on multiple Raspberry Pi nodes initially, scaling to full Kubernetes clusters.

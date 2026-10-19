@@ -160,7 +160,29 @@ pub struct User {
     pub id: i64,
     pub email: String,
     pub name: String,
-    pub is_admin: bool,
+    pub role: GlobalRole,
+}
+
+impl User {
+    pub fn is_admin(&self) -> bool {
+        self.role == GlobalRole::Admin
+    }
+
+    /// Admins and staff create courses.
+    pub fn creates_courses(&self) -> bool {
+        matches!(self.role, GlobalRole::Admin | GlobalRole::Staff)
+    }
+}
+
+/// What a user is on the platform (`users.role`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
+pub enum GlobalRole {
+    /// Runs the platform: every course, every user.
+    Admin,
+    /// Creates courses.
+    Staff,
+    Student,
 }
 
 /// A course offering.
@@ -170,14 +192,38 @@ pub struct Course {
     pub name: String,
 }
 
-/// What a user is in a course.
+/// What a member is in a course (`memberships.role`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
 #[strum(serialize_all = "lowercase")]
-pub enum Role {
-    /// An instructor: everything in the course.
-    Staff,
-    /// Enrolled (and not dropped).
+pub enum CourseRole {
+    /// Everything in the course.
+    Instructor,
+    /// Sees the roster and every result; changes nothing.
+    Grader,
     Student,
+}
+
+/// How someone joined a course (`memberships.source`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
+pub enum JoinSource {
+    /// Named when the course was created.
+    Created,
+    Manual,
+    Import,
+}
+
+/// A `memberships` row with its course and user. Times are RFC 3339 (UTC).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Membership {
+    pub course: Course,
+    pub user: User,
+    pub role: CourseRole,
+    pub source: JoinSource,
+    /// The email of whoever added them, if known.
+    pub added_by: Option<String>,
+    pub joined_at: String,
+    pub dropped_at: Option<String>,
 }
 
 /// Where a session was opened.

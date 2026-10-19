@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, name FROM courses ORDER BY id",
+  "query": "SELECT id, name FROM courses\n            WHERE $1::text IS NULL OR id ILIKE $1 ESCAPE '\\' OR name ILIKE $1 ESCAPE '\\'\n            ORDER BY id LIMIT $2 OFFSET $3",
   "describe": {
     "columns": [
       {
@@ -27,12 +27,16 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Text",
+        "Int8",
+        "Int8"
+      ]
     },
     "nullable": [
       false,
       false
     ]
   },
-  "hash": "ea211e95e33d063ed82abd2419cfe6626da250d83557176de048a1df32a46f85"
+  "hash": "e00a6ab419202bd48ec0a04f88e81287dcb686730c277ef26a3d93a68910f63f"
 }

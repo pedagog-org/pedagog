@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO users (email, is_admin) VALUES ($1, $2)\n         ON CONFLICT (email) DO UPDATE SET is_admin = EXCLUDED.is_admin\n         RETURNING id, email, name, is_admin",
+  "query": "INSERT INTO users (email, role) VALUES ($1, $2)\n         ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role\n         RETURNING id, email, name, role",
   "describe": {
     "columns": [
       {
@@ -38,12 +38,12 @@
       },
       {
         "ordinal": 3,
-        "name": "is_admin",
-        "type_info": "Bool",
+        "name": "role",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "users",
-            "name": "is_admin"
+            "name": "role"
           }
         }
       }
@@ -51,7 +51,7 @@
     "parameters": {
       "Left": [
         "Text",
-        "Bool"
+        "Text"
       ]
     },
     "nullable": [
@@ -61,5 +61,5 @@
       false
     ]
   },
-  "hash": "4410c276db894c01d3c053fc8f171564fa8f860daaaa6e64b55e7adc461be149"
+  "hash": "2be97bb32dcb5598806ab4c6e7c5933bb0f912f258b6721d5db111ebcd23686f"
 }

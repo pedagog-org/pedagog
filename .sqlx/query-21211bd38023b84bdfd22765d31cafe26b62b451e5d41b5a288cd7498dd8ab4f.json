@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, email, name, is_admin FROM users WHERE email = $1",
+  "query": "INSERT INTO users (email, name) VALUES ($1, $2)\n         ON CONFLICT (email) DO UPDATE\n           SET name = CASE WHEN EXCLUDED.name = '' THEN users.name ELSE EXCLUDED.name END\n         RETURNING id, email, name, role",
   "describe": {
     "columns": [
       {
@@ -38,18 +38,19 @@
       },
       {
         "ordinal": 3,
-        "name": "is_admin",
-        "type_info": "Bool",
+        "name": "role",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "users",
-            "name": "is_admin"
+            "name": "role"
           }
         }
       }
     ],
     "parameters": {
       "Left": [
+        "Text",
         "Text"
       ]
     },
@@ -60,5 +61,5 @@
       false
     ]
   },
-  "hash": "edc762f8d670fcb04802861e0964a64cb0cb204a26f066c0f3a91b4a6c542e2a"
+  "hash": "21211bd38023b84bdfd22765d31cafe26b62b451e5d41b5a288cd7498dd8ab4f"
 }

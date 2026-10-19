@@ -13,6 +13,7 @@ pedagog-store = { path = "../store", features = ["db"] }
 anyhow = { workspace = true }
 axum = { workspace = true }
 blake3 = { workspace = true }
+csv = { workspace = true }
 getrandom = { workspace = true }
 lettre = { workspace = true }
 rustls = { workspace = true }

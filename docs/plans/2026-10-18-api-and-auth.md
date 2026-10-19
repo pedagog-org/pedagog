@@ -61,6 +61,8 @@ hammer ──token──▶ api (pedagog-system, Traefik + cert-manager TLS)
 
 ### Roles and courses
 
+> Superseded for roles, staff and rosters by [Step 3 revision](#step-3-revision-2026-10-19).
+
 - **Admin:** creates courses, adds and removes their instructors, manages admins.
 - **Instructor** (several per course): everything in their courses: assignments,
   dates, visibility, release, roster, results.
@@ -251,7 +253,7 @@ set|clear|show`; `results release [--undo]`, `results list`.
 
 - Per-student date and visibility overrides (extensions, accommodations).
 - Late penalties, attempt limits, which submission counts.
-- UF SSO; the Grader/TA role; per-course Kubernetes namespaces and quotas.
+- UF SSO; per-course Kubernetes namespaces and quotas.
 - Grade export (CSV) and artifact download.
 - Rate limits per IP on `/auth/start`, beyond per email.
 
@@ -261,6 +263,124 @@ set|clear|show`; `results release [--undo]`, `results list`.
   and routes, new `hammer` commands. The course-scoping migration's down step moves
   `default` data back to global ids (refused if another course exists).
 - `jobs`' internal endpoints keep working for operators throughout.
+
+## Step 3 revision (2026-10-19)
+
+Decided after a review of #47, which had built admin-only courses, a single staff role
+and import-only rosters. This replaces the roles, roster and admin parts above.
+
+### Global roles
+
+- `users.role`: `admin` | `staff` | `student` (default `student`), replacing `is_admin`.
+- Staff and admins create courses. Only admins set global roles; `pedagog-api
+  add-admin` stays for the first admin.
+- Being a course instructor doesn't make someone staff, so a grad TA can teach a
+  course without being able to create courses.
+- Demoting a staff user keeps their course roles; they can't create new courses.
+- The last admin can't be demoted.
+
+### Course roles
+
+- One role per person per course: `instructor`, `grader` or `student`. Adding an
+  existing member with another role changes their role.
+
+| | instructor | grader | student | admin |
+| --- | --- | --- | --- | --- |
+| view members | ✓ | ✓ | | ✓ |
+| import, add, drop students | ✓ | | | ✓ |
+| add graders and instructors | ✓ | | | ✓ |
+| remove or demote another instructor | | | | ✓ |
+| remove or demote yourself | ✓ (not the last) | ✓ | | |
+| assignments, dates, visibility, release | ✓ | | | ✓ |
+| all results | ✓ | ✓ | | ✓ |
+| own results, submit | ✓ | ✓ | ✓ | ✓ |
+
+- Admins act as an implicit instructor in every course; listings mark it `(admin)`
+  and admin actions are logged with the admin's id.
+- A course always has at least one active instructor.
+- What graders see of hidden tests and unreleased results is decided in step 4.
+
+### Courses
+
+- `courses create ID NAME [--instructor EMAIL]...`: the creator becomes the instructor
+  unless instructors are named (so an admin can set up a course without joining it).
+- `courses list`: courses you have a role in. `--all [--search S] [--page N]`: admins
+  only, every course, 50 per page.
+
+### Members
+
+- `hammer members list COURSE [--role R] [--dropped]`, `add COURSE EMAIL... [--role R]
+  [--name N]`, `drop COURSE EMAIL...`, `import COURSE FILE [--sync] [--yes]`,
+  `show COURSE QUERY`. Replaces `roster` and `courses staff`.
+- Adding an unknown email creates the user.
+- Imports enroll students only (the CSV and Canvas formats above). By default an
+  import only adds; `--sync` also drops students missing from the file, after
+  listing them and asking (or `--yes`). Staff are never touched by an import.
+- Drops are soft for everyone: the member loses access, their history and
+  submissions stay, listings mark them dropped, and adding them again restores them.
+  Dropped instructors don't count toward the one-instructor rule.
+- `members show` (instructors and graders): name, role, when and how they joined
+  (`created`, `manual`, `import`), when dropped; only this course. Step 4 adds
+  submissions and scores.
+
+### Users
+
+- Admin only: `hammer users list [--role R] [--search S]`, `users role EMAIL ROLE`
+  (creates the user if unknown), `users show QUERY`, `users signout EMAIL`.
+  Replaces `hammer admins`.
+- `users show`: name, role, created, last login (and its kind), active sessions by
+  kind, every course with its role (dropped ones dated).
+- `users signout`: ends all of the user's sessions.
+
+### Search in `show`
+
+- `users show` and `members show` take part of an email or name (case-insensitive
+  substring). An exact email match wins; one match shows the profile; several list
+  up to 20 candidates (and say to narrow the search); none says so. `members show`
+  searches only its course; dropped members match, marked dropped.
+
+### API
+
+| Who | Endpoints |
+| --- | --- |
+| admin | `GET /users?role&search`, `GET /users/{query}`, `PUT /users/{email}/role`, `DELETE /users/{email}/sessions`, `GET /courses?all&search&page` |
+| staff, admin | `POST /courses` |
+| course staff | `GET /courses/{c}`, `GET /courses/{c}/members?role&dropped`, `GET /courses/{c}/members/{query}` |
+| instructor | `PUT /courses/{c}/members/{email}` (`{role, name}`), `DELETE /courses/{c}/members/{email}`, `POST /courses/{c}/members/import?sync&dry_run` (CSV) |
+
+- `--sync` without `--yes` first calls `dry_run` to show who would be dropped.
+
+### Data (migration `0007_roles`)
+
+- `users`: `role` (from `is_admin`), `last_login_at`; `is_admin` dropped.
+- `memberships`: `course_id`, `user_id`, `role`, `joined_at`, `added_by`, `source`
+  (`created` | `manual` | `import`), `dropped_at`; one row per course and user.
+  Filled from `course_staff` (instructors) and `enrollments` (students), which are
+  dropped. The down step splits it back (graders become instructors).
+- 0006 is not edited again (it's applied on kind and in main).
+
+### Alternatives considered
+
+- **A creator flag, or anyone creating courses:** a flag duplicates what `staff`
+  means; open creation lets students take slugs.
+- **Instructor becomes staff automatically:** grad TAs teaching a section could create
+  courses.
+- **A course owner:** another concept; "only admins remove other instructors" covers
+  the lockout.
+- **Configurable roles, or a separate TA role:** more to explain; three roles fit now.
+- **Always-sync imports:** a partial file drops half the class.
+- **Hard drops:** the course loses track of past submissions.
+- **Separate `roster` and `staff` commands, or `admins` + `staff`:** overlapping
+  commands; `staff` would mean two things.
+- **Exact-email `show` with a separate search:** an extra step for the common case.
+
+### Implementation (reworks #47, `feat/courses-roster`)
+
+1. Migration 0007 and store: roles, memberships, last login, searches, paging.
+2. api: permissions table as one `require(course, Need)` check; users, courses and
+   members endpoints; sync dry runs; admin action logs.
+3. hammer: `users`, `courses`, `members`; `whoami` shows the global role.
+4. Docs: ARCHITECTURE (Roles, Courses & Enrollment), SETUP; kind demo.
 
 ## Implementation steps
 
@@ -272,8 +392,8 @@ set|clear|show`; `results release [--undo]`, `results list`.
    interface and email codes, the mailer (SMTP / Mailpit), sessions, `add-admin`;
    deploy: Deployment, Service, Ingress, NetworkPolicy to `jobs`, Mailpit in the kind
    overlay; `hammer login|logout|whoami`.
-3. **Courses, staff and roster** (`feat/courses-roster`): admin and staff endpoints, CSV
-   and Canvas import; `hammer admins|courses|roster`.
+3. **Courses, staff and roster** (`feat/courses-roster`): see
+   [Step 3 revision](#step-3-revision-2026-10-19).
 4. **Assignments through the api** (`feat/api-assignments`): course-scoped `jobs`
    (routes, image names), policy from the current build, upload with the date diff and
    `--take-dates`, submit with the acceptance window and `late`/`staff`, status

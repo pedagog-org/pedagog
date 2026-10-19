@@ -29,6 +29,15 @@ pub enum Command {
     Logout,
     /// Show who you're logged in as, and your courses.
     Whoami,
+    /// Find users and set their global roles (admins only).
+    #[command(subcommand)]
+    Users(UsersCmd),
+    /// Create, list and inspect courses.
+    #[command(subcommand)]
+    Courses(CoursesCmd),
+    /// A course's instructors, graders and students.
+    #[command(subcommand)]
+    Members(MembersCmd),
 }
 
 #[derive(clap::Args)]
@@ -240,6 +249,100 @@ pub struct LoginArgs {
     /// api URL [env: PEDAGOG_API_URL] [default: the saved session's].
     #[arg(long, value_name = "URL")]
     pub api: Option<String>,
+}
+
+#[derive(clap::Subcommand)]
+pub enum UsersCmd {
+    /// List users, optionally by global role or matching part of an email or name.
+    List {
+        /// admin, staff or student.
+        #[arg(long)]
+        role: Option<String>,
+        #[arg(long)]
+        search: Option<String>,
+        #[arg(long, default_value_t = 1)]
+        page: i64,
+    },
+    /// A user's role, logins, sessions and courses; QUERY is part of an email or name.
+    Show { query: String },
+    /// Set a user's global role (creating them if needed): admin, staff (creates
+    /// courses) or student.
+    Role { email: String, role: String },
+    /// End every session a user has.
+    Signout { email: String },
+}
+
+#[derive(clap::Subcommand)]
+pub enum CoursesCmd {
+    /// Courses you're in; --all lists every course (admins).
+    List {
+        #[arg(long)]
+        all: bool,
+        /// With --all: part of a course id or name.
+        #[arg(long, requires = "all")]
+        search: Option<String>,
+        #[arg(long, default_value_t = 1, requires = "all")]
+        page: i64,
+    },
+    /// A course's instructors and graders, and how many students it has.
+    Show { course: String },
+    /// Create a course (staff and admins). You teach it unless you name its
+    /// instructors.
+    Create {
+        /// The course id: lowercase letters, digits and dashes, e.g. cop3502-f26.
+        id: String,
+        /// The display name, e.g. "Programming Fundamentals 1 (Fall 2026)".
+        name: String,
+        /// An instructor's email; repeatable.
+        #[arg(long = "instructor", value_name = "EMAIL")]
+        instructors: Vec<String>,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum MembersCmd {
+    /// List a course's members.
+    List {
+        course: String,
+        /// instructor, grader or student.
+        #[arg(long)]
+        role: Option<String>,
+        /// Include dropped members.
+        #[arg(long)]
+        dropped: bool,
+    },
+    /// One member; QUERY is part of an email or name.
+    Show { course: String, query: String },
+    /// Add people (or restore them, or change their role).
+    Add {
+        course: String,
+        #[arg(required = true)]
+        emails: Vec<String>,
+        /// instructor, grader or student.
+        #[arg(long, default_value = "student")]
+        role: String,
+        /// Their name (with one email).
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Drop people: they lose access and keep their history.
+    Drop {
+        course: String,
+        #[arg(required = true)]
+        emails: Vec<String>,
+    },
+    /// Enroll students from a CSV: `email,name` (with a header), or Canvas's
+    /// gradebook export. Adds students; staff are left alone.
+    Import {
+        course: String,
+        file: PathBuf,
+        /// Also drop students missing from the file (asks first).
+        #[arg(long)]
+        sync: bool,
+        /// With --sync: don't ask.
+        #[arg(long, requires = "sync")]
+        yes: bool,
+    },
 }
 
 #[derive(ValueEnum, Clone, PartialEq)]

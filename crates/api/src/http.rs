@@ -1,4 +1,5 @@
-//! The public HTTP surface. This step: login, logout and who am I.
+//! The public HTTP surface: login, logout and who am I here; users, courses
+//! and members in their modules.
 //!
 //! `POST /auth/start {email}` always answers the same, so it doesn't reveal
 //! who's registered. `POST /auth/finish {email, code, client}` opens a
@@ -9,14 +10,16 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::http::header::SET_COOKIE;
 use axum::response::{AppendHeaders, IntoResponse, Json, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post, put};
 use pedagog_store::db::accounts as db;
-use pedagog_store::{Role, SessionKind};
+use pedagog_store::{CourseRole, SessionKind};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::{COOKIE_NAME, CurrentUser, Login, open_session};
 use crate::error::{ApiError, internal, refused, unauthorized};
 use crate::state::AppState;
+use crate::users::UserView;
+use crate::{courses, members, users};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -25,6 +28,18 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/finish", post(finish))
         .route("/auth/logout", post(logout))
         .route("/me", get(me))
+        .route("/users", get(users::list))
+        .route("/users/{query}", get(users::show))
+        .route("/users/{email}/role", put(users::set_role))
+        .route("/users/{email}/sessions", delete(users::sign_out))
+        .route("/courses", get(courses::list).post(courses::create))
+        .route("/courses/{course}", get(courses::show))
+        .route("/courses/{course}/members", get(members::list))
+        .route("/courses/{course}/members/import", post(members::import))
+        .route(
+            "/courses/{course}/members/{query}",
+            get(members::show).put(members::add).delete(members::remove),
+        )
         .with_state(state)
 }
 
@@ -66,23 +81,6 @@ struct FinishBody {
 
 fn default_client() -> String {
     "web".to_owned()
-}
-
-#[derive(Serialize)]
-struct UserView {
-    email: String,
-    name: String,
-    is_admin: bool,
-}
-
-impl From<&pedagog_store::User> for UserView {
-    fn from(u: &pedagog_store::User) -> Self {
-        Self {
-            email: u.email.clone(),
-            name: u.name.clone(),
-            is_admin: u.is_admin,
-        }
-    }
 }
 
 async fn finish(
@@ -150,7 +148,7 @@ async fn logout(State(state): State<AppState>, current: CurrentUser) -> Result<R
 struct CourseView {
     id: String,
     name: String,
-    /// `staff` or `student`.
+    /// `instructor`, `grader` or `student`.
     role: String,
 }
 
@@ -159,7 +157,7 @@ async fn me(State(state): State<AppState>, current: CurrentUser) -> Result<Respo
         .await
         .map_err(|e| internal("reading your courses", e))?
         .into_iter()
-        .map(|(c, role): (_, Role)| CourseView {
+        .map(|(c, role): (_, CourseRole)| CourseView {
             id: c.id,
             name: c.name,
             role: role.to_string(),
@@ -175,61 +173,9 @@ async fn me(State(state): State<AppState>, current: CurrentUser) -> Result<Respo
 mod tests {
     use super::*;
 
-    use std::sync::{Arc, Mutex};
-
     use sqlx::PgPool;
 
-    use crate::auth::Authenticator;
-    use crate::config::{AuthLimits, Config, Smtp, TlsMode};
-    use crate::mail::{Mail, Mailer};
-
-    /// A running api on a free port, with mail kept in memory.
-    async fn serve(pool: PgPool) -> (String, Arc<Mutex<Vec<Mail>>>) {
-        let (mailer, outbox) = Mailer::memory();
-        let config = Config {
-            database_url: String::new(),
-            listen_addr: String::new(),
-            public_url: "https://pedagog.example".into(),
-            cookie_secure: true,
-            smtp: Smtp {
-                host: "unused".into(),
-                port: 25,
-                tls: TlsMode::None,
-                login: None,
-                from_name: "Pedagog".into(),
-                from_address: "pedagog@ufl.edu".into(),
-                reply_to: None,
-            },
-            limits: AuthLimits::default(),
-        };
-        let state = AppState {
-            pool,
-            config: Arc::new(config),
-            mailer,
-            auth: Authenticator::EmailCode,
-        };
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, router(state)).await });
-        (url, outbox)
-    }
-
-    async fn post(url: &str, body: serde_json::Value, token: Option<&str>) -> reqwest::Response {
-        let client = reqwest::Client::new();
-        let mut req = client
-            .post(url)
-            .header("content-type", "application/json")
-            .body(body.to_string());
-        if let Some(t) = token {
-            req = req.bearer_auth(t);
-        }
-        req.send().await.unwrap()
-    }
-
-    fn code_in(outbox: &Arc<Mutex<Vec<Mail>>>) -> String {
-        let mail = outbox.lock().unwrap().last().cloned().unwrap();
-        mail.subject.rsplit(' ').next().unwrap().to_owned()
-    }
+    use crate::testing::{code_in, post, serve};
 
     #[sqlx::test(migrations = "../store/migrations")]
     async fn a_cli_login_gets_a_token_that_works_until_logout(pool: PgPool) -> sqlx::Result<()> {
@@ -356,8 +302,16 @@ mod tests {
     #[sqlx::test(migrations = "../store/migrations")]
     async fn me_lists_courses_and_requires_a_session(pool: PgPool) -> sqlx::Result<()> {
         let alice = db::upsert_user(&pool, "alice@ufl.edu", "Alice").await?;
-        db::create_course(&pool, "cop3502-f26", "COP3502").await?;
-        db::enroll(&pool, "cop3502-f26", alice.id).await?;
+        let prof = db::upsert_user(&pool, "prof@ufl.edu", "").await?;
+        db::create_course(&pool, "cop3502-f26", "COP3502", prof.id, &[prof.id]).await?;
+        db::enroll(
+            &pool,
+            "cop3502-f26",
+            alice.id,
+            prof.id,
+            pedagog_store::JoinSource::Import,
+        )
+        .await?;
         let (url, outbox) = serve(pool).await;
         let me = reqwest::Client::new()
             .get(format!("{url}/me"))
