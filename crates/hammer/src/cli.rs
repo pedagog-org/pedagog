@@ -29,6 +29,15 @@ pub enum Command {
     Logout,
     /// Show who you're logged in as, and your courses.
     Whoami,
+    /// Manage admins (admins only).
+    #[command(subcommand)]
+    Admins(AdminsCmd),
+    /// Create and inspect courses, and choose their instructors.
+    #[command(subcommand)]
+    Courses(CoursesCmd),
+    /// Import and manage a course's students.
+    #[command(subcommand)]
+    Roster(RosterCmd),
 }
 
 #[derive(clap::Args)]
@@ -240,6 +249,66 @@ pub struct LoginArgs {
     /// api URL [env: PEDAGOG_API_URL] [default: the saved session's].
     #[arg(long, value_name = "URL")]
     pub api: Option<String>,
+}
+
+#[derive(clap::Subcommand)]
+pub enum AdminsCmd {
+    /// List admins.
+    List,
+    /// Make someone an admin.
+    Add { email: String },
+    /// Stop someone being an admin (not the last one).
+    Remove { email: String },
+}
+
+#[derive(clap::Subcommand)]
+pub enum CoursesCmd {
+    /// Your courses (all of them, for admins).
+    List,
+    /// A course's instructors and how many students it has.
+    Show { course: String },
+    /// Create a course (admins only).
+    Create {
+        /// The course id: lowercase letters, digits and dashes, e.g. cop3502-f26.
+        id: String,
+        /// The display name, e.g. "COP3502 Programming Fundamentals 1 (Fall 2026)".
+        #[arg(long)]
+        name: String,
+        /// An instructor's email; repeatable.
+        #[arg(long = "instructor", value_name = "EMAIL")]
+        instructors: Vec<String>,
+    },
+    /// Add or remove a course's instructors (admins only).
+    #[command(subcommand)]
+    Staff(StaffCmd),
+}
+
+#[derive(clap::Subcommand)]
+pub enum StaffCmd {
+    Add { course: String, email: String },
+    Remove { course: String, email: String },
+}
+
+#[derive(clap::Subcommand)]
+pub enum RosterCmd {
+    /// Enroll students from a CSV: `email,name` (with a header), or Canvas's
+    /// gradebook export. Adds new students; nobody is removed.
+    Import {
+        #[arg(long)]
+        course: String,
+        file: PathBuf,
+    },
+    /// List a course's students.
+    List {
+        #[arg(long)]
+        course: String,
+    },
+    /// Drop a student (they keep their submissions and lose access).
+    Drop {
+        #[arg(long)]
+        course: String,
+        email: String,
+    },
 }
 
 #[derive(ValueEnum, Clone, PartialEq)]

@@ -1,5 +1,6 @@
 mod account;
 mod cli;
+mod manage;
 mod submit;
 mod upload;
 mod vend;
@@ -10,7 +11,10 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use miette::{GraphicalReportHandler, MietteDiagnostic, Report, Result, Severity, miette};
 
-use cli::{Cli, Command, Format, LoginArgs, PlanArgs, SubmitArgs, UploadArgs, VendArgs};
+use cli::{
+    AdminsCmd, Cli, Command, CoursesCmd, Format, LoginArgs, PlanArgs, RosterCmd, StaffCmd,
+    SubmitArgs, UploadArgs, VendArgs,
+};
 use pedagog_core::recipe::assignment::{AssignmentYaml, FileSources};
 use pedagog_core::recipe::primitives::Id;
 use pedagog_core::recipe::render::containerfile::Containerfile;
@@ -33,6 +37,9 @@ fn main() -> Result<()> {
         Command::Login(args) => run_login(args),
         Command::Logout => run_logout(),
         Command::Whoami => run_whoami(),
+        Command::Admins(cmd) => run_admins(cmd),
+        Command::Courses(cmd) => run_courses(cmd),
+        Command::Roster(cmd) => run_roster(cmd),
     }
 }
 
@@ -221,6 +228,122 @@ fn run_whoami() -> Result<()> {
         println!("{line}");
     }
     Ok(())
+}
+
+fn print_lines(lines: Vec<String>) -> Result<()> {
+    for line in lines {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// Path segments the user typed (emails, ids) go into URLs as-is apart from
+/// these, which would change the path.
+fn segment(s: &str) -> String {
+    s.replace('%', "%25")
+        .replace('/', "%2F")
+        .replace('?', "%3F")
+        .replace('#', "%23")
+}
+
+fn run_admins(cmd: AdminsCmd) -> Result<()> {
+    let api = manage::Api::from_session().map_err(|e| miette!("{e}"))?;
+    let lines = match cmd {
+        AdminsCmd::List => manage::users(&api.get("/admins").map_err(|e| miette!("{e}"))?),
+        AdminsCmd::Add { email } => {
+            api.post("/admins", &serde_json::json!({ "email": email }))
+                .map_err(|e| miette!("{e}"))?;
+            vec![format!("{email} is an admin")]
+        }
+        AdminsCmd::Remove { email } => {
+            api.delete(&format!("/admins/{}", segment(&email)))
+                .map_err(|e| miette!("{e}"))?;
+            vec![format!("{email} is no longer an admin")]
+        }
+    };
+    print_lines(lines)
+}
+
+fn run_courses(cmd: CoursesCmd) -> Result<()> {
+    let api = manage::Api::from_session().map_err(|e| miette!("{e}"))?;
+    let lines = match cmd {
+        CoursesCmd::List => manage::courses(&api.get("/courses").map_err(|e| miette!("{e}"))?),
+        CoursesCmd::Show { course } => manage::course(
+            &api.get(&format!("/courses/{}", segment(&course)))
+                .map_err(|e| miette!("{e}"))?,
+        ),
+        CoursesCmd::Create {
+            id,
+            name,
+            instructors,
+        } => {
+            api.post(
+                "/courses",
+                &serde_json::json!({ "id": id, "name": name, "instructors": instructors }),
+            )
+            .map_err(|e| miette!("{e}"))?;
+            vec![format!("created {id}")]
+        }
+        CoursesCmd::Staff(StaffCmd::Add { course, email }) => {
+            api.put(&format!(
+                "/courses/{}/instructors/{}",
+                segment(&course),
+                segment(&email)
+            ))
+            .map_err(|e| miette!("{e}"))?;
+            vec![format!("{email} teaches {course}")]
+        }
+        CoursesCmd::Staff(StaffCmd::Remove { course, email }) => {
+            api.delete(&format!(
+                "/courses/{}/instructors/{}",
+                segment(&course),
+                segment(&email)
+            ))
+            .map_err(|e| miette!("{e}"))?;
+            vec![format!("{email} no longer teaches {course}")]
+        }
+    };
+    print_lines(lines)
+}
+
+fn run_roster(cmd: RosterCmd) -> Result<()> {
+    let api = manage::Api::from_session().map_err(|e| miette!("{e}"))?;
+    let lines = match cmd {
+        RosterCmd::Import { course, file } => {
+            let file = expand_tilde(file);
+            let csv = std::fs::read_to_string(&file)
+                .map_err(|e| miette!("cannot read {}: {e}", file.display()))?;
+            manage::imported(
+                &api.post_text(
+                    &format!("/courses/{}/roster", segment(&course)),
+                    "text/csv",
+                    csv,
+                )
+                .map_err(|e| miette!("{e}"))?,
+            )
+        }
+        RosterCmd::List { course } => {
+            let students = manage::users(
+                &api.get(&format!("/courses/{}/roster", segment(&course)))
+                    .map_err(|e| miette!("{e}"))?,
+            );
+            if students.is_empty() {
+                vec!["no students".to_owned()]
+            } else {
+                students
+            }
+        }
+        RosterCmd::Drop { course, email } => {
+            api.delete(&format!(
+                "/courses/{}/students/{}",
+                segment(&course),
+                segment(&email)
+            ))
+            .map_err(|e| miette!("{e}"))?;
+            vec![format!("dropped {email} from {course}")]
+        }
+    };
+    print_lines(lines)
 }
 
 fn run_submit(args: SubmitArgs) -> Result<()> {
