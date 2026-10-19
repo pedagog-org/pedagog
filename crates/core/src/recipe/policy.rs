@@ -229,18 +229,124 @@ impl ResultsPolicy {
         file: &ResultsPolicy,
         test: &TestResult,
     ) -> TestVisibility {
-        let layers = [
-            course.for_test(test),
-            course.visibility,
-            file.for_test(test),
-            file.visibility,
-        ];
-        let pick = |field: fn(&FieldOverrides) -> Option<Visibility>, own: Visibility| {
-            layers.iter().find_map(field).unwrap_or(own)
-        };
+        let explained = Self::explain(course, file, test);
         TestVisibility {
-            score: pick(|l| l.score, test.visibility.score),
-            output: pick(|l| l.output, test.visibility.output),
+            score: explained.score.value,
+            output: explained.output.value,
+        }
+    }
+
+    /// [`resolve`](Self::resolve), with the reasoning: which layer decided
+    /// each field, and what every layer says for this test.
+    pub fn explain(course: &ResultsPolicy, file: &ResultsPolicy, test: &TestResult) -> Explained {
+        let layers = [
+            (Layer::CourseTest, course.for_test(test)),
+            (Layer::CourseAll, course.visibility),
+            (Layer::FileTest, file.for_test(test)),
+            (Layer::FileAll, file.visibility),
+            (
+                Layer::Test,
+                FieldOverrides {
+                    score: Some(test.visibility.score),
+                    output: Some(test.visibility.output),
+                },
+            ),
+        ];
+        let pick = |field: fn(&FieldOverrides) -> Option<Visibility>| {
+            layers
+                .iter()
+                .find_map(|(layer, o)| {
+                    field(o).map(|value| Resolved {
+                        value,
+                        from: *layer,
+                    })
+                })
+                .unwrap_or(Resolved {
+                    value: Visibility::Hidden,
+                    from: Layer::Test,
+                })
+        };
+        Explained {
+            score: pick(|o| o.score),
+            output: pick(|o| o.output),
+            layers: layers.to_vec(),
+        }
+    }
+}
+
+/// Where a test's visibility came from, in the order they're consulted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Layer {
+    CourseTest,
+    CourseAll,
+    FileTest,
+    FileAll,
+    /// The test's own (from its code, via the results).
+    Test,
+}
+
+impl Layer {
+    pub fn describe(self) -> &'static str {
+        match self {
+            Layer::CourseTest => "course, this test",
+            Layer::CourseAll => "course, all tests",
+            Layer::FileTest => "file, this test",
+            Layer::FileAll => "file, all tests",
+            Layer::Test => "the test's own",
+        }
+    }
+}
+
+/// One field's effective visibility and the layer that decided it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Resolved {
+    pub value: Visibility,
+    pub from: Layer,
+}
+
+/// A test's resolved visibility with the reasoning behind it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Explained {
+    pub score: Resolved,
+    pub output: Resolved,
+    /// Every layer's setting for this test, first to last.
+    pub layers: Vec<(Layer, FieldOverrides)>,
+}
+
+/// Whether students see something now, and why.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Shown {
+    pub shown: bool,
+    pub why: String,
+}
+
+impl Visibility {
+    /// [`shown`](Self::shown) with the reason, for instructors inspecting
+    /// what students see. `end` is the last accepted time, if there is one.
+    pub fn shown_now(
+        self,
+        end: Option<OffsetDateTime>,
+        now: OffsetDateTime,
+        released: bool,
+    ) -> Shown {
+        let ended = end.is_some_and(|e| now > e);
+        let end_text = end.map(|e| String::from(Instant(e)));
+        let why = match self {
+            Visibility::Visible => "always shown".to_owned(),
+            Visibility::Hidden => "never shown to students".to_owned(),
+            Visibility::AfterEnd if released => "shown: results are released".to_owned(),
+            Visibility::AfterEnd => match (ended, end_text) {
+                (true, Some(e)) => format!("shown: the assignment ended at {e}"),
+                (false, Some(e)) => format!("not yet: until the end ({e}) or release"),
+                (_, None) => "not yet: no end date, so only on release".to_owned(),
+            },
+            Visibility::AfterPublish if released => "shown: results are released".to_owned(),
+            Visibility::AfterPublish => "not yet: until results are released".to_owned(),
+        };
+        Shown {
+            shown: self.shown(ended, released),
+            why,
         }
     }
 }
@@ -378,6 +484,78 @@ mod tests {
             },
             "no overrides: the test's own"
         );
+    }
+
+    #[test]
+    fn explain_names_the_deciding_layer_and_every_setting() {
+        let file = policy("results:\n  tests:\n    reverse: { score: after_publish }\n")
+            .unwrap()
+            .results;
+        let course: ResultsPolicy = serde_yaml::from_str("visibility: { score: after_publish, output: after_publish }\ntests:\n  append: { score: visible }\n").unwrap();
+        let append = test(Some("append"), "t.py::test_append");
+        let reverse = test(Some("reverse"), "t.py::test_reverse");
+        let a = ResultsPolicy::explain(&course, &file, &append);
+        assert_eq!(
+            a.score,
+            Resolved {
+                value: Visibility::Visible,
+                from: Layer::CourseTest
+            }
+        );
+        assert_eq!(
+            a.output,
+            Resolved {
+                value: Visibility::AfterPublish,
+                from: Layer::CourseAll
+            }
+        );
+        let r = ResultsPolicy::explain(&course, &file, &reverse);
+        assert_eq!(
+            r.score.from,
+            Layer::CourseAll,
+            "course for all beats file for this test"
+        );
+        assert_eq!(
+            r.layers[2].1.score,
+            Some(Visibility::AfterPublish),
+            "the file's setting is still listed"
+        );
+        assert_eq!(r.layers.len(), 5);
+        assert_eq!(
+            ResultsPolicy::resolve(&course, &file, &append),
+            TestVisibility {
+                score: Visibility::Visible,
+                output: Visibility::AfterPublish
+            }
+        );
+    }
+
+    #[test]
+    fn shown_now_says_why() {
+        let end = Some(at("2026-09-10T23:59:00-04:00"));
+        let before = at("2026-09-05T12:00:00Z");
+        let after = at("2026-09-12T12:00:00Z");
+        let s = Visibility::AfterEnd.shown_now(end, before, false);
+        assert!(
+            !s.shown && s.why.contains("until the end (2026-09-10T23:59:00-04:00)"),
+            "{}",
+            s.why
+        );
+        assert!(
+            Visibility::AfterEnd
+                .shown_now(end, after, false)
+                .why
+                .contains("ended at")
+        );
+        assert!(
+            Visibility::AfterEnd
+                .shown_now(None, after, false)
+                .why
+                .contains("only on release")
+        );
+        let s = Visibility::AfterPublish.shown_now(end, after, false);
+        assert!(!s.shown && s.why.contains("until results are released"));
+        assert!(Visibility::AfterPublish.shown_now(end, before, true).shown);
     }
 
     #[test]
