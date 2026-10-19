@@ -114,6 +114,26 @@ kind-load-jobs:
     {{KIND}} load image-archive target/jobs-image.tar --name pedagog
     {{KIND}} load image-archive target/jobs-init-image.tar --name pedagog
 
+# Build the api image and load it into the kind node.
+kind-load-api:
+    podman build -f crates/api/Containerfile -t localhost/pedagog/api:dev .
+    podman save --format docker-archive -o target/api-image.tar localhost/pedagog/api:dev
+    {{KIND}} load image-archive target/api-image.tar --name pedagog
+
+# Make someone an admin on kind (how the first admin gets in).
+kind-add-admin EMAIL:
+    kubectl --context {{KIND_CTX}} -n pedagog-system exec deploy/pedagog-api -- /usr/local/bin/pedagog-api add-admin "{{EMAIL}}"
+
+# Port-forward the api (http://localhost:18082) and Mailpit's inbox
+# (http://localhost:18025) until interrupted.
+kind-api:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubectl --context {{KIND_CTX}} -n pedagog-data port-forward svc/mailpit 18025:8025 >/dev/null &
+    trap 'kill $!' EXIT
+    echo "api: http://localhost:18082   mail: http://localhost:18025"
+    kubectl --context {{KIND_CTX}} -n pedagog-system port-forward svc/pedagog-api 18082:8080
+
 # Apply the kind overlay (full base, dev-mode jobs, local-path storage).
 kind-deploy:
     kubectl --context {{KIND_CTX}} apply -k deploy/overlays/kind

@@ -185,6 +185,16 @@ kubectl create secret generic pedagog-jobs-db \
   --from-literal=url="postgres://pedagog:${POSTGRES_PW}@postgres-service.pedagog-data.svc:5432/pedagog" \
   --namespace=pedagog-builds
 
+# The api reads its DATABASE_URL from its own namespace too
+kubectl create namespace pedagog-system
+kubectl create secret generic pedagog-api-db \
+  --from-literal=url="postgres://pedagog:${POSTGRES_PW}@postgres-service.pedagog-data.svc:5432/pedagog" \
+  --namespace=pedagog-system
+# Only if the mail relay wants a login:
+[ -n "$SMTP_USER" ] && kubectl create secret generic pedagog-api-smtp \
+  --from-literal=user="$SMTP_USER" --from-literal=password="$SMTP_PASSWORD" \
+  --namespace=pedagog-system
+
 # Garage object store: cluster RPC secret (64 hex chars) and admin API token
 kubectl create secret generic garage-secrets \
   --from-literal=rpc-secret="$(openssl rand -hex 32)" \
@@ -397,6 +407,39 @@ submissions and grades them; the defaults suit a small cluster. Set these on the
 - **Capacity:** test runs wait in jobs' queue until there's room; if submissions sit
   queued, look at `pedagog-grading`'s quota (`kubectl -n pedagog-grading describe
   resourcequota`) and pending pods before raising anything.
+
+## Phase 6 — The api and Login
+
+The api is the public entry point: people log in with a code sent to their email.
+
+1. **Image:** build and push `pedagog/api` like the jobs images
+   (`podman build -f crates/api/Containerfile -t <registry-ip>:5000/pedagog/api:<tag> .`),
+   and set it in the overlay's `images:`.
+2. **Hostname and certificate:** in `deploy/base/api/ingress.yaml` (or an overlay
+   patch), replace `REPLACE-WITH-HOSTNAME`; cert-manager's `letsencrypt` issuer gets
+   the certificate. Set `PEDAGOG_PUBLIC_URL` to `https://<hostname>` (links in emails).
+3. **Mail:** set on the `pedagog-api` Deployment:
+
+   | Env var | Default | Notes |
+   | --- | --- | --- |
+   | `PEDAGOG_SMTP_HOST` | (required) | The relay |
+   | `PEDAGOG_SMTP_TLS` | `none` | `none` (a trusted relay), `starttls` or `tls` |
+   | `PEDAGOG_SMTP_PORT` | 25 / 587 / 465 | By TLS mode |
+   | `PEDAGOG_SMTP_USER` / `_PASSWORD` | (none) | From the `pedagog-api-smtp` Secret (Phase 1), only if the relay wants a login |
+   | `PEDAGOG_MAIL_FROM_NAME` / `_ADDRESS` | `Pedagog` / (required) | The sender |
+   | `PEDAGOG_MAIL_REPLY_TO` | (none) | Optional |
+
+4. **The first admin:**
+
+   ```sh
+   kubectl -n pedagog-system exec deploy/pedagog-api -- /usr/local/bin/pedagog-api add-admin you@ufl.edu
+   hammer login --api https://<hostname> --email you@ufl.edu
+   hammer whoami
+   ```
+
+On kind: `just kind-load-api`, `just kind-deploy`, `just kind-add-admin <email>`, then
+`just kind-api` port-forwards the api (http://localhost:18082) and Mailpit's inbox
+(http://localhost:18025), where the login code arrives.
 
 ---
 

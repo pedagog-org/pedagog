@@ -5,8 +5,8 @@ metadata:
   namespace: pedagog-builds
 spec:
   replicas: 1
-  # single-replica: the in-process dispatch mutex + one-running-per-OS index
-  # assume no two dispatch passes run concurrently.
+  # Dispatch and admission lock in Postgres, so replicas are safe; one is enough
+  # for a single course.
   strategy:
     type: Recreate
   selector:

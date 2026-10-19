@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pedagog-api
+  namespace: pedagog-system
+spec:
+  selector:
+    app: pedagog-api
+  ports:
+    - port: 8080
+      targetPort: 8080

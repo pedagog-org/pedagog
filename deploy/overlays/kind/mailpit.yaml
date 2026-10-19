@@ -1,0 +1,45 @@
+# Catches every email the api sends on kind, with a web inbox:
+#   kubectl -n pedagog-data port-forward svc/mailpit 18025:8025  → http://localhost:18025
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailpit
+  namespace: pedagog-data
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mailpit
+  template:
+    metadata:
+      labels:
+        app: mailpit
+    spec:
+      containers:
+        - name: mailpit
+          image: docker.io/axllent/mailpit:v1.27
+          ports:
+            - name: smtp
+              containerPort: 1025
+            - name: web
+              containerPort: 8025
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailpit
+  namespace: pedagog-data
+spec:
+  selector:
+    app: mailpit
+  ports:
+    - name: smtp
+      port: 1025
+    - name: web
+      port: 8025

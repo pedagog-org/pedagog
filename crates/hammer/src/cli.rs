@@ -23,6 +23,12 @@ pub enum Command {
     /// Check, pack and upload an assignment directory to the jobs service.
     Upload(UploadArgs),
     Submit(SubmitArgs),
+    /// Log in to the api with a code sent to your email.
+    Login(LoginArgs),
+    /// End your api session.
+    Logout,
+    /// Show who you're logged in as, and your courses.
+    Whoami,
 }
 
 #[derive(clap::Args)]
@@ -217,6 +223,23 @@ pub struct SubmitArgs {
     /// jobs service URL [env: PEDAGOG_JOBS_URL] [default: http://localhost:18081].
     #[arg(long, value_name = "URL")]
     pub jobs_url: Option<String>,
+}
+
+#[derive(clap::Args)]
+#[command(
+    long_about = "Log in to the api: it emails you a short code, which you type in here.
+
+The session lasts 30 days and is saved in ~/.config/pedagog/session.json
+(or $XDG_CONFIG_HOME/pedagog), readable only by you. `hammer logout` ends it."
+)]
+pub struct LoginArgs {
+    /// Your email (as registered by your course or an admin).
+    #[arg(long)]
+    pub email: String,
+
+    /// api URL [env: PEDAGOG_API_URL] [default: the saved session's].
+    #[arg(long, value_name = "URL")]
+    pub api: Option<String>,
 }
 
 #[derive(ValueEnum, Clone, PartialEq)]

@@ -1,0 +1,24 @@
+# https://<host>/ → the api, with a Let's Encrypt certificate (cert-manager).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pedagog-api
+  namespace: pedagog-system
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [REPLACE-WITH-HOSTNAME]
+      secretName: pedagog-api-tls
+  rules:
+    - host: REPLACE-WITH-HOSTNAME
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pedagog-api
+                port:
+                  number: 8080
