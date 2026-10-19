@@ -4,6 +4,7 @@
 //! `pedagog-api` serves; `pedagog-api add-admin <email>` makes someone an
 //! admin (how the first admin gets in).
 
+mod assignments;
 mod auth;
 mod config;
 mod courses;
@@ -82,6 +83,9 @@ async fn serve() -> anyhow::Result<()> {
         config: Arc::new(config),
         mailer,
         auth: Authenticator::EmailCode,
+        jobs: reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .build()?,
     };
 
     // Background work owned here: if it stops, the service exits and is restarted.

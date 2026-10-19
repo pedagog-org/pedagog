@@ -20,6 +20,8 @@ use crate::users::{UserView, forbidden, page, pages, require_admin, valid_email}
 /// What a request needs in a course.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Need {
+    /// Anyone in the course (e.g. its list of assignments).
+    Member,
     /// Members, results: instructors and graders.
     See,
     /// Changes: instructors.
@@ -49,8 +51,25 @@ impl Access {
 fn allows(role: Option<CourseRole>, need: Need) -> bool {
     matches!(
         (role, need),
-        (Some(CourseRole::Instructor), _) | (Some(CourseRole::Grader), Need::See)
+        (Some(CourseRole::Instructor), _)
+            | (Some(CourseRole::Grader), Need::See | Need::Member)
+            | (Some(CourseRole::Student), Need::Member)
     )
+}
+
+/// 404 for a course that doesn't exist, saying where it went if it was renamed.
+pub async fn no_course(state: &AppState, course: &str) -> ApiError {
+    match db::renamed_to(&state.pool, course).await {
+        Ok(Some((to, at))) => refused(
+            StatusCode::NOT_FOUND,
+            format!(
+                "no course {course} (renamed to {to} on {})",
+                at.get(..10).unwrap_or(&at)
+            ),
+        ),
+        Ok(None) => refused(StatusCode::NOT_FOUND, format!("no course {course}")),
+        Err(e) => internal("reading the course", e),
+    }
 }
 
 /// The course, if the caller may do what `need` says there: 404 if it
@@ -61,10 +80,12 @@ pub async fn require(
     current: &CurrentUser,
     need: Need,
 ) -> Result<Access, ApiError> {
-    let found = db::course(&state.pool, course)
+    let Some(found) = db::course(&state.pool, course)
         .await
         .map_err(|e| internal("reading the course", e))?
-        .ok_or_else(|| refused(StatusCode::NOT_FOUND, format!("no course {course}")))?;
+    else {
+        return Err(no_course(state, course).await);
+    };
     let role = db::role_in(&state.pool, course, current.user.id)
         .await
         .map_err(|e| internal("reading your role", e))?;
@@ -86,6 +107,7 @@ pub async fn require(
         });
     }
     Err(forbidden(&match need {
+        Need::Member => format!("members of {course}"),
         Need::See => format!("{course}'s instructors and graders"),
         Need::Manage => format!("{course}'s instructors"),
     }))
@@ -205,6 +227,50 @@ pub async fn create(
         .into_response())
 }
 
+#[derive(Deserialize)]
+pub struct RenameBody {
+    /// A new slug.
+    id: Option<String>,
+    name: Option<String>,
+}
+
+/// Change a course's slug and/or display name (instructors and admins).
+pub async fn rename(
+    State(state): State<AppState>,
+    current: CurrentUser,
+    Path(course): Path<String>,
+    Json(body): Json<RenameBody>,
+) -> Result<Response, ApiError> {
+    require(&state, &course, &current, Need::Manage).await?;
+    if let Some(id) = &body.id {
+        valid_course_id(id)?;
+    }
+    let name = body.name.as_deref().map(str::trim);
+    if name == Some("") {
+        return Err(refused(StatusCode::BAD_REQUEST, "a course needs a name"));
+    }
+    if body.id.is_none() && name.is_none() {
+        return Err(refused(StatusCode::BAD_REQUEST, "give a new id or name"));
+    }
+    match db::rename_course(&state.pool, &course, body.id.as_deref(), name)
+        .await
+        .map_err(|e| internal("renaming the course", e))?
+    {
+        db::Renamed::Done(c) => {
+            tracing::info!(by = current.user.id, from = %course, to = %c.id, "course renamed");
+            Ok(
+                Json(serde_json::json!({ "id": c.id, "name": c.name, "was": course }))
+                    .into_response(),
+            )
+        }
+        db::Renamed::Taken => Err(refused(
+            StatusCode::CONFLICT,
+            format!("{} already exists", body.id.unwrap_or_default()),
+        )),
+        db::Renamed::Missing => Err(no_course(&state, &course).await),
+    }
+}
+
 /// A course's staff and how many students it has.
 pub async fn show(
     State(state): State<AppState>,
@@ -248,7 +314,9 @@ mod tests {
         assert!(allows(Some(Grader), Need::See));
         assert!(!allows(Some(Grader), Need::Manage));
         assert!(!allows(Some(Student), Need::See));
+        assert!(allows(Some(Student), Need::Member));
         assert!(!allows(None, Need::See));
+        assert!(!allows(None, Need::Member));
     }
 
     #[sqlx::test(migrations = "../store/migrations")]
@@ -366,6 +434,63 @@ mod tests {
                 .await
                 .status(),
             403
+        );
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "../store/migrations")]
+    async fn instructors_rename_courses_and_old_slugs_say_where_they_went(
+        pool: PgPool,
+    ) -> sqlx::Result<()> {
+        let prof = db::upsert_user(&pool, "prof@ufl.edu", "").await?;
+        db::create_course(&pool, "cop3502-f26", "COP3502", prof.id, &[prof.id]).await?;
+        let (url, outbox) = serve(pool.clone()).await;
+        let token = login(&url, &outbox, "prof@ufl.edu").await;
+        let patch = |course: &str, body: serde_json::Value| {
+            let (url, token) = (url.clone(), token.clone());
+            let course = course.to_owned();
+            async move {
+                reqwest::Client::new()
+                    .patch(format!("{url}/courses/{course}"))
+                    .bearer_auth(token)
+                    .header("content-type", "application/json")
+                    .body(body.to_string())
+                    .send()
+                    .await
+                    .unwrap()
+            }
+        };
+        let r = patch(
+            "cop3502-f26",
+            serde_json::json!({"id": "cop3502-fall26", "name": "Programming 1"}),
+        )
+        .await;
+        assert_eq!(r.status(), 200);
+        assert_eq!(json(r).await["id"], "cop3502-fall26");
+        let shown = json(get(&format!("{url}/courses/cop3502-fall26"), &token).await).await;
+        assert_eq!(
+            (shown["name"].as_str(), shown["role"].as_str()),
+            (Some("Programming 1"), Some("instructor"))
+        );
+        let gone = get(&format!("{url}/courses/cop3502-f26"), &token).await;
+        assert_eq!(gone.status(), 404);
+        assert!(
+            json(gone).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("renamed to cop3502-fall26")
+        );
+        assert_eq!(
+            patch("cop3502-fall26", serde_json::json!({"id": "Bad Id"}))
+                .await
+                .status(),
+            400
+        );
+        assert_eq!(
+            patch("cop3502-fall26", serde_json::json!({}))
+                .await
+                .status(),
+            400
         );
         Ok(())
     }

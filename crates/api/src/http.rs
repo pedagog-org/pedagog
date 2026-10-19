@@ -6,7 +6,7 @@
 //! session: a cookie for the web, a token in the body for hammer.
 
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::StatusCode;
 use axum::http::header::SET_COOKIE;
 use axum::response::{AppendHeaders, IntoResponse, Json, Response};
@@ -19,9 +19,10 @@ use crate::auth::{COOKIE_NAME, CurrentUser, Login, open_session};
 use crate::error::{ApiError, internal, refused, unauthorized};
 use crate::state::AppState;
 use crate::users::UserView;
-use crate::{courses, members, users};
+use crate::{assignments, courses, members, users};
 
 pub fn router(state: AppState) -> Router {
+    let max_upload = state.config.max_upload_bytes;
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/auth/start", post(start))
@@ -33,7 +34,24 @@ pub fn router(state: AppState) -> Router {
         .route("/users/{email}/role", put(users::set_role))
         .route("/users/{email}/sessions", delete(users::sign_out))
         .route("/courses", get(courses::list).post(courses::create))
-        .route("/courses/{course}", get(courses::show))
+        .route(
+            "/courses/{course}",
+            get(courses::show).patch(courses::rename),
+        )
+        .route(
+            "/courses/{course}/assignments",
+            get(assignments::list)
+                .post(assignments::upload)
+                .layer(DefaultBodyLimit::max(max_upload)),
+        )
+        .route(
+            "/courses/{course}/assignments/{slug}",
+            get(assignments::show),
+        )
+        .route(
+            "/courses/{course}/assignments/{slug}/builds/{build}",
+            get(assignments::build),
+        )
         .route("/courses/{course}/members", get(members::list))
         .route("/courses/{course}/members/import", post(members::import))
         .route(
