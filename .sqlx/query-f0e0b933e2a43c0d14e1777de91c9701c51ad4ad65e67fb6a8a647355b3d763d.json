@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE course_renames SET new_id = $2 WHERE new_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f0e0b933e2a43c0d14e1777de91c9701c51ad4ad65e67fb6a8a647355b3d763d"
+}

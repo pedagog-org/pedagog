@@ -443,6 +443,11 @@ visibility, release, the upload date diff and `--take-dates`).
 - **Choosing the course in hammer:** `-c/--course`, else the nearest `course.yml`
   walking up from the current directory (`course:` and an optional `api:`), else
   `hammer use <course>` (saved with the session). `members` moves to `-c` too.
+- **Renaming courses:** instructors and admins change a course's name and slug
+  (`PATCH /courses/{c}`, `hammer courses rename [--id NEW] [--name NAME]`). The slug
+  stays the key and references follow it (`ON UPDATE CASCADE`); stored image refs and
+  object keys keep the old slug and still work. `course_renames` remembers old slugs,
+  so a repo still naming one gets "no course X (renamed to Y on …)".
 - **Direct jobs mode** (`--jobs-url`, no login) stays for operators and kind-e2e (with
   `-c`) until step 5 moves e2e to the api.
 

@@ -136,21 +136,13 @@ pub async fn released_unfinished(pool: &PgPool) -> sqlx::Result<Vec<QueuedRun>> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::assignments::{finish_build, record_upload, start_build, upsert_assignment};
+    use crate::db::assignments::{finish_build, record_upload, start_build};
     use crate::db::submissions::tests::{current_build, submit};
 
     async fn built(pool: &PgPool, image: &str) -> sqlx::Result<i64> {
-        upsert_assignment(pool, "other", "Other").await?;
-        let up = record_upload(pool, "other", image, "k", 1).await?;
-        let build = start_build(
-            pool,
-            "other",
-            up.id,
-            image,
-            "reg/o:1",
-            &crate::db::test_settings(),
-        )
-        .await?;
+        let a = crate::db::test_assignment(pool, "other").await?;
+        let up = record_upload(pool, a.id, image, "k", 1).await?;
+        let build = start_build(pool, &crate::db::test_build(&up, image, "reg/o:1")).await?;
         finish_build(pool, build, true, None).await?;
         Ok(build)
     }
@@ -180,16 +172,16 @@ mod tests {
     #[sqlx::test]
     async fn released_in_priority_then_arrival_order(pool: PgPool) -> sqlx::Result<()> {
         let build = current_build(&pool, "ll", "img-a").await?;
-        let first = submit(&pool, "ll", "s1", build).await?;
+        let first = submit(&pool, "s1", build).await?;
         // A regrade queued before the next submission still goes after it.
-        let regrade = submit(&pool, "ll", "s2", build).await?;
+        let regrade = submit(&pool, "s2", build).await?;
         sqlx::query!(
             "UPDATE run_queue SET priority = 1 WHERE grading_run_id = $1",
             regrade.run_id
         )
         .execute(&pool)
         .await?;
-        let second = submit(&pool, "ll", "s3", build).await?;
+        let second = submit(&pool, "s3", build).await?;
         let validation = built(&pool, "img-o").await?;
         enqueue_validation(&pool, validation).await?;
 
@@ -219,7 +211,7 @@ mod tests {
         let mut listener = sqlx::postgres::PgListener::connect_with(&pool).await?;
         listener.listen(WAKE_CHANNEL).await?;
         let build = current_build(&pool, "ll", "img-a").await?;
-        submit(&pool, "ll", "s1", build).await?;
+        submit(&pool, "s1", build).await?;
         let woke = tokio::time::timeout(std::time::Duration::from_secs(5), listener.recv()).await;
         assert!(woke.is_ok(), "a submission wakes admission");
 
@@ -251,8 +243,8 @@ mod tests {
     #[sqlx::test]
     async fn concurrent_claims_never_share_a_run(pool: PgPool) -> sqlx::Result<()> {
         let build = current_build(&pool, "ll", "img-a").await?;
-        submit(&pool, "ll", "s1", build).await?;
-        submit(&pool, "ll", "s2", build).await?;
+        submit(&pool, "s1", build).await?;
+        submit(&pool, "s2", build).await?;
         let mut a = pool.begin().await?;
         let mut b = pool.begin().await?;
         let first = claim_next(&mut a).await?;

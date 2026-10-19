@@ -1,16 +1,16 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO regrade_batches (assignment_id, build_id, notify, runs) VALUES ('ll', $1, 'changed', 0) RETURNING id",
+  "query": "SELECT assignment_id FROM assignment_builds WHERE id = $1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
+        "name": "assignment_id",
         "type_info": "Int8",
         "origin": {
           "Table": {
-            "table": "regrade_batches",
-            "name": "id"
+            "table": "assignment_builds",
+            "name": "assignment_id"
           }
         }
       }
@@ -24,5 +24,5 @@
       false
     ]
   },
-  "hash": "d5e4b12ae84b5693a3fb017c561cb08b44c494826e3a2db871ffb6449902a1f3"
+  "hash": "e99d75eb153bc8459a16306cabd52c8aea85c859456d992c3ea304deb8b74744"
 }

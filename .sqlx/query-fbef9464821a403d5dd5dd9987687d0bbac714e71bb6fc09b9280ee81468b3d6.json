@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO course_renames (old_id, new_id) VALUES ($1, $2)\n             ON CONFLICT (old_id) DO UPDATE SET new_id = EXCLUDED.new_id, renamed_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fbef9464821a403d5dd5dd9987687d0bbac714e71bb6fc09b9280ee81468b3d6"
+}

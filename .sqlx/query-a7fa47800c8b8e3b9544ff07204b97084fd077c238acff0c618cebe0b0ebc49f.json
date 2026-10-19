@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO courses (id, name) VALUES ('c', 'C') ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "a7fa47800c8b8e3b9544ff07204b97084fd077c238acff0c618cebe0b0ebc49f"
+}

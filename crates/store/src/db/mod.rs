@@ -56,6 +56,34 @@ pub(crate) fn test_settings() -> crate::BuildSettings {
     }
 }
 
+/// An assignment of course `c` (created as needed), for tests.
+#[cfg(test)]
+pub(crate) async fn test_assignment(pool: &PgPool, slug: &str) -> sqlx::Result<crate::Assignment> {
+    sqlx::query!("INSERT INTO courses (id, name) VALUES ('c', 'C') ON CONFLICT DO NOTHING")
+        .execute(pool)
+        .await?;
+    assignments::upsert_assignment(pool, "c", slug, "Linked List").await
+}
+
+/// A build attempt of an upload, with test settings and the default policy.
+#[cfg(test)]
+pub(crate) fn test_build<'a>(
+    upload: &crate::AssignmentUpload,
+    image_hash: &'a str,
+    image_ref: &'a str,
+) -> assignments::NewBuild<'a> {
+    static SETTINGS: std::sync::LazyLock<crate::BuildSettings> =
+        std::sync::LazyLock::new(test_settings);
+    assignments::NewBuild {
+        assignment_id: upload.assignment_id,
+        upload_id: upload.id,
+        image_hash,
+        image_ref,
+        settings: &SETTINGS,
+        policy: "{}",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
