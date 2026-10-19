@@ -390,11 +390,14 @@ fn run_courses(cmd: CoursesCmd) -> Result<()> {
                 renamed["id"].as_str().unwrap_or("?"),
                 renamed["name"].as_str().unwrap_or("")
             )];
-            if id.is_some() {
-                lines.push(
-                    "update the course repo's course.yml (and `hammer use`) to the new id"
-                        .to_owned(),
-                );
+            if let (Some(to), Some(was)) = (renamed["id"].as_str(), renamed["was"].as_str())
+                && to != was
+            {
+                if account::load().and_then(|s| s.course).as_deref() == Some(was) {
+                    account::set_course(Some(to.to_owned())).map_err(|e| miette!("{e}"))?;
+                    lines.push(format!("now using {to}"));
+                }
+                lines.push("update the course repo's course.yml to the new id".to_owned());
             }
             lines
         }
