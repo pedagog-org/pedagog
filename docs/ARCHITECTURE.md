@@ -20,16 +20,16 @@ Two assignment platforms (`environment.platform.kind`); the platform decides whe
 | **Student** | Enrolls in courses, takes exams, submits work |
 | **Grader** | _(future)_ Per-course elevated access for grading workflows |
 
-Instructors may only manage courses they own. Admins may manage any course.
+A course can have several instructors; they manage everything in it, and only their courses. Admins create courses, choose their instructors, manage admins, and may manage any course.
 
 ---
 
 ## Courses & Enrollment
 
 - A **course** is a per-semester entity (e.g. COP3502 Fall 2026).
-- Courses are created by admins and assigned to an instructor.
+- Courses are created by admins (an id slug like `cop3502-f26` and a display name) and assigned one or more instructors.
 - Each course gets its own Kubernetes namespace for isolation.
-- Students are enrolled via roster import (CSV). Self-registration is not supported.
+- Students are enrolled via roster import: a CSV of `email,name`, or Canvas's gradebook export (its SIS login becomes `<login>@<PEDAGOG_LOGIN_DOMAIN>`, default `ufl.edu`; Canvas's points row and test student are skipped). Re-importing adds students and re-enrolls dropped ones; dropping is explicit, and a dropped student keeps their submissions but loses access. Self-registration is not supported.
 - Resource limits are set at the platform level as defaults; admins may raise them per course.
 - Separate limits apply to workspace sessions (code-server) and queued grading runs.
 
