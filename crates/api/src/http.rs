@@ -1,4 +1,5 @@
-//! The public HTTP surface. This step: login, logout and who am I.
+//! The public HTTP surface: login, logout and who am I here; users, courses
+//! and members in their modules.
 //!
 //! `POST /auth/start {email}` always answers the same, so it doesn't reveal
 //! who's registered. `POST /auth/finish {email, code, client}` opens a
@@ -11,13 +12,14 @@ use axum::http::header::SET_COOKIE;
 use axum::response::{AppendHeaders, IntoResponse, Json, Response};
 use axum::routing::{delete, get, post, put};
 use pedagog_store::db::accounts as db;
-use pedagog_store::{Role, SessionKind};
+use pedagog_store::{CourseRole, SessionKind};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::{COOKIE_NAME, CurrentUser, Login, open_session};
-use crate::courses;
 use crate::error::{ApiError, internal, refused, unauthorized};
 use crate::state::AppState;
+use crate::users::UserView;
+use crate::{courses, members, users};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -26,27 +28,17 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/finish", post(finish))
         .route("/auth/logout", post(logout))
         .route("/me", get(me))
+        .route("/users", get(users::list))
+        .route("/users/{query}", get(users::show))
+        .route("/users/{email}/role", put(users::set_role))
+        .route("/users/{email}/sessions", delete(users::sign_out))
+        .route("/courses", get(courses::list).post(courses::create))
+        .route("/courses/{course}", get(courses::show))
+        .route("/courses/{course}/members", get(members::list))
+        .route("/courses/{course}/members/import", post(members::import))
         .route(
-            "/admins",
-            get(courses::list_admins).post(courses::add_admin),
-        )
-        .route("/admins/{email}", delete(courses::remove_admin))
-        .route(
-            "/courses",
-            get(courses::list_courses).post(courses::create_course),
-        )
-        .route("/courses/{course}", get(courses::show_course))
-        .route(
-            "/courses/{course}/instructors/{email}",
-            put(courses::add_instructor).delete(courses::remove_instructor),
-        )
-        .route(
-            "/courses/{course}/roster",
-            get(courses::list_roster).post(courses::import_roster),
-        )
-        .route(
-            "/courses/{course}/students/{email}",
-            delete(courses::drop_student),
+            "/courses/{course}/members/{query}",
+            get(members::show).put(members::add).delete(members::remove),
         )
         .with_state(state)
 }
@@ -89,23 +81,6 @@ struct FinishBody {
 
 fn default_client() -> String {
     "web".to_owned()
-}
-
-#[derive(Serialize)]
-struct UserView {
-    email: String,
-    name: String,
-    is_admin: bool,
-}
-
-impl From<&pedagog_store::User> for UserView {
-    fn from(u: &pedagog_store::User) -> Self {
-        Self {
-            email: u.email.clone(),
-            name: u.name.clone(),
-            is_admin: u.is_admin,
-        }
-    }
 }
 
 async fn finish(
@@ -173,7 +148,7 @@ async fn logout(State(state): State<AppState>, current: CurrentUser) -> Result<R
 struct CourseView {
     id: String,
     name: String,
-    /// `staff` or `student`.
+    /// `instructor`, `grader` or `student`.
     role: String,
 }
 
@@ -182,7 +157,7 @@ async fn me(State(state): State<AppState>, current: CurrentUser) -> Result<Respo
         .await
         .map_err(|e| internal("reading your courses", e))?
         .into_iter()
-        .map(|(c, role): (_, Role)| CourseView {
+        .map(|(c, role): (_, CourseRole)| CourseView {
             id: c.id,
             name: c.name,
             role: role.to_string(),
@@ -327,8 +302,16 @@ mod tests {
     #[sqlx::test(migrations = "../store/migrations")]
     async fn me_lists_courses_and_requires_a_session(pool: PgPool) -> sqlx::Result<()> {
         let alice = db::upsert_user(&pool, "alice@ufl.edu", "Alice").await?;
-        db::create_course(&pool, "cop3502-f26", "COP3502").await?;
-        db::enroll(&pool, "cop3502-f26", alice.id).await?;
+        let prof = db::upsert_user(&pool, "prof@ufl.edu", "").await?;
+        db::create_course(&pool, "cop3502-f26", "COP3502", prof.id, &[prof.id]).await?;
+        db::enroll(
+            &pool,
+            "cop3502-f26",
+            alice.id,
+            prof.id,
+            pedagog_store::JoinSource::Import,
+        )
+        .await?;
         let (url, outbox) = serve(pool).await;
         let me = reqwest::Client::new()
             .get(format!("{url}/me"))

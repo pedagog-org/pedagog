@@ -162,6 +162,7 @@ pub async fn open_session(
         ttl.as_secs() as i64,
     )
     .await?;
+    db::record_login(&state.pool, user.id, kind).await?;
     Ok(token)
 }
 

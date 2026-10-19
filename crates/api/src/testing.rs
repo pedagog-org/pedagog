@@ -85,3 +85,38 @@ pub async fn login(url: &str, outbox: &Arc<Mutex<Vec<Mail>>>, email: &str) -> St
     let body: serde_json::Value = serde_json::from_str(&reply.text().await.unwrap()).unwrap();
     body["token"].as_str().unwrap().to_owned()
 }
+
+pub async fn put_json(url: &str, body: serde_json::Value, token: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .put(url)
+        .bearer_auth(token)
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap()
+}
+
+pub async fn delete(url: &str, token: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .delete(url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+}
+
+pub async fn post_csv(url: &str, token: &str, csv: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(url)
+        .bearer_auth(token)
+        .header("content-type", "text/csv")
+        .body(csv.to_owned())
+        .send()
+        .await
+        .unwrap()
+}
+
+pub async fn json(r: reqwest::Response) -> serde_json::Value {
+    serde_json::from_str(&r.text().await.unwrap()).unwrap()
+}
