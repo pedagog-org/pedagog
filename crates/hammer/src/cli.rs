@@ -29,15 +29,15 @@ pub enum Command {
     Logout,
     /// Show who you're logged in as, and your courses.
     Whoami,
-    /// Manage admins (admins only).
+    /// Find users and set their global roles (admins only).
     #[command(subcommand)]
-    Admins(AdminsCmd),
-    /// Create and inspect courses, and choose their instructors.
+    Users(UsersCmd),
+    /// Create, list and inspect courses.
     #[command(subcommand)]
     Courses(CoursesCmd),
-    /// Import and manage a course's students.
+    /// A course's instructors, graders and students.
     #[command(subcommand)]
-    Roster(RosterCmd),
+    Members(MembersCmd),
 }
 
 #[derive(clap::Args)]
@@ -252,62 +252,96 @@ pub struct LoginArgs {
 }
 
 #[derive(clap::Subcommand)]
-pub enum AdminsCmd {
-    /// List admins.
-    List,
-    /// Make someone an admin.
-    Add { email: String },
-    /// Stop someone being an admin (not the last one).
-    Remove { email: String },
+pub enum UsersCmd {
+    /// List users, optionally by global role or matching part of an email or name.
+    List {
+        /// admin, staff or student.
+        #[arg(long)]
+        role: Option<String>,
+        #[arg(long)]
+        search: Option<String>,
+        #[arg(long, default_value_t = 1)]
+        page: i64,
+    },
+    /// A user's role, logins, sessions and courses; QUERY is part of an email or name.
+    Show { query: String },
+    /// Set a user's global role (creating them if needed): admin, staff (creates
+    /// courses) or student.
+    Role { email: String, role: String },
+    /// End every session a user has.
+    Signout { email: String },
 }
 
 #[derive(clap::Subcommand)]
 pub enum CoursesCmd {
-    /// Your courses (all of them, for admins).
-    List,
-    /// A course's instructors and how many students it has.
+    /// Courses you're in; --all lists every course (admins).
+    List {
+        #[arg(long)]
+        all: bool,
+        /// With --all: part of a course id or name.
+        #[arg(long, requires = "all")]
+        search: Option<String>,
+        #[arg(long, default_value_t = 1, requires = "all")]
+        page: i64,
+    },
+    /// A course's instructors and graders, and how many students it has.
     Show { course: String },
-    /// Create a course (admins only).
+    /// Create a course (staff and admins). You teach it unless you name its
+    /// instructors.
     Create {
         /// The course id: lowercase letters, digits and dashes, e.g. cop3502-f26.
         id: String,
-        /// The display name, e.g. "COP3502 Programming Fundamentals 1 (Fall 2026)".
-        #[arg(long)]
+        /// The display name, e.g. "Programming Fundamentals 1 (Fall 2026)".
         name: String,
         /// An instructor's email; repeatable.
         #[arg(long = "instructor", value_name = "EMAIL")]
         instructors: Vec<String>,
     },
-    /// Add or remove a course's instructors (admins only).
-    #[command(subcommand)]
-    Staff(StaffCmd),
 }
 
 #[derive(clap::Subcommand)]
-pub enum StaffCmd {
-    Add { course: String, email: String },
-    Remove { course: String, email: String },
-}
-
-#[derive(clap::Subcommand)]
-pub enum RosterCmd {
-    /// Enroll students from a CSV: `email,name` (with a header), or Canvas's
-    /// gradebook export. Adds new students; nobody is removed.
-    Import {
+pub enum MembersCmd {
+    /// List a course's members.
+    List {
+        course: String,
+        /// instructor, grader or student.
         #[arg(long)]
+        role: Option<String>,
+        /// Include dropped members.
+        #[arg(long)]
+        dropped: bool,
+    },
+    /// One member; QUERY is part of an email or name.
+    Show { course: String, query: String },
+    /// Add people (or restore them, or change their role).
+    Add {
+        course: String,
+        #[arg(required = true)]
+        emails: Vec<String>,
+        /// instructor, grader or student.
+        #[arg(long, default_value = "student")]
+        role: String,
+        /// Their name (with one email).
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Drop people: they lose access and keep their history.
+    Drop {
+        course: String,
+        #[arg(required = true)]
+        emails: Vec<String>,
+    },
+    /// Enroll students from a CSV: `email,name` (with a header), or Canvas's
+    /// gradebook export. Adds students; staff are left alone.
+    Import {
         course: String,
         file: PathBuf,
-    },
-    /// List a course's students.
-    List {
+        /// Also drop students missing from the file (asks first).
         #[arg(long)]
-        course: String,
-    },
-    /// Drop a student (they keep their submissions and lose access).
-    Drop {
-        #[arg(long)]
-        course: String,
-        email: String,
+        sync: bool,
+        /// With --sync: don't ask.
+        #[arg(long, requires = "sync")]
+        yes: bool,
     },
 }
 
