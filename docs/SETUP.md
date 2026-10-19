@@ -428,6 +428,8 @@ The api is the public entry point: people log in with a code sent to their email
    | `PEDAGOG_SMTP_USER` / `_PASSWORD` | (none) | From the `pedagog-api-smtp` Secret (Phase 1), only if the relay wants a login |
    | `PEDAGOG_MAIL_FROM_NAME` / `_ADDRESS` | `Pedagog` / (required) | The sender |
    | `PEDAGOG_MAIL_REPLY_TO` | (none) | Optional |
+   | `PEDAGOG_JOBS_URL` | `http://pedagog-jobs.pedagog-builds.svc:8080` | Where uploads and submissions go |
+   | `PEDAGOG_MAX_UPLOAD_BYTES` | 50 MiB | The largest assignment archive passed on (match `jobs`') |
 
 4. **The first admin:**
 
@@ -443,14 +445,25 @@ Then let an instructor create their course (or create it for them with
 ```sh
 hammer users role prof@ufl.edu staff                    # admin: prof may create courses
 hammer courses create cop3502-f26 "COP3502 (Fall 2026)" # prof: and teaches it
-hammer members import cop3502-f26 canvas-gradebook.csv  # students; --sync also drops missing ones
-hammer members add cop3502-f26 ta@ufl.edu --role grader
-hammer members list cop3502-f26
-hammer members show cop3502-f26 gator                   # part of an email or name
+hammer use cop3502-f26                                  # or -c on each command, or a course.yml
+hammer members import canvas-gradebook.csv              # students; --sync also drops missing ones
+hammer members add ta@ufl.edu --role grader
+hammer members list
+hammer members show gator                               # part of an email or name
+hammer upload ./linked-list --wait                      # build and validate
+hammer assignments list
 ```
+
+A course repo can carry a `course.yml` at its root (`course: cop3502-f26`, optionally
+`api: https://<hostname>`); every command run inside it uses that course.
 
 Admins find people with `hammer users list --role staff`, `hammer users show <email or
 name>`, and every course with `hammer courses list --all --search cop3502`.
+
+**Upgrading:** `api` and `jobs` share the database's migrations, and each refuses a
+database with migrations it doesn't know. Deploy them together (the same tag in one
+`kubectl apply -k`); rolling back across a migration means reverting it first
+(`sqlx migrate revert`, or the migration's `.down.sql`).
 
 On kind: `just kind-load-api`, `just kind-deploy`, `just kind-add-admin <email>`, then
 `just kind-api` port-forwards the api (http://localhost:18082) and Mailpit's inbox
