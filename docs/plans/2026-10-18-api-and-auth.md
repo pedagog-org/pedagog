@@ -449,7 +449,8 @@ visibility, release, the upload date diff and `--take-dates`).
   object keys keep the old slug and still work. `course_renames` remembers old slugs,
   so a repo still naming one gets "no course X (renamed to Y on …)".
 - **Direct jobs mode** (`--jobs-url`, no login) stays for operators and kind-e2e (with
-  `-c`) until step 5 moves e2e to the api.
+  `-c`) until step 5 moves e2e to the api; step 5 then revisits it, leaning toward
+  removing it.
 
 ## Implementation steps
 
