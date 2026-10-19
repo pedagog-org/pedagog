@@ -382,6 +382,36 @@ and import-only rosters. This replaces the roles, roster and admin parts above.
 3. hammer: `users`, `courses`, `members`; `whoami` shows the global role.
 4. Docs: ARCHITECTURE (Roles, Courses & Enrollment), SETUP; kind demo.
 
+## Step 4 addendum: results views (2026-10-19)
+
+Decided before step 4. Each test has two visibilities, `score` and `output`, resolved
+as above.
+
+- **Graders see everything instructors see:** hidden tests, outputs, unreleased scores.
+- **Staff, per test:** every test (never-shown ones too) with its result (pass / fail),
+  score, and when the student sees its score and its output.
+- **Staff, summary:** cumulative columns named for the visibility values; each adds
+  that value's tests, so `hidden` covers every test. A marker shows the column the
+  student sees now (it moves as the deadline passes and on release).
+
+  ```text
+              visible  after deadline  after release  hidden
+  score       5/5      5/5             7/8            7/9
+  passed      2/2      2/2             2/3            2/4
+                       ^ student sees (deadline passed, not released)
+  student is told: some tests are hidden until release
+  ```
+
+  `results list` has one row per student with the same columns.
+- **Students:** tests whose score is visible, with result and score; output only where
+  output is visible. Score-hidden tests aren't listed and their points aren't counted
+  or mentioned; one line says "some tests are hidden until the deadline / until
+  release" (both, if they open at different times). Pass / fail follows the score's
+  visibility. Totals count only what's shown.
+- **Rollout:** `api` and `jobs` share migrations and refuse a database with migrations
+  they don't know, so they deploy together (same tag, one apply); a rollback across a
+  migration reverts it first. Documented in SETUP.
+
 ## Implementation steps
 
 1. **Schema and store** (`feat/accounts-store`): users, courses, staff, enrollments,
