@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO memberships (course_id, user_id, role, source, added_by)\n                 VALUES ($1, $2, 'student', $3, $4) ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "19a89aac7ad56bb95c24a486eeb29522b7545ae2a151c0a3ffc05b8d0ce731d7"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE memberships\n                    SET role = 'student', source = $3, added_by = $4, joined_at = now(),\n                        dropped_at = NULL\n                  WHERE course_id = $1 AND user_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "866b4c0be69534d25936a0bcb23e0976745f2143469a7676049be2dbd8e6a0f3"
+}

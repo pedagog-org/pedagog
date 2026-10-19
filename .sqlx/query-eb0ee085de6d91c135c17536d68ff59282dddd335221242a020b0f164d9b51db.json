@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT u.id, u.email, u.name, u.is_admin\n           FROM course_staff s JOIN users u ON u.id = s.user_id\n          WHERE s.course_id = $1 ORDER BY u.email",
+  "query": "UPDATE sessions s SET last_used_at = now()\n           FROM users u\n          WHERE s.token_hash = $1 AND s.expires_at > now() AND u.id = s.user_id\n          RETURNING u.id, u.email, u.name, u.role",
   "describe": {
     "columns": [
       {
@@ -38,12 +38,12 @@
       },
       {
         "ordinal": 3,
-        "name": "is_admin",
-        "type_info": "Bool",
+        "name": "role",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "users",
-            "name": "is_admin"
+            "name": "role"
           }
         }
       }
@@ -60,5 +60,5 @@
       false
     ]
   },
-  "hash": "5b78172a8d788fab4db7d70a59cca837eaac83f9ce0ab994de0d0d8834661a80"
+  "hash": "eb0ee085de6d91c135c17536d68ff59282dddd335221242a020b0f164d9b51db"
 }

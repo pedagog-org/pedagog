@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_char(u.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS \"created_at!\",\n                  to_char(u.last_login_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS last_login_at,\n                  u.last_login_kind,\n                  (SELECT count(*) FROM sessions s\n                    WHERE s.user_id = u.id AND s.kind = 'web' AND s.expires_at > now()) AS \"web!\",\n                  (SELECT count(*) FROM sessions s\n                    WHERE s.user_id = u.id AND s.kind = 'cli' AND s.expires_at > now()) AS \"cli!\"\n             FROM users u WHERE u.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "created_at!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "last_login_at",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_login_kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "last_login_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "web!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "cli!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "cbcae4823ca86fd0739607ce2af318bc555701ed79159a9a7a27f610c350d6ae"
+}

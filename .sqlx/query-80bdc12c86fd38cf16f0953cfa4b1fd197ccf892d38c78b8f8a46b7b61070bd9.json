@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO users (email, name) VALUES ($1, $2)\n         ON CONFLICT (email) DO UPDATE\n           SET name = CASE WHEN EXCLUDED.name = '' THEN users.name ELSE EXCLUDED.name END\n         RETURNING id, email, name, is_admin",
+  "query": "SELECT id, email, name, role FROM users\n            WHERE ($1::text IS NULL OR role = $1)\n              AND ($2::text IS NULL OR email = $2\n                   OR email ILIKE $3 ESCAPE '\\' OR name ILIKE $3 ESCAPE '\\')\n            ORDER BY COALESCE(email = $2, false) DESC, email\n            LIMIT $4 OFFSET $5",
   "describe": {
     "columns": [
       {
@@ -38,12 +38,12 @@
       },
       {
         "ordinal": 3,
-        "name": "is_admin",
-        "type_info": "Bool",
+        "name": "role",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "users",
-            "name": "is_admin"
+            "name": "role"
           }
         }
       }
@@ -51,7 +51,10 @@
     "parameters": {
       "Left": [
         "Text",
-        "Text"
+        "Text",
+        "Text",
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
@@ -61,5 +64,5 @@
       false
     ]
   },
-  "hash": "0049de595bedfaf1003466ef0580dc6e2cb4d16e5ffbdd5c44f05ffe06ed6542"
+  "hash": "80bdc12c86fd38cf16f0953cfa4b1fd197ccf892d38c78b8f8a46b7b61070bd9"
 }
