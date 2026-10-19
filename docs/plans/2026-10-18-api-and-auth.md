@@ -412,6 +412,40 @@ as above.
   they don't know, so they deploy together (same tag, one apply); a rollback across a
   migration reverts it first. Documented in SETUP.
 
+## Step 4 split and 4a decisions (2026-10-19)
+
+Step 4 ships as three PRs: **4a** `feat/course-assignments` (course-scoped jobs,
+upload and builds through the api), **4b** `feat/api-submit` (submit, acceptance,
+staff submissions, computed late), **4c** `feat/api-results` (results views, dates,
+visibility, release, the upload date diff and `--take-dates`).
+
+- **Keys:** assignments get a numeric `id`, with `(course_id, slug)` unique; uploads,
+  builds, submissions and regrade batches reference the number. Migration 0008 moves
+  existing assignments into course `default` (created only if there are any); its
+  down step is refused once another course has assignments.
+- **Names:** images `pedagog/assignments/<course>/<slug>:<hash>`; objects
+  `assignments/<course>/<slug>/…` and `submissions/<course>/<slug>/…`; Job names
+  include the course. Ids (assignments, recipes, OSes) tighten to start with a letter,
+  end with a letter or digit, and stay within 40 characters (a trailing `-` made an
+  invalid image reference).
+- **jobs routes:** `POST /internal/courses/{c}/assignments`,
+  `GET …/{c}/assignments/{slug}/builds/{b}`, `POST|GET …/{slug}/submissions`;
+  `GET /internal/submissions/{id}` stays. The course must exist.
+- **Policy on the build:** the file's `assignment:` policy (dates, visibility
+  defaults) is stored on each build (`assignment_builds.policy`), so the current
+  build's policy is the file's.
+- **The api reads Postgres** through `store` (assignments, builds, results) and calls
+  `jobs` only for work that needs Garage or Kubernetes (upload, submit), at
+  `PEDAGOG_JOBS_URL`. `reqwest` (already in the workspace) becomes an api dependency.
+- **api routes (4a):** `POST /courses/{c}/assignments?force&regrade` (instructors),
+  `GET /courses/{c}/assignments` (members), `GET /courses/{c}/assignments/{a}` and
+  `…/builds/{b}` (instructors and graders).
+- **Choosing the course in hammer:** `-c/--course`, else the nearest `course.yml`
+  walking up from the current directory (`course:` and an optional `api:`), else
+  `hammer use <course>` (saved with the session). `members` moves to `-c` too.
+- **Direct jobs mode** (`--jobs-url`, no login) stays for operators and kind-e2e (with
+  `-c`) until step 5 moves e2e to the api.
+
 ## Implementation steps
 
 1. **Schema and store** (`feat/accounts-store`): users, courses, staff, enrollments,
