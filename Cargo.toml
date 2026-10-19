@@ -15,6 +15,8 @@ anstyle = "1"
 anyhow = "1"
 axum = "0.8"
 blake3 = "1"
+# Roster files (Canvas quotes fields such as "Gator, Albert").
+csv = "1"
 clap = { version = "4", features = ["derive"] }
 flate2 = "1"
 # Stream helpers for kube watches (already in the tree through kube and sqlx).

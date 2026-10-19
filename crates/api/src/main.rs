@@ -6,10 +6,14 @@
 
 mod auth;
 mod config;
+mod courses;
 mod error;
 mod http;
 mod mail;
+mod roster;
 mod state;
+#[cfg(test)]
+mod testing;
 
 use std::sync::Arc;
 use std::time::Duration;

@@ -9,12 +9,13 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::http::header::SET_COOKIE;
 use axum::response::{AppendHeaders, IntoResponse, Json, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post, put};
 use pedagog_store::db::accounts as db;
 use pedagog_store::{Role, SessionKind};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::{COOKIE_NAME, CurrentUser, Login, open_session};
+use crate::courses;
 use crate::error::{ApiError, internal, refused, unauthorized};
 use crate::state::AppState;
 
@@ -25,6 +26,28 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/finish", post(finish))
         .route("/auth/logout", post(logout))
         .route("/me", get(me))
+        .route(
+            "/admins",
+            get(courses::list_admins).post(courses::add_admin),
+        )
+        .route("/admins/{email}", delete(courses::remove_admin))
+        .route(
+            "/courses",
+            get(courses::list_courses).post(courses::create_course),
+        )
+        .route("/courses/{course}", get(courses::show_course))
+        .route(
+            "/courses/{course}/instructors/{email}",
+            put(courses::add_instructor).delete(courses::remove_instructor),
+        )
+        .route(
+            "/courses/{course}/roster",
+            get(courses::list_roster).post(courses::import_roster),
+        )
+        .route(
+            "/courses/{course}/students/{email}",
+            delete(courses::drop_student),
+        )
         .with_state(state)
 }
 
@@ -175,61 +198,9 @@ async fn me(State(state): State<AppState>, current: CurrentUser) -> Result<Respo
 mod tests {
     use super::*;
 
-    use std::sync::{Arc, Mutex};
-
     use sqlx::PgPool;
 
-    use crate::auth::Authenticator;
-    use crate::config::{AuthLimits, Config, Smtp, TlsMode};
-    use crate::mail::{Mail, Mailer};
-
-    /// A running api on a free port, with mail kept in memory.
-    async fn serve(pool: PgPool) -> (String, Arc<Mutex<Vec<Mail>>>) {
-        let (mailer, outbox) = Mailer::memory();
-        let config = Config {
-            database_url: String::new(),
-            listen_addr: String::new(),
-            public_url: "https://pedagog.example".into(),
-            cookie_secure: true,
-            smtp: Smtp {
-                host: "unused".into(),
-                port: 25,
-                tls: TlsMode::None,
-                login: None,
-                from_name: "Pedagog".into(),
-                from_address: "pedagog@ufl.edu".into(),
-                reply_to: None,
-            },
-            limits: AuthLimits::default(),
-        };
-        let state = AppState {
-            pool,
-            config: Arc::new(config),
-            mailer,
-            auth: Authenticator::EmailCode,
-        };
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, router(state)).await });
-        (url, outbox)
-    }
-
-    async fn post(url: &str, body: serde_json::Value, token: Option<&str>) -> reqwest::Response {
-        let client = reqwest::Client::new();
-        let mut req = client
-            .post(url)
-            .header("content-type", "application/json")
-            .body(body.to_string());
-        if let Some(t) = token {
-            req = req.bearer_auth(t);
-        }
-        req.send().await.unwrap()
-    }
-
-    fn code_in(outbox: &Arc<Mutex<Vec<Mail>>>) -> String {
-        let mail = outbox.lock().unwrap().last().cloned().unwrap();
-        mail.subject.rsplit(' ').next().unwrap().to_owned()
-    }
+    use crate::testing::{code_in, post, serve};
 
     #[sqlx::test(migrations = "../store/migrations")]
     async fn a_cli_login_gets_a_token_that_works_until_logout(pool: PgPool) -> sqlx::Result<()> {
