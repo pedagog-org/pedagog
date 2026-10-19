@@ -1,5 +1,6 @@
 mod account;
 mod cli;
+mod course;
 mod manage;
 mod submit;
 mod upload;
@@ -12,8 +13,8 @@ use clap::Parser;
 use miette::{GraphicalReportHandler, MietteDiagnostic, Report, Result, Severity, miette};
 
 use cli::{
-    Cli, Command, CoursesCmd, Format, LoginArgs, MembersCmd, PlanArgs, SubmitArgs, UploadArgs,
-    UsersCmd, VendArgs,
+    AssignmentsCmd, Cli, Command, CoursesCmd, Format, LoginArgs, MembersCmd, PlanArgs, SubmitArgs,
+    UploadArgs, UseArgs, UsersCmd, VendArgs,
 };
 use pedagog_core::recipe::assignment::{AssignmentYaml, FileSources};
 use pedagog_core::recipe::primitives::Id;
@@ -40,6 +41,8 @@ fn main() -> Result<()> {
         Command::Users(cmd) => run_users(cmd),
         Command::Courses(cmd) => run_courses(cmd),
         Command::Members(cmd) => run_members(cmd),
+        Command::Assignments(cmd) => run_assignments(cmd),
+        Command::Use(args) => run_use(args),
     }
 }
 
@@ -195,9 +198,14 @@ fn run_vend(args: VendArgs) -> Result<()> {
 }
 
 fn run_login(args: LoginArgs) -> Result<()> {
+    let from_repo = std::env::current_dir()
+        .ok()
+        .and_then(|d| course::find_file(&d).ok().flatten())
+        .and_then(|(_, f)| f.api);
     let api = args
         .api
         .or_else(|| std::env::var(account::API_URL_ENV).ok())
+        .or(from_repo)
         .or_else(|| account::load().map(|s| s.api))
         .ok_or_else(|| {
             miette!(
@@ -250,6 +258,64 @@ fn api() -> Result<manage::Api> {
     manage::Api::from_session().map_err(|e| miette!("{e}"))
 }
 
+/// The course a command means (see `course`), looking for course.yml from
+/// `start`, and the api session to reach it with.
+fn course_in(flag: Option<String>, start: &Path) -> Result<(manage::Api, course::Chosen)> {
+    let session = account::load().ok_or_else(|| miette!("not logged in: run `hammer login`"))?;
+    let chosen = course::choose(flag, start, session.course.clone()).map_err(|e| miette!("{e}"))?;
+    course::check_api(&chosen, &session.api).map_err(|e| miette!("{e}"))?;
+    Ok((api()?, chosen))
+}
+
+/// [`course_in`] from the current directory; returns the course's URL segment.
+fn course_here(flag: Option<String>) -> Result<(manage::Api, String)> {
+    let here = std::env::current_dir().map_err(|e| miette!("{e}"))?;
+    let (api, chosen) = course_in(flag, &here)?;
+    Ok((api, segment(&chosen.id)))
+}
+
+fn run_use(args: UseArgs) -> Result<()> {
+    if args.clear {
+        account::set_course(None).map_err(|e| miette!("{e}"))?;
+        return print_lines(vec!["no default course".to_owned()]);
+    }
+    let Some(course) = args.course else {
+        let saved = account::load().and_then(|s| s.course);
+        return print_lines(vec![
+            saved.unwrap_or_else(|| "no default course".to_owned()),
+        ]);
+    };
+    // Members (and admins) can list its assignments: proof the course is theirs.
+    api()?
+        .get(&format!("/courses/{}/assignments", segment(&course)))
+        .map_err(|e| miette!("{e}"))?;
+    account::set_course(Some(course.clone())).map_err(|e| miette!("{e}"))?;
+    print_lines(vec![format!("now using {course}")])
+}
+
+fn run_assignments(cmd: AssignmentsCmd) -> Result<()> {
+    let lines = match cmd {
+        AssignmentsCmd::List { course } => {
+            let (api, c) = course_here(course)?;
+            manage::assignments(
+                &api.get(&format!("/courses/{c}/assignments"))
+                    .map_err(|e| miette!("{e}"))?,
+            )
+        }
+        AssignmentsCmd::Show { assignment, course } => {
+            let (api, c) = course_here(course)?;
+            manage::assignment(
+                &api.get(&format!(
+                    "/courses/{c}/assignments/{}",
+                    segment(&assignment)
+                ))
+                .map_err(|e| miette!("{e}"))?,
+            )
+        }
+    };
+    print_lines(lines)
+}
+
 fn run_users(cmd: UsersCmd) -> Result<()> {
     let api = api()?;
     let lines = match cmd {
@@ -286,9 +352,9 @@ fn run_users(cmd: UsersCmd) -> Result<()> {
 }
 
 fn run_courses(cmd: CoursesCmd) -> Result<()> {
-    let api = api()?;
     let lines = match cmd {
         CoursesCmd::List { all, search, page } => {
+            let api = api()?;
             let q = if all {
                 manage::query(&[
                     ("all", Some("true".into())),
@@ -303,16 +369,41 @@ fn run_courses(cmd: CoursesCmd) -> Result<()> {
                     .map_err(|e| miette!("{e}"))?,
             )
         }
-        CoursesCmd::Show { course } => manage::course(
-            &api.get(&format!("/courses/{}", segment(&course)))
-                .map_err(|e| miette!("{e}"))?,
-        ),
+        CoursesCmd::Show { course } => {
+            let (api, c) = course_here(course)?;
+            manage::course(
+                &api.get(&format!("/courses/{c}"))
+                    .map_err(|e| miette!("{e}"))?,
+            )
+        }
+        CoursesCmd::Rename { course, id, name } => {
+            let (api, c) = course_here(course)?;
+            let renamed = api
+                .patch(
+                    &format!("/courses/{c}"),
+                    &serde_json::json!({ "id": id, "name": name }),
+                )
+                .map_err(|e| miette!("{e}"))?;
+            let mut lines = vec![format!(
+                "{} -> {}: {}",
+                renamed["was"].as_str().unwrap_or("?"),
+                renamed["id"].as_str().unwrap_or("?"),
+                renamed["name"].as_str().unwrap_or("")
+            )];
+            if id.is_some() {
+                lines.push(
+                    "update the course repo's course.yml (and `hammer use`) to the new id"
+                        .to_owned(),
+                );
+            }
+            lines
+        }
         CoursesCmd::Create {
             id,
             name,
             instructors,
         } => {
-            let made = api
+            let made = api()?
                 .post(
                     "/courses",
                     &serde_json::json!({ "id": id, "name": name, "instructors": instructors }),
@@ -331,34 +422,35 @@ fn run_courses(cmd: CoursesCmd) -> Result<()> {
 }
 
 fn run_members(cmd: MembersCmd) -> Result<()> {
-    let api = api()?;
     let lines = match cmd {
         MembersCmd::List {
             course,
             role,
             dropped,
-        } => manage::members(
-            &api.get(&format!(
-                "/courses/{}/members{}",
-                segment(&course),
-                manage::query(&[("role", role), ("dropped", dropped.then(|| "true".into()))])
-            ))
-            .map_err(|e| miette!("{e}"))?,
-        ),
-        MembersCmd::Show { course, query } => manage::member(
-            &api.get(&format!(
-                "/courses/{}/members/{}",
-                segment(&course),
-                segment(&query)
-            ))
-            .map_err(|e| miette!("{e}"))?,
-        ),
+        } => {
+            let (api, c) = course_here(course)?;
+            manage::members(
+                &api.get(&format!(
+                    "/courses/{c}/members{}",
+                    manage::query(&[("role", role), ("dropped", dropped.then(|| "true".into()))])
+                ))
+                .map_err(|e| miette!("{e}"))?,
+            )
+        }
+        MembersCmd::Show { course, query } => {
+            let (api, c) = course_here(course)?;
+            manage::member(
+                &api.get(&format!("/courses/{c}/members/{}", segment(&query)))
+                    .map_err(|e| miette!("{e}"))?,
+            )
+        }
         MembersCmd::Add {
             course,
             emails,
             role,
             name,
         } => {
+            let (api, course) = course_here(course)?;
             if name.is_some() && emails.len() > 1 {
                 return Err(miette!("--name goes with a single email"));
             }
@@ -366,7 +458,7 @@ fn run_members(cmd: MembersCmd) -> Result<()> {
             for email in &emails {
                 let added = api
                     .put(
-                        &format!("/courses/{}/members/{}", segment(&course), segment(email)),
+                        &format!("/courses/{course}/members/{}", segment(email)),
                         &serde_json::json!({ "role": role, "name": name.clone().unwrap_or_default() }),
                     )
                     .map_err(|e| several(&emails, email, e))?;
@@ -375,14 +467,11 @@ fn run_members(cmd: MembersCmd) -> Result<()> {
             lines
         }
         MembersCmd::Drop { course, emails } => {
+            let (api, course) = course_here(course)?;
             let mut lines = Vec::new();
             for email in &emails {
-                api.delete(&format!(
-                    "/courses/{}/members/{}",
-                    segment(&course),
-                    segment(email)
-                ))
-                .map_err(|e| several(&emails, email, e))?;
+                api.delete(&format!("/courses/{course}/members/{}", segment(email)))
+                    .map_err(|e| several(&emails, email, e))?;
                 lines.push(format!("dropped {email} from {course}"));
             }
             lines
@@ -393,10 +482,11 @@ fn run_members(cmd: MembersCmd) -> Result<()> {
             sync,
             yes,
         } => {
+            let (api, course) = course_here(course)?;
             let file = expand_tilde(file);
             let csv = std::fs::read_to_string(&file)
                 .map_err(|e| miette!("cannot read {}: {e}", file.display()))?;
-            let path = format!("/courses/{}/members/import", segment(&course));
+            let path = format!("/courses/{course}/members/import");
             if sync && !yes {
                 let dry = api
                     .post_text(
@@ -448,9 +538,15 @@ fn confirm(drops: &[String]) -> Result<bool> {
 fn run_submit(args: SubmitArgs) -> Result<()> {
     let paths: Vec<PathBuf> = args.paths.into_iter().map(expand_tilde).collect();
     let files = submit::collect(&paths).map_err(|e| miette!("{e}"))?;
-    let url = jobs_url(args.jobs_url);
-    let submitted =
-        submit::send(&url, &args.assignment, &args.student, &files).map_err(|e| miette!("{e}"))?;
+    let url = args
+        .jobs_url
+        .or_else(|| std::env::var("PEDAGOG_JOBS_URL").ok())
+        .unwrap_or_else(|| "http://localhost:18081".to_owned());
+    let here = std::env::current_dir().map_err(|e| miette!("{e}"))?;
+    let course = course::choose(args.course, &here, account::load().and_then(|s| s.course))
+        .map_err(|e| miette!("{e}"))?;
+    let submitted = submit::send(&url, &course.id, &args.assignment, &args.student, &files)
+        .map_err(|e| miette!("{e}"))?;
     for line in submit::describe(&submitted) {
         println!("{line}");
     }
@@ -477,11 +573,6 @@ fn run_submit(args: SubmitArgs) -> Result<()> {
     }
 }
 
-fn jobs_url(flag: Option<String>) -> String {
-    flag.or_else(|| std::env::var(upload::JOBS_URL_ENV).ok())
-        .unwrap_or_else(|| upload::DEFAULT_JOBS_URL.to_owned())
-}
-
 fn run_upload(args: UploadArgs) -> Result<()> {
     let dir = expand_tilde(args.dir.clone());
     let assignment_path = dir.join("assignment.yml");
@@ -506,16 +597,39 @@ fn run_upload(args: UploadArgs) -> Result<()> {
         );
     }
 
-    let url = jobs_url(args.jobs_url);
+    let (to, course) = match args.jobs_url {
+        Some(url) => {
+            let saved = account::load().and_then(|s| s.course);
+            let chosen = course::choose(args.course, &dir, saved).map_err(|e| miette!("{e}"))?;
+            (upload::Endpoint::Jobs(url), chosen)
+        }
+        None => {
+            let session =
+                account::load().ok_or_else(|| miette!("not logged in: run `hammer login`"))?;
+            let chosen = course::choose(args.course, &dir, session.course.clone())
+                .map_err(|e| miette!("{e}"))?;
+            course::check_api(&chosen, &session.api).map_err(|e| miette!("{e}"))?;
+            (
+                upload::Endpoint::Api {
+                    base: session.api,
+                    token: session.token,
+                },
+                chosen,
+            )
+        }
+    };
     let archive = upload::pack(&dir).map_err(|e| miette!("{e}"))?;
     let regrade = args.regrade.then_some(args.notify);
-    let uploaded = upload::send(&url, archive, args.force, regrade).map_err(|e| miette!("{e}"))?;
+    let uploaded = upload::send(&to, &segment(&course.id), archive, args.force, regrade)
+        .map_err(|e| miette!("{e}"))?;
     println!(
-        "uploaded {} (tree {}, {} bytes) as upload {}",
-        uploaded.assignment_id,
+        "uploaded {}/{} (tree {}, {} bytes) as upload {}{}",
+        uploaded.course,
+        uploaded.assignment,
         &uploaded.tree_hash[..12.min(uploaded.tree_hash.len())],
         uploaded.size_bytes,
-        uploaded.upload_id
+        uploaded.upload_id,
+        course.origin()
     );
     match uploaded.build.status.as_str() {
         "already_built" => println!(
@@ -538,8 +652,9 @@ fn run_upload(args: UploadArgs) -> Result<()> {
         return Ok(());
     }
     let status = upload::wait(
-        &url,
-        &uploaded.assignment_id,
+        &to,
+        &segment(&uploaded.course),
+        &segment(&uploaded.assignment),
         uploaded.build.build_id,
         |s| {
             let stage = match (s.build_status.as_str(), s.validation_status.as_str()) {

@@ -156,7 +156,8 @@ kind-registry:
     echo "kind node pulls registry-service.pedagog-data.svc:5000 from http://$ip:5000"
 
 # Upload an assignment directory to jobs (port-forwarded), e.g.
-# `just kind-upload recipes/examples/linked-list-python --wait`.
+# `just kind-upload recipes/examples/linked-list-python -c default --wait`
+# (straight to jobs, no login; the course must exist).
 kind-upload DIR *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -166,14 +167,14 @@ kind-upload DIR *ARGS:
     HAMMER_RECIPES="{{justfile_directory()}}/recipes" cargo run -q -p hammer -- upload "{{DIR}}" --jobs-url http://localhost:18081 {{ARGS}}
 
 # Submit files to an assignment on the kind cluster as a student:
-# `just kind-submit linked-list-python-upload alice recipes/examples/linked-list-python-upload/solution`.
-kind-submit ASSIGNMENT STUDENT +PATHS:
+# `just kind-submit default linked-list-python-upload alice recipes/examples/linked-list-python-upload/solution`.
+kind-submit COURSE ASSIGNMENT STUDENT +PATHS:
     #!/usr/bin/env bash
     set -euo pipefail
     kubectl --context {{KIND_CTX}} -n pedagog-builds port-forward svc/pedagog-jobs 18081:8080 >/dev/null &
     trap 'kill $!' EXIT
     sleep 2
-    cargo run -q -p hammer -- submit {{PATHS}} --assignment "{{ASSIGNMENT}}" --student "{{STUDENT}}" --jobs-url http://localhost:18081
+    cargo run -q -p hammer -- submit {{PATHS}} -c "{{COURSE}}" --assignment "{{ASSIGNMENT}}" --student "{{STUDENT}}" --jobs-url http://localhost:18081
 
 # End-to-end check of the assignment pipeline on kind (upload, build, validate,
 # supersede, restart, egress). Run after kind-load-jobs and kind-deploy.

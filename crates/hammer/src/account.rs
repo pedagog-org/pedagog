@@ -15,6 +15,9 @@ pub struct Session {
     pub api: String,
     pub email: String,
     pub token: String,
+    /// The default course (`hammer use`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub course: Option<String>,
 }
 
 pub fn session_path() -> Option<PathBuf> {
@@ -123,9 +126,19 @@ pub fn login(
         api: api.to_owned(),
         email: reply["user"]["email"].as_str().unwrap_or(email).to_owned(),
         token,
+        course: load()
+            .filter(|old| old.api == api)
+            .and_then(|old| old.course),
     };
     let path = save(&session)?;
     Ok((session, path))
+}
+
+/// Save (or with `None`, forget) the default course.
+pub fn set_course(course: Option<String>) -> Result<(), String> {
+    let mut session = load().ok_or("not logged in: run `hammer login`")?;
+    session.course = course;
+    save(&session).map(|_| ())
 }
 
 /// End the saved session (on the api, then locally).

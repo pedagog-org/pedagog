@@ -38,6 +38,11 @@ pub enum Command {
     /// A course's instructors, graders and students.
     #[command(subcommand)]
     Members(MembersCmd),
+    /// A course's assignments and their builds.
+    #[command(subcommand)]
+    Assignments(AssignmentsCmd),
+    /// Set the course commands use when there's no -c and no course.yml.
+    Use(UseArgs),
 }
 
 #[derive(clap::Args)]
@@ -157,7 +162,11 @@ pub struct UploadArgs {
     /// Assignment directory (contains assignment.yml).
     pub dir: PathBuf,
 
-    /// jobs service URL [env: PEDAGOG_JOBS_URL] [default: http://localhost:18081].
+    /// The course [default: the nearest course.yml at or above DIR, else `hammer use`].
+    #[arg(short = 'c', long)]
+    pub course: Option<String>,
+
+    /// Upload straight to jobs at this URL, without logging in (operators).
     #[arg(long, value_name = "URL")]
     pub jobs_url: Option<String>,
 
@@ -215,6 +224,10 @@ pub struct SubmitArgs {
     /// Files, directories, or one archive to submit.
     #[arg(required = true)]
     pub paths: Vec<PathBuf>,
+
+    /// The course [default: the nearest course.yml, else `hammer use`].
+    #[arg(short = 'c', long)]
+    pub course: Option<String>,
 
     /// Assignment id (from its assignment.yml).
     #[arg(short = 'a', long, value_name = "ID")]
@@ -285,7 +298,21 @@ pub enum CoursesCmd {
         page: i64,
     },
     /// A course's instructors and graders, and how many students it has.
-    Show { course: String },
+    Show {
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+    },
+    /// Change a course's id (slug) and/or display name (instructors and admins).
+    Rename {
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+        /// The new id, e.g. cop3502-fall26.
+        #[arg(long)]
+        id: Option<String>,
+        /// The new display name.
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Create a course (staff and admins). You teach it unless you name its
     /// instructors.
     Create {
@@ -303,7 +330,8 @@ pub enum CoursesCmd {
 pub enum MembersCmd {
     /// List a course's members.
     List {
-        course: String,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
         /// instructor, grader or student.
         #[arg(long)]
         role: Option<String>,
@@ -312,12 +340,17 @@ pub enum MembersCmd {
         dropped: bool,
     },
     /// One member; QUERY is part of an email or name.
-    Show { course: String, query: String },
+    Show {
+        query: String,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+    },
     /// Add people (or restore them, or change their role).
     Add {
-        course: String,
         #[arg(required = true)]
         emails: Vec<String>,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
         /// instructor, grader or student.
         #[arg(long, default_value = "student")]
         role: String,
@@ -327,15 +360,17 @@ pub enum MembersCmd {
     },
     /// Drop people: they lose access and keep their history.
     Drop {
-        course: String,
         #[arg(required = true)]
         emails: Vec<String>,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
     },
     /// Enroll students from a CSV: `email,name` (with a header), or Canvas's
     /// gradebook export. Adds students; staff are left alone.
     Import {
-        course: String,
         file: PathBuf,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
         /// Also drop students missing from the file (asks first).
         #[arg(long)]
         sync: bool,
@@ -343,6 +378,31 @@ pub enum MembersCmd {
         #[arg(long, requires = "sync")]
         yes: bool,
     },
+}
+
+#[derive(clap::Subcommand)]
+pub enum AssignmentsCmd {
+    /// The course's assignments (staff also see each one's latest build).
+    List {
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+    },
+    /// An assignment's recent builds (staff).
+    Show {
+        /// The assignment's id (from its assignment.yml).
+        assignment: String,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+    },
+}
+
+#[derive(clap::Args)]
+pub struct UseArgs {
+    /// The course; without one, show the current default.
+    pub course: Option<String>,
+    /// Forget the default.
+    #[arg(long, conflicts_with = "course")]
+    pub clear: bool,
 }
 
 #[derive(ValueEnum, Clone, PartialEq)]
