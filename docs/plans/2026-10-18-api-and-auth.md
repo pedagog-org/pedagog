@@ -499,6 +499,41 @@ visibility, release, the upload date diff and `--take-dates`).
   old Kaniko cache, then garbage-collect), and disk alerts plus SETUP guidance
   (kubelet image GC thresholds, SSDs for image storage on Pis).
 
+## 4d decisions (2026-10-20)
+
+- **Which submission counts:** the latest by counted time; staff (instructors,
+  graders) may activate an earlier one (`hammer submissions activate ASSIGNMENT ID
+  [--clear]`, picked from `hammer submissions --for`). It counts until a newer
+  submission arrives. Regrades and every view use what counts.
+- **Staff list** (`hammer results list ASSIGNMENT [--search] [--dropped] [--staff]`):
+  students who submitted, sorted by name then email; the submission that counts,
+  lateness, the cumulative score columns (visible, after deadline, after release,
+  hidden) with a star on the column each student sees now, and passed; a footer with
+  how many of the active students submitted.
+- **Staff detail** (`hammer results show ASSIGNMENT STUDENT [--submission ID]`): every
+  test with result, score, and when the student sees its score, feedback and output;
+  the cumulative summary; what the student is told; everything else (output, stdout,
+  feedback, trace, the run's output, logs).
+- **Students** (`hammer results show ASSIGNMENT`): the submission that counts; tests
+  whose score is visible (with pass/fail); feedback and output where their own
+  visibility allows; one line for hidden tests; totals over what's shown.
+- **Three visibilities per test:** `score`, `feedback` (the instructor's reasons, per
+  rubric item) and `output` (the framework's failure text and what the test printed).
+  Defaults: score visible, feedback visible, output after_end. Results without a
+  feedback setting use their output setting. Overrides, `visibility show` and the
+  helper's marker (`visibility(score=, feedback=, output=)`) gain `feedback`.
+- **Results format:** a run-level `run: {status: complete | error, output}` replaces
+  `<collection>` entries: the helper writes it when tests can't all run (load or
+  compile errors); jobs writes it when the run dies outside the framework (timeout,
+  out of memory, crash, no results). Tests gain `stdout`. The run's output is never
+  shown to students: they get a plain sentence ("couldn't be graded: the tests
+  couldn't run with your code", "timed out after 10 minutes").
+- **Console output** is captured per test (`stdout`) and shown under output visibility
+  (debug values can help students); feedback stays the instructor's written channel.
+- **Order:** a pedagog-pytest PR (run status and output, stdout, feedback visibility),
+  core and jobs reading the new format (still accepting `<collection>` entries from
+  older helpers), then the views and activation.
+
 ## Implementation steps
 
 1. **Schema and store** (`feat/accounts-store`): users, courses, staff, enrollments,
