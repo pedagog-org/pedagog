@@ -280,6 +280,119 @@ pub async fn submissions_for_user(
     .collect()
 }
 
+/// The submission that counts for one student.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Counting {
+    pub user_id: i64,
+    pub submission_id: i64,
+    /// Staff made it count (rather than it being the latest), and who.
+    pub activated_by: Option<String>,
+}
+
+/// The submission that counts for each user with one: the activated one,
+/// unless something newer has arrived since; otherwise the latest by counted
+/// time.
+pub async fn counting(pool: &PgPool, assignment_id: i64) -> sqlx::Result<Vec<Counting>> {
+    let rows = sqlx::query!(
+        r#"WITH latest AS (
+               SELECT DISTINCT ON (user_id) user_id, id
+                 FROM submissions WHERE assignment_id = $1 AND user_id IS NOT NULL
+                ORDER BY user_id, counted_at DESC, id DESC),
+           active AS (
+               SELECT a.user_id, a.submission_id, b.email
+                 FROM submission_activations a LEFT JOIN users b ON b.id = a.activated_by
+                WHERE a.assignment_id = $1
+                  AND NOT EXISTS (SELECT 1 FROM submissions s
+                                   WHERE s.assignment_id = a.assignment_id AND s.user_id = a.user_id
+                                     AND s.created_at > a.activated_at))
+           SELECT l.user_id AS "user_id!", COALESCE(ac.submission_id, l.id) AS "submission_id!",
+                  ac.submission_id IS NOT NULL AS "activated!", ac.email AS "activated_by?"
+             FROM latest l LEFT JOIN active ac ON ac.user_id = l.user_id"#,
+        assignment_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Counting {
+            user_id: r.user_id,
+            submission_id: r.submission_id,
+            activated_by: if r.activated {
+                r.activated_by.or(Some(String::new()))
+            } else {
+                None
+            },
+        })
+        .collect())
+}
+
+/// What counts for one user (see [`counting`]).
+pub async fn counting_for(
+    pool: &PgPool,
+    assignment_id: i64,
+    user: i64,
+) -> sqlx::Result<Option<Counting>> {
+    Ok(counting(pool, assignment_id)
+        .await?
+        .into_iter()
+        .find(|c| c.user_id == user))
+}
+
+/// Make `submission` count for its owner (`by` is the staff member).
+pub async fn activate(pool: &PgPool, submission: &Submission, by: i64) -> sqlx::Result<()> {
+    sqlx::query!(
+        "INSERT INTO submission_activations (assignment_id, user_id, submission_id, activated_by)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (assignment_id, user_id) DO UPDATE
+           SET submission_id = EXCLUDED.submission_id, activated_by = EXCLUDED.activated_by,
+               activated_at = now()",
+        submission.assignment_id,
+        submission.user_id,
+        submission.id,
+        by
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Back to the latest counting. Returns false if nothing was activated.
+pub async fn deactivate(pool: &PgPool, assignment_id: i64, user: i64) -> sqlx::Result<bool> {
+    Ok(sqlx::query!(
+        "DELETE FROM submission_activations WHERE assignment_id = $1 AND user_id = $2",
+        assignment_id,
+        user
+    )
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1)
+}
+
+/// Submissions by id.
+pub async fn submissions_by_id(pool: &PgPool, ids: &[i64]) -> sqlx::Result<Vec<Submission>> {
+    select_submissions!("WHERE s.id = ANY($1)", ids)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(Submission::try_from)
+        .collect()
+}
+
+/// Each submission's latest run (the one shown).
+pub async fn latest_runs(pool: &PgPool, submissions: &[i64]) -> sqlx::Result<Vec<GradingRun>> {
+    select_runs!(
+        "WHERE id IN (SELECT DISTINCT ON (submission_id) id FROM grading_runs
+                       WHERE submission_id = ANY($1) ORDER BY submission_id, id DESC)",
+        submissions
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(GradingRun::try_from)
+    .collect()
+}
+
 /// What it takes to start a grading run: its submission and the build it runs against.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunContext {
@@ -622,6 +735,77 @@ pub(crate) mod tests {
         .execute(&pool)
         .await;
         assert!(both.is_err(), "a user or a student id, not both");
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn an_activated_submission_counts_until_a_newer_one_arrives(
+        pool: PgPool,
+    ) -> sqlx::Result<()> {
+        use crate::db::accounts::upsert_user;
+        let build = current_build(&pool, "ll", "img-a").await?;
+        let a = sqlx::query_scalar!(
+            "SELECT assignment_id FROM assignment_builds WHERE id = $1",
+            build
+        )
+        .fetch_one(&pool)
+        .await?;
+        let alice = upsert_user(&pool, "alice@ufl.edu", "").await?;
+        let ta = upsert_user(&pool, "ta@ufl.edu", "").await?;
+        let new = || NewSubmission {
+            assignment_id: a,
+            owner: Owner::User(alice.id),
+            submitted_by: None,
+            staff: false,
+            counted_at: None,
+            build_id: build,
+            source: SubmissionSource::Upload,
+            tree_hash: "t",
+            object_key: "k",
+            size_bytes: 1,
+            receipt: "{}",
+        };
+        let first = record_submission(&pool, &new()).await?;
+        let second = record_submission(&pool, &new()).await?;
+        let counts = |pool: PgPool| async move { counting_for(&pool, a, alice.id).await };
+        assert_eq!(
+            counts(pool.clone()).await?.unwrap().submission_id,
+            second.submission_id
+        );
+
+        let earlier = get_submission(&pool, first.submission_id).await?.unwrap();
+        activate(&pool, &earlier, ta.id).await?;
+        let c = counts(pool.clone()).await?.unwrap();
+        assert_eq!(
+            (c.submission_id, c.activated_by.as_deref()),
+            (first.submission_id, Some("ta@ufl.edu"))
+        );
+        assert_eq!(
+            latest_runs(&pool, &[first.submission_id]).await?[0].id,
+            first.run_id
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let third = record_submission(&pool, &new()).await?;
+        let c = counts(pool.clone()).await?.unwrap();
+        assert_eq!(
+            (c.submission_id, c.activated_by),
+            (third.submission_id, None),
+            "newer wins again"
+        );
+
+        activate(&pool, &earlier, ta.id).await?;
+        assert!(deactivate(&pool, a, alice.id).await?);
+        assert_eq!(
+            counts(pool.clone()).await?.unwrap().submission_id,
+            third.submission_id
+        );
+        assert_eq!(
+            submissions_by_id(&pool, &[first.submission_id, third.submission_id])
+                .await?
+                .len(),
+            2
+        );
         Ok(())
     }
 

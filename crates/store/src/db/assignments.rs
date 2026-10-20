@@ -459,11 +459,20 @@ async fn queue_regrades(
     .await?
     .id;
     let runs = sqlx::query!(
-        "INSERT INTO grading_runs (submission_id, build_id, reason, regrade_batch_id)
-         SELECT DISTINCT ON (owner) id, $2, $3, $4
-           FROM (SELECT id, counted_at, COALESCE('u' || user_id, 's' || student_id) AS owner
-                   FROM submissions WHERE assignment_id = $1) latest
-          ORDER BY owner, counted_at DESC, id DESC",
+        "WITH latest AS (
+             SELECT DISTINCT ON (owner) id, user_id
+               FROM (SELECT id, user_id, counted_at, COALESCE('u' || user_id, 's' || student_id) AS owner
+                       FROM submissions WHERE assignment_id = $1) owned
+              ORDER BY owner, counted_at DESC, id DESC),
+         active AS (
+             SELECT a.user_id, a.submission_id FROM submission_activations a
+              WHERE a.assignment_id = $1
+                AND NOT EXISTS (SELECT 1 FROM submissions s
+                                 WHERE s.assignment_id = a.assignment_id AND s.user_id = a.user_id
+                                   AND s.created_at > a.activated_at))
+         INSERT INTO grading_runs (submission_id, build_id, reason, regrade_batch_id)
+         SELECT COALESCE(ac.submission_id, l.id), $2, $3, $4
+           FROM latest l LEFT JOIN active ac ON ac.user_id = l.user_id",
         assignment_id,
         build,
         RunReason::Regrade.to_string(),
