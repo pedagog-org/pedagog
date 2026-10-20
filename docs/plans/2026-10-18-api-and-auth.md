@@ -562,6 +562,37 @@ visibility, release, the upload date diff and `--take-dates`).
   core and jobs reading the new format (still accepting `<collection>` entries from
   older helpers), then the views and activation.
 
+## Step 5 decisions (2026-10-20)
+
+Step 5 ships as three PRs: **5a** `feat/notices`, **5b** `test/api-e2e`, **5c**
+`feat/error-tracking`.
+
+- **Regrade notices** (5a): with `--notify changed`, a change in any test's score,
+  feedback, stdout or error counts; `always` and `never` as before. Staff can also
+  notify by hand: `hammer results notify ASSIGNMENT [--for EMAIL]`. A notice gives the
+  score on the tests the student sees now, before → after, and which parts they can
+  see changed ("also changed: feedback on 2 tests"); with nothing visible changed, it
+  just says their results were updated. Staff submissions are never notified; dropped
+  students aren't mailed.
+- **Release email** (5a): when staff release results (not on undo), each active
+  student with a submission is told, with no numbers.
+- **Delivery** (5a): a `notices` outbox in Postgres, rendered when queued; the api
+  sends at most `PEDAGOG_MAIL_PER_SECOND` (default 5), retries with backoff (1 min,
+  5 min, 30 min, then gives up), sends each once across restarts and replicas, and
+  logs every failure. Emails say how to look (`hammer results show …`) until the web
+  UI exists.
+- **Direct jobs mode is removed** (5b): hammer talks only to the api; kind-e2e logs in
+  its personas (admin, instructor, grader, students) with codes read from Mailpit, and
+  adds checks for roles, closed / late / on-behalf submissions, visibility before and
+  after release, activation, and a notice arriving.
+- **Errors and warnings** (5c): GlitchTip (Sentry-compatible, self-hosted; arm64
+  images exist) in the cluster, its database in our Postgres, with Valkey; jobs and
+  the api report every warning and error through `sentry` + `sentry-tracing` (new
+  dependencies, approved), off when `PEDAGOG_SENTRY_DSN` is unset. GlitchTip groups
+  repeats and emails alerts; the portal links to it later. Hosted Sentry was declined
+  (student data would leave UF); a logs stack (VictoriaLogs/Loki + Grafana) may come
+  later for searching every pod's logs.
+
 ## Implementation steps
 
 1. **Schema and store** (`feat/accounts-store`): users, courses, staff, enrollments,
