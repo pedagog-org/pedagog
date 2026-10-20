@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.id AS \"run_id!\", s.id AS \"submission_id!\", s.assignment_id AS \"assignment_id!\",\n                  s.user_id, COALESCE(b.notify = 'always', false) AS \"always!\"\n             FROM grading_runs r JOIN submissions s ON s.id = r.submission_id\n             LEFT JOIN regrade_batches b ON b.id = r.regrade_batch_id\n          WHERE r.notify AND r.notified_at IS NULL AND r.status IN ('graded', 'error')\n          ORDER BY r.id LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "run_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "grading_runs",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "submission_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "assignment_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "assignment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "user_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "always!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "7607b70d967234bdca9d012d4122ca655524f356fd285dc151e8a39c10152663"
+}

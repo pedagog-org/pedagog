@@ -195,6 +195,26 @@ pub enum ErrorKind {
     Internal,
 }
 
+/// What a notice to a student is about (`notices.kind`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
+#[strum(serialize_all = "lowercase")]
+pub enum NoticeKind {
+    Regrade,
+    Release,
+    /// Sent by staff by hand.
+    Manual,
+}
+
+/// A queued email to a student.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Notice {
+    pub id: i64,
+    pub email: String,
+    pub subject: String,
+    pub body: String,
+    pub attempts: i32,
+}
+
 /// Why a grading run exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
 #[strum(serialize_all = "lowercase")]
