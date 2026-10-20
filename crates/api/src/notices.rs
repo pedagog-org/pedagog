@@ -415,7 +415,7 @@ mod tests {
     use pedagog_store::db::accounts::{self, Actor};
     use pedagog_store::db::assignments::*;
     use pedagog_store::db::notices as db;
-    use pedagog_store::db::submissions::{self as subs, NewSubmission, Owner, RunOutcome};
+    use pedagog_store::db::submissions::{self as subs, NewSubmission, RunOutcome};
     use pedagog_store::{
         BuildSettings, CourseRole, Isolation, JoinSource, PlatformKind, SubmissionSource,
         ValidationStatus,
@@ -498,7 +498,7 @@ mod tests {
             pool,
             &NewSubmission {
                 assignment_id: a,
-                owner: Owner::User(u.id),
+                user_id: u.id,
                 submitted_by: None,
                 staff: false,
                 counted_at: None,

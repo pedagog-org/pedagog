@@ -949,7 +949,7 @@ mod tests {
         use crate::db::accounts::upsert_user;
         use crate::db::queue::{claim_next, enqueue_validation};
         use crate::db::submissions::tests::current_build;
-        use crate::db::submissions::{NewSubmission, Owner, record_submission};
+        use crate::db::submissions::{NewSubmission, record_submission};
         use crate::{QueuedRun, SubmissionSource};
 
         let old = current_build(&pool, "ll", "img-a").await?;
@@ -957,7 +957,7 @@ mod tests {
         let alice = upsert_user(&pool, "alice@ufl.edu", "").await?;
         let sub = |at: Option<&'static str>| NewSubmission {
             assignment_id: a,
-            owner: Owner::User(alice.id),
+            user_id: alice.id,
             submitted_by: None,
             staff: false,
             counted_at: at,
