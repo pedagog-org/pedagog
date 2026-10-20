@@ -32,11 +32,24 @@ pub const SUBMISSION_PRIORITY: i16 = 0;
 /// Queue priority of regrade runs: behind new submissions.
 pub const REGRADE_PRIORITY: i16 = 1;
 
+/// Whose a submission is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Owner<'a> {
+    User(i64),
+    /// Operator submissions: an opaque id.
+    Student(&'a str),
+}
+
 /// A submission intake accepted, pinned to `build_id`.
 #[derive(Clone, Debug)]
 pub struct NewSubmission<'a> {
     pub assignment_id: i64,
-    pub student_id: &'a str,
+    pub owner: Owner<'a>,
+    /// Who sent it, if not the owner.
+    pub submitted_by: Option<i64>,
+    pub staff: bool,
+    /// RFC 3339; `None` counts it now.
+    pub counted_at: Option<&'a str>,
     pub build_id: i64,
     pub source: SubmissionSource,
     pub tree_hash: &'a str,
@@ -56,13 +69,23 @@ pub struct Accepted {
 /// Record a submission and queue its first grading run.
 pub async fn record_submission(pool: &PgPool, s: &NewSubmission<'_>) -> sqlx::Result<Accepted> {
     let mut tx = pool.begin().await?;
+    let (user_id, student_id) = match s.owner {
+        Owner::User(u) => (Some(u), None),
+        Owner::Student(id) => (None, Some(id)),
+    };
     let submission_id = sqlx::query!(
         "INSERT INTO submissions
-           (assignment_id, student_id, build_id, source, tree_hash, object_key, size_bytes, receipt)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::jsonb)
+           (assignment_id, user_id, student_id, submitted_by, staff, counted_at,
+            build_id, source, tree_hash, object_key, size_bytes, receipt)
+         VALUES ($1, $2, $3, $4, $5, COALESCE($6::text::timestamptz, now()),
+                 $7, $8, $9, $10, $11, $12::text::jsonb)
          RETURNING id",
         s.assignment_id,
-        s.student_id,
+        user_id,
+        student_id,
+        s.submitted_by,
+        s.staff,
+        s.counted_at,
         s.build_id,
         s.source.to_string(),
         s.tree_hash,
@@ -188,35 +211,61 @@ pub async fn batch_notify(pool: &PgPool, batch: i64) -> sqlx::Result<Option<Noti
         .transpose()
 }
 
-/// One submission by id.
-pub async fn get_submission(pool: &PgPool, id: i64) -> sqlx::Result<Option<Submission>> {
-    sqlx::query_as!(
-        SubmissionRow,
-        "SELECT id, assignment_id, student_id, build_id, source, tree_hash, object_key,
-                size_bytes, receipt::text AS \"receipt!\"
-           FROM submissions WHERE id = $1",
-        id
-    )
-    .fetch_optional(pool)
-    .await?
-    .map(Submission::try_from)
-    .transpose()
+macro_rules! select_submissions {
+    ($tail:literal $(, $arg:expr)* $(,)?) => {
+        sqlx::query_as!(
+            SubmissionRow,
+            r#"SELECT s.id, s.assignment_id, s.user_id, s.student_id, u.email AS "user_email?",
+                      b.email AS "submitted_by?", s.staff,
+                      to_char(s.counted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "counted_at!",
+                      to_char(s.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "created_at!",
+                      s.build_id, s.source, s.tree_hash, s.object_key, s.size_bytes,
+                      s.receipt::text AS "receipt!"
+                 FROM submissions s
+                 LEFT JOIN users u ON u.id = s.user_id
+                 LEFT JOIN users b ON b.id = s.submitted_by "# + $tail
+            $(, $arg)*
+        )
+    };
 }
 
-/// A student's submissions to an assignment, latest first.
+/// One submission by id.
+pub async fn get_submission(pool: &PgPool, id: i64) -> sqlx::Result<Option<Submission>> {
+    select_submissions!("WHERE s.id = $1", id)
+        .fetch_optional(pool)
+        .await?
+        .map(Submission::try_from)
+        .transpose()
+}
+
+/// An operator student's submissions to an assignment, latest first.
 pub async fn submissions_for_student(
     pool: &PgPool,
     assignment_id: i64,
     student_id: &str,
 ) -> sqlx::Result<Vec<Submission>> {
-    sqlx::query_as!(
-        SubmissionRow,
-        "SELECT id, assignment_id, student_id, build_id, source, tree_hash, object_key,
-                size_bytes, receipt::text AS \"receipt!\"
-           FROM submissions WHERE assignment_id = $1 AND student_id = $2
-          ORDER BY id DESC",
+    select_submissions!(
+        "WHERE s.assignment_id = $1 AND s.student_id = $2 ORDER BY s.counted_at DESC, s.id DESC",
         assignment_id,
         student_id
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(Submission::try_from)
+    .collect()
+}
+
+/// A user's submissions to an assignment, latest (by counted time) first.
+pub async fn submissions_for_user(
+    pool: &PgPool,
+    assignment_id: i64,
+    user: i64,
+) -> sqlx::Result<Vec<Submission>> {
+    select_submissions!(
+        "WHERE s.assignment_id = $1 AND s.user_id = $2 ORDER BY s.counted_at DESC, s.id DESC",
+        assignment_id,
+        user
     )
     .fetch_all(pool)
     .await?
@@ -234,6 +283,8 @@ pub struct RunContext {
     /// The assignment's course and slug (for names in the cluster).
     pub course_id: String,
     pub slug: String,
+    /// An instructor's or grader's own submission (never notified).
+    pub staff: bool,
     pub build_id: i64,
     pub image_ref: String,
     pub upload_id: i64,
@@ -248,7 +299,7 @@ pub async fn run_context(pool: &PgPool, run: i64) -> sqlx::Result<Option<RunCont
     sqlx::query_as!(
         RunContext,
         "SELECT g.id AS run_id, s.id AS submission_id, s.assignment_id, a.course_id, a.slug,
-                b.id AS build_id, b.image_ref, b.upload_id, s.object_key, s.tree_hash,
+                s.staff, b.id AS build_id, b.image_ref, b.upload_id, s.object_key, s.tree_hash,
                 g.regrade_batch_id
            FROM grading_runs g
            JOIN submissions s ON s.id = g.submission_id
@@ -314,7 +365,13 @@ fn decode(e: strum::ParseError) -> sqlx::Error {
 struct SubmissionRow {
     id: i64,
     assignment_id: i64,
-    student_id: String,
+    user_id: Option<i64>,
+    student_id: Option<String>,
+    user_email: Option<String>,
+    submitted_by: Option<String>,
+    staff: bool,
+    counted_at: String,
+    created_at: String,
     build_id: i64,
     source: String,
     tree_hash: String,
@@ -330,7 +387,13 @@ impl TryFrom<SubmissionRow> for Submission {
         Ok(Self {
             id: row.id,
             assignment_id: row.assignment_id,
+            user_id: row.user_id,
             student_id: row.student_id,
+            user_email: row.user_email,
+            submitted_by: row.submitted_by,
+            staff: row.staff,
+            counted_at: row.counted_at,
+            created_at: row.created_at,
             build_id: row.build_id,
             source: SubmissionSource::from_str(&row.source).map_err(decode)?,
             tree_hash: row.tree_hash,
@@ -425,7 +488,10 @@ pub(crate) mod tests {
             pool,
             &NewSubmission {
                 assignment_id: assignment,
-                student_id: student,
+                owner: Owner::Student(student),
+                submitted_by: None,
+                staff: false,
+                counted_at: None,
                 build_id: build,
                 source: SubmissionSource::Upload,
                 tree_hash: "t",
@@ -463,6 +529,87 @@ pub(crate) mod tests {
             claim_next(&mut conn).await?,
             Some(QueuedRun::Grading(acc.run_id))
         );
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn users_submissions_carry_who_and_when(pool: PgPool) -> sqlx::Result<()> {
+        use crate::db::accounts::upsert_user;
+        let build = current_build(&pool, "ll", "img-a").await?;
+        let a = sqlx::query_scalar!(
+            "SELECT assignment_id FROM assignment_builds WHERE id = $1",
+            build
+        )
+        .fetch_one(&pool)
+        .await?;
+        let alice = upsert_user(&pool, "alice@ufl.edu", "").await?;
+        let prof = upsert_user(&pool, "prof@ufl.edu", "").await?;
+        let new = |by: Option<i64>, at: Option<&'static str>| NewSubmission {
+            assignment_id: a,
+            owner: Owner::User(alice.id),
+            submitted_by: by,
+            staff: false,
+            counted_at: at,
+            build_id: build,
+            source: SubmissionSource::Upload,
+            tree_hash: "t",
+            object_key: "k",
+            size_bytes: 1,
+            receipt: "{}",
+        };
+        let own = record_submission(&pool, &new(None, None)).await?;
+        // A fix on her behalf, counted before her own.
+        let fix = record_submission(
+            &pool,
+            &new(Some(prof.id), Some("2026-09-08T23:41:00-04:00")),
+        )
+        .await?;
+        let mine = submissions_for_user(&pool, a, alice.id).await?;
+        assert_eq!(
+            mine.iter().map(|s| s.id).collect::<Vec<_>>(),
+            [own.submission_id, fix.submission_id],
+            "latest by counted time"
+        );
+        let f = &mine[1];
+        assert_eq!(
+            (
+                f.user_email.as_deref(),
+                f.submitted_by.as_deref(),
+                f.counted_at.as_str()
+            ),
+            (
+                Some("alice@ufl.edu"),
+                Some("prof@ufl.edu"),
+                "2026-09-09T03:41:00.000000Z"
+            )
+        );
+        assert_ne!(f.counted_at, f.created_at);
+        // Counted to the microsecond: "at their last time" ties exactly, and the
+        // later submission comes first.
+        let again = record_submission(
+            &pool,
+            &NewSubmission {
+                counted_at: Some(mine[0].counted_at.as_str()),
+                ..new(Some(prof.id), None)
+            },
+        )
+        .await?;
+        assert_eq!(
+            submissions_for_user(&pool, a, alice.id).await?[0].id,
+            again.submission_id
+        );
+        assert!(submissions_for_user(&pool, a, prof.id).await?.is_empty());
+
+        let both = sqlx::query!(
+            "INSERT INTO submissions (assignment_id, user_id, student_id, build_id, source, tree_hash, object_key, size_bytes)
+             VALUES ($1, $2, 's', $3, 'upload', 't', 'k', 1)",
+            a,
+            alice.id,
+            build
+        )
+        .execute(&pool)
+        .await;
+        assert!(both.is_err(), "a user or a student id, not both");
         Ok(())
     }
 

@@ -31,7 +31,7 @@ HAMMER=target/debug/hammer
 upload() { "$HAMMER" upload "$1" -c "$COURSE" --jobs-url "$URL" -q "${@:2}" 2>&1; }
 build_id() { grep -oE "build [0-9]+" | head -1 | grep -oE "[0-9]+"; }
 # Fixed student ids, so each run's regrade covers the same few submissions.
-submit() { "$HAMMER" submit "${@:3}" -c "$COURSE" --assignment "$1" --student "e2e-$2" --jobs-url "$URL" 2>&1; }
+submit() { "$HAMMER" submit "$1" "${@:3}" -c "$COURSE" --student "e2e-$2" --jobs-url "$URL" 2>&1; }
 # hammer's error report wraps long lines: join them (and drop its colors and frame).
 flat() { sed 's/\x1b\[[0-9;]*m//g; s/[│×]//g' | tr -s ' \n' ' '; }
 

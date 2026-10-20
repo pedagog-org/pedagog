@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT g.id AS run_id, s.id AS submission_id, s.assignment_id, a.course_id, a.slug,\n                b.id AS build_id, b.image_ref, b.upload_id, s.object_key, s.tree_hash,\n                g.regrade_batch_id\n           FROM grading_runs g\n           JOIN submissions s ON s.id = g.submission_id\n           JOIN assignments a ON a.id = s.assignment_id\n           JOIN assignment_builds b ON b.id = g.build_id\n          WHERE g.id = $1",
+  "query": "SELECT g.id AS run_id, s.id AS submission_id, s.assignment_id, a.course_id, a.slug,\n                s.staff, b.id AS build_id, b.image_ref, b.upload_id, s.object_key, s.tree_hash,\n                g.regrade_batch_id\n           FROM grading_runs g\n           JOIN submissions s ON s.id = g.submission_id\n           JOIN assignments a ON a.id = s.assignment_id\n           JOIN assignment_builds b ON b.id = g.build_id\n          WHERE g.id = $1",
   "describe": {
     "columns": [
       {
@@ -60,6 +60,17 @@
       },
       {
         "ordinal": 5,
+        "name": "staff",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "submissions",
+            "name": "staff"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
         "name": "build_id",
         "type_info": "Int8",
         "origin": {
@@ -70,7 +81,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "image_ref",
         "type_info": "Text",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "upload_id",
         "type_info": "Int8",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "object_key",
         "type_info": "Text",
         "origin": {
@@ -103,7 +114,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "tree_hash",
         "type_info": "Text",
         "origin": {
@@ -114,7 +125,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "regrade_batch_id",
         "type_info": "Int8",
         "origin": {
@@ -141,8 +152,9 @@
       false,
       false,
       false,
+      false,
       true
     ]
   },
-  "hash": "712935ab730af54088234ab06d84811194e5c90a7040689f4cbdc8ccc355d688"
+  "hash": "ffaa760d22e172c3a5a9a866e91d1a1b86f9c905adc9d55d76000f65041ca23d"
 }

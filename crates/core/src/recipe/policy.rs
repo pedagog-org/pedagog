@@ -182,6 +182,33 @@ impl Dates {
     pub fn ended(&self, now: OffsetDateTime) -> bool {
         self.end().is_some_and(|end| now > end)
     }
+
+    /// How far past the due date a submission counted at `at` is (`None` if
+    /// on time, or there's no due date).
+    pub fn late_by(&self, at: OffsetDateTime) -> Option<time::Duration> {
+        let due = self.due?.0;
+        (at > due).then(|| at - due)
+    }
+}
+
+/// A duration in its two largest units, e.g. "2 hours 14 minutes", "4 days".
+pub fn spoken(d: time::Duration) -> String {
+    let secs = d.whole_seconds().max(0);
+    let units = [
+        (secs / 86_400, "day"),
+        (secs / 3_600 % 24, "hour"),
+        (secs / 60 % 60, "minute"),
+        (secs % 60, "second"),
+    ];
+    let first = units.iter().position(|(n, _)| *n > 0).unwrap_or(3);
+    units[first..]
+        .iter()
+        .take(2)
+        .enumerate()
+        .filter(|(i, (n, _))| *i == 0 || *n > 0)
+        .map(|(_, (n, unit))| format!("{n} {unit}{}", if *n == 1 { "" } else { "s" }))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Visibility overrides: for every test, and for specific tests (by id, else
@@ -398,6 +425,34 @@ mod tests {
         assert!(err.contains("open is after due"), "{err}");
         let err = policy("dates:\n  late_due: \"2026-09-08T00:00:00Z\"\n").unwrap_err();
         assert!(err.contains("needs a due date"), "{err}");
+    }
+
+    #[test]
+    fn lateness_is_measured_from_the_due_date() {
+        let d = policy(DATES).unwrap().dates;
+        let due = d.due.unwrap().0;
+        assert_eq!(d.late_by(due), None, "on the dot is on time");
+        assert_eq!(
+            d.late_by(due + time::Duration::minutes(134)),
+            Some(time::Duration::minutes(134))
+        );
+        assert_eq!(Dates::default().late_by(due), None, "no due date");
+    }
+
+    #[test]
+    fn durations_are_said_in_two_units() {
+        let s = |secs: i64| spoken(time::Duration::seconds(secs));
+        assert_eq!(s(134 * 60), "2 hours 14 minutes");
+        assert_eq!(s(4 * 86_400), "4 days");
+        assert_eq!(s(86_400 + 3 * 3600 + 59), "1 day 3 hours");
+        assert_eq!(s(65), "1 minute 5 seconds");
+        assert_eq!(s(1), "1 second");
+        assert_eq!(s(0), "0 seconds");
+        assert_eq!(
+            s(86_400 + 59),
+            "1 day",
+            "the second unit, when zero, is left out"
+        );
     }
 
     #[test]

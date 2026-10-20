@@ -29,7 +29,7 @@ impl Endpoint {
         }
     }
 
-    fn authorized(
+    pub(crate) fn authorized(
         &self,
         req: reqwest::blocking::RequestBuilder,
     ) -> reqwest::blocking::RequestBuilder {
@@ -39,7 +39,7 @@ impl Endpoint {
         }
     }
 
-    fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             Endpoint::Api { .. } => "the api",
             Endpoint::Jobs(_) => "jobs",

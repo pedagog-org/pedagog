@@ -43,6 +43,8 @@ pub enum Command {
     Assignments(AssignmentsCmd),
     /// Set the course commands use when there's no -c and no course.yml.
     Use(UseArgs),
+    /// Your submissions to an assignment (or a student's, for staff).
+    Submissions(SubmissionsArgs),
 }
 
 #[derive(clap::Args)]
@@ -203,8 +205,7 @@ pub struct UploadArgs {
 }
 
 #[derive(clap::Args)]
-#[command(
-    long_about = "Submit files to an upload assignment as a student, for grading.
+#[command(long_about = "Submit files to an upload assignment, for grading.
 
 Give files, directories, or one archive. A directory sends every regular file
 under it, by its path relative to the directory (VCS metadata skipped); a file
@@ -217,10 +218,17 @@ folder that wraps everything (`strip: auto`), then prints what it kept and
 ignored. The submission is graded against the assignment's current build;
 it's refused if there's none yet.
 
-The student id is an opaque string until accounts exist. `just kind-submit`
-port-forwards to jobs on the kind cluster and runs this command."
-)]
+Students submit while the assignment is open (late after its due date, until
+its late_due). Course staff submit their own work whenever, and with --for
+submit a student's on their behalf (e.g. to fix a broken submission), counted
+--at now, at their last submission's time, or at a given time.
+
+Operators can send straight to jobs with --jobs-url and --student (`just
+kind-submit` port-forwards to jobs on kind).")]
 pub struct SubmitArgs {
+    /// The assignment's id (from its assignment.yml).
+    pub assignment: String,
+
     /// Files, directories, or one archive to submit.
     #[arg(required = true)]
     pub paths: Vec<PathBuf>,
@@ -229,22 +237,43 @@ pub struct SubmitArgs {
     #[arg(short = 'c', long)]
     pub course: Option<String>,
 
-    /// Assignment id (from its assignment.yml).
-    #[arg(short = 'a', long, value_name = "ID")]
-    pub assignment: String,
+    /// Submit for a student, by email (course staff); accepted whatever the dates.
+    #[arg(long = "for", value_name = "EMAIL")]
+    pub for_: Option<String>,
 
-    /// Student id.
-    #[arg(short = 's', long, value_name = "ID")]
-    pub student: String,
+    /// With --for: the time it counts at: now (default), last (their latest
+    /// submission's), or an RFC 3339 time.
+    #[arg(long, requires = "for_", value_name = "WHEN")]
+    pub at: Option<String>,
 
-    /// Wait for grading, print the score and the tests that didn't pass, and
-    /// fail if the run couldn't be graded.
+    /// Wait for grading and print the outcome; fail if the run couldn't be graded.
     #[arg(short = 'w', long)]
     pub wait: bool,
 
-    /// jobs service URL [env: PEDAGOG_JOBS_URL] [default: http://localhost:18081].
-    #[arg(long, value_name = "URL")]
+    /// Submit straight to jobs at this URL, without logging in (operators).
+    #[arg(long, value_name = "URL", requires = "student")]
     pub jobs_url: Option<String>,
+
+    /// With --jobs-url: the student id to record.
+    #[arg(
+        short = 's',
+        long,
+        value_name = "ID",
+        requires = "jobs_url",
+        conflicts_with = "for_"
+    )]
+    pub student: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub struct SubmissionsArgs {
+    /// The assignment's id.
+    pub assignment: String,
+    /// A student's, by email (course staff); yours by default.
+    #[arg(long = "for", value_name = "EMAIL")]
+    pub for_: Option<String>,
+    #[arg(short = 'c', long)]
+    pub course: Option<String>,
 }
 
 #[derive(clap::Args)]

@@ -18,26 +18,53 @@ async fn stub_jobs() -> (String, JobsSeen) {
     use axum::extract::{Path, RawQuery};
     let seen: JobsSeen = Arc::default();
     let recorded = seen.clone();
-    let app = axum::Router::new().route(
-        "/internal/courses/{course}/assignments",
-        axum::routing::post(
-            move |Path(course): Path<String>, RawQuery(q): RawQuery, body: axum::body::Bytes| {
-                let recorded = recorded.clone();
-                async move {
-                    let path = format!("/internal/courses/{course}/assignments");
-                    let full = q.map(|q| format!("{path}?{q}")).unwrap_or(path);
-                    recorded.lock().unwrap().push((full, body.len()));
-                    (
-                        axum::http::StatusCode::CREATED,
-                        axum::Json(serde_json::json!({
-                            "course": course, "assignment": "linked-list",
-                            "build": {"status": "dispatched", "build_id": 1}, "warnings": []
-                        })),
-                    )
-                }
-            },
-        ),
-    );
+    let submissions = seen.clone();
+    let app = axum::Router::new()
+        .route(
+            "/internal/courses/{course}/assignments",
+            axum::routing::post(
+                move |Path(course): Path<String>,
+                      RawQuery(q): RawQuery,
+                      body: axum::body::Bytes| {
+                    let recorded = recorded.clone();
+                    async move {
+                        let path = format!("/internal/courses/{course}/assignments");
+                        let full = q.map(|q| format!("{path}?{q}")).unwrap_or(path);
+                        recorded.lock().unwrap().push((full, body.len()));
+                        (
+                            axum::http::StatusCode::CREATED,
+                            axum::Json(serde_json::json!({
+                                "course": course, "assignment": "linked-list",
+                                "build": {"status": "dispatched", "build_id": 1}, "warnings": []
+                            })),
+                        )
+                    }
+                },
+            ),
+        )
+        .route(
+            "/internal/courses/{course}/assignments/{slug}/submissions",
+            axum::routing::post(
+                move |Path((course, slug)): Path<(String, String)>,
+                      RawQuery(q): RawQuery,
+                      body: axum::body::Bytes| {
+                    let recorded = submissions.clone();
+                    async move {
+                        let path =
+                            format!("/internal/courses/{course}/assignments/{slug}/submissions");
+                        let full = q.map(|q| format!("{path}?{q}")).unwrap_or(path);
+                        recorded.lock().unwrap().push((full, body.len()));
+                        (
+                            axum::http::StatusCode::CREATED,
+                            axum::Json(serde_json::json!({
+                                "submission_id": 1, "run_id": 1, "build_id": 1, "tree_hash": "t",
+                                "queue_position": 1, "files": ["a.py"], "ignored": []
+                            })),
+                        )
+                    }
+                },
+            ),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app).await });

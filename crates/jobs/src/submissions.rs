@@ -1,4 +1,6 @@
-//! `POST /internal/courses/{course}/assignments/{slug}/submissions?student=<id>`: accept a
+//! `POST /internal/courses/{course}/assignments/{slug}/submissions?student=<id>`
+//! (operators) or `?user=<id>[&by=<id>][&staff=true][&at=<RFC 3339>]` (the api,
+//! which decides who may submit what): accept a
 //! submission (several files, or one archive), normalize it with the
 //! assignment's `submission:` rules, store it, and queue its grading run
 //! against the current build.
@@ -302,7 +304,17 @@ fn archive_refused(e: ArchiveError) -> Refused {
 
 #[derive(Deserialize)]
 pub struct SubmitQuery {
-    student: String,
+    /// Operator submissions: an opaque student id.
+    student: Option<String>,
+    /// The api's: the owner's user id,
+    user: Option<i64>,
+    /// who sent it when someone else did,
+    by: Option<i64>,
+    /// whether it's an instructor's or grader's own,
+    #[serde(default)]
+    staff: bool,
+    /// and the time it counts at (default: now).
+    at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -325,13 +337,30 @@ pub async fn submit(
     Query(query): Query<SubmitQuery>,
     multipart: Multipart,
 ) -> Result<Response, Refused> {
-    let student = query.student.trim().to_owned();
-    if student.is_empty() || student.len() > MAX_STUDENT_ID || student.chars().any(char::is_control)
-    {
-        return Err(refused(
-            StatusCode::BAD_REQUEST,
-            format!("student must be 1–{MAX_STUDENT_ID} printable characters"),
-        ));
+    let student = query.student.as_deref().map(str::trim);
+    let owner = match (student, query.user) {
+        (Some(s), None)
+            if !s.is_empty() && s.len() <= MAX_STUDENT_ID && !s.chars().any(char::is_control) =>
+        {
+            db::Owner::Student(s)
+        }
+        (Some(_), None) => {
+            return Err(refused(
+                StatusCode::BAD_REQUEST,
+                format!("student must be 1–{MAX_STUDENT_ID} printable characters"),
+            ));
+        }
+        (None, Some(user)) => db::Owner::User(user),
+        _ => {
+            return Err(refused(
+                StatusCode::BAD_REQUEST,
+                "give either student or user",
+            ));
+        }
+    };
+    if let Some(at) = &query.at {
+        pedagog_core::recipe::policy::Instant::try_from(at.clone())
+            .map_err(|e| refused(StatusCode::BAD_REQUEST, e))?;
     }
     let assignment = find_assignment(&state, &course, &slug).await?;
     let (build_id, settings) = current_settings(&state, &assignment).await?;
@@ -371,7 +400,10 @@ pub async fn submit(
         &state.pool,
         &db::NewSubmission {
             assignment_id: assignment.id,
-            student_id: &student,
+            owner,
+            submitted_by: query.by,
+            staff: query.staff,
+            counted_at: query.at.as_deref(),
             build_id,
             source: SubmissionSource::Upload,
             tree_hash: &tree_hash,
@@ -386,7 +418,7 @@ pub async fn submit(
         .await
         .map_err(|e| internal("reading the queue", e))?;
     tracing::info!(
-        %course, assignment = %slug, student = %student, submission = accepted.submission_id,
+        %course, assignment = %slug, ?owner, submission = accepted.submission_id,
         run = accepted.run_id, build = build_id, files = normalized.receipt.files.len(),
         "submission accepted"
     );
@@ -428,7 +460,11 @@ pub struct SubmissionStatus {
     pub id: i64,
     pub course: String,
     pub assignment: String,
-    pub student_id: String,
+    pub user_id: Option<i64>,
+    pub student_id: Option<String>,
+    pub submitted_by: Option<String>,
+    pub staff: bool,
+    pub counted_at: String,
     /// The build current when it was accepted.
     pub build_id: i64,
     pub source: String,
@@ -517,7 +553,11 @@ async fn status_of(
         id: submission.id,
         course: assignment.course_id,
         assignment: assignment.slug,
+        user_id: submission.user_id,
         student_id: submission.student_id,
+        submitted_by: submission.submitted_by,
+        staff: submission.staff,
+        counted_at: submission.counted_at,
         build_id: submission.build_id,
         source: submission.source.to_string(),
         tree_hash: submission.tree_hash,

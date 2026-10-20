@@ -452,6 +452,34 @@ visibility, release, the upload date diff and `--take-dates`).
   `-c`) until step 5 moves e2e to the api; step 5 then revisits it, leaning toward
   removing it.
 
+## 4b decisions (2026-10-19)
+
+- **Who:** `submissions.user_id` is whose submission it is; `submitted_by` is who sent
+  it when that's someone else. Instructors, graders and admins may submit on a
+  student's behalf (an active student of the course); the student sees "submitted by
+  … on your behalf". `student_id` stays only for operator submissions (step 5 may drop
+  it with direct mode).
+- **Times:** `counted_at` decides lateness and which submission is latest; `created_at`
+  is when it really arrived. A student's own counts at arrival; on behalf, `--at now`
+  (default), `--at last` (the student's latest counted time; an error if none), or
+  `--at <RFC 3339>` (not in the future). Staff see both; students see the counted time.
+- **Acceptance:** a student's own submission, from `open` until `late_due` (or `due`),
+  by the current build's file dates (course edits arrive in 4c); refusals say why.
+  Staff submissions (their own, marked `staff`) and on-behalf submissions are accepted
+  whatever the dates.
+- **Late** is computed when shown, against the dates in effect now: "late by 2 hours
+  14 minutes" (the two largest units).
+- **Staff submissions** are graded and regraded like any other but never notified.
+  Regrades take each student's latest submission by counted time.
+- **Until 4c,** students see their receipt, status, lateness and who submitted, but no
+  scores or tests; staff see everything.
+- **api:** `POST /courses/{c}/assignments/{a}/submissions?for=&at=` (multipart, passed
+  on to jobs), `GET …/submissions` (yours; `?for=` for staff),
+  `GET /courses/{c}/submissions/{id}` (yours, or any for staff).
+- **hammer:** `hammer submit ASSIGNMENT PATHS [--for EMAIL] [--at now|last|TIME]
+  [--wait]`, `hammer submissions ASSIGNMENT [--for EMAIL]`; operator mode keeps
+  `--student` with `--jobs-url`.
+
 ## Implementation steps
 
 1. **Schema and store** (`feat/accounts-store`): users, courses, staff, enrollments,
