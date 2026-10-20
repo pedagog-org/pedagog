@@ -13,13 +13,13 @@ use axum::response::{AppendHeaders, IntoResponse, Json, Response};
 use axum::routing::{delete, get, post, put};
 use pedagog_store::db::accounts as db;
 use pedagog_store::{CourseRole, SessionKind};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::auth::{COOKIE_NAME, CurrentUser, Login, open_session};
 use crate::error::{ApiError, internal, refused, unauthorized};
 use crate::state::AppState;
-use crate::users::UserView;
 use crate::{assignments, courses, members, notices, policy, results, submissions, users};
+use pedagog_core::api::{Me, MyCourse};
 
 /// The service: the REST api under `/api`, and the web UI (when its files are
 /// configured) everywhere else.
@@ -45,6 +45,11 @@ fn api(state: AppState) -> Router {
         .route("/auth/finish", post(finish))
         .route("/auth/logout", post(logout))
         .route("/me", get(me))
+        .route(
+            "/client-errors",
+            post(crate::client_errors::report)
+                .layer(DefaultBodyLimit::max(crate::client_errors::MAX_BODY)),
+        )
         .route("/users", get(users::list))
         .route("/users/{query}", get(users::show))
         .route("/users/{email}/role", put(users::set_role))
@@ -197,7 +202,7 @@ async fn finish(
         .await
         .map_err(|e| internal("opening a session", e))?;
     tracing::info!(user = user.id, %kind, "logged in");
-    let me = UserView::from(&user);
+    let me = crate::users::view(&user);
     Ok(match kind {
         SessionKind::Cli => Json(serde_json::json!({ "token": token, "user": me })).into_response(),
         SessionKind::Web => {
@@ -227,29 +232,22 @@ async fn logout(State(state): State<AppState>, current: CurrentUser) -> Result<R
     Ok((StatusCode::NO_CONTENT, AppendHeaders([(SET_COOKIE, clear)])).into_response())
 }
 
-#[derive(Serialize)]
-struct CourseView {
-    id: String,
-    name: String,
-    /// `instructor`, `grader` or `student`.
-    role: String,
-}
-
 async fn me(State(state): State<AppState>, current: CurrentUser) -> Result<Response, ApiError> {
     let courses = db::courses_for(&state.pool, current.user.id)
         .await
         .map_err(|e| internal("reading your courses", e))?
         .into_iter()
-        .map(|(c, role): (_, CourseRole)| CourseView {
+        .map(|(c, role): (_, CourseRole)| MyCourse {
             id: c.id,
             name: c.name,
             role: role.to_string(),
         })
-        .collect::<Vec<_>>();
-    Ok(
-        Json(serde_json::json!({ "user": UserView::from(&current.user), "courses": courses }))
-            .into_response(),
-    )
+        .collect();
+    Ok(Json(Me {
+        user: crate::users::view(&current.user),
+        courses,
+    })
+    .into_response())
 }
 
 #[cfg(test)]

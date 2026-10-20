@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use pedagog_store::db::accounts::{self as db, RoleSet};
 use pedagog_store::{GlobalRole, User};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, internal, refused};
@@ -86,20 +86,14 @@ pub fn pick<T>(mut found: Vec<T>, exact: impl Fn(&T) -> bool) -> Pick<T> {
     Pick::Many(found, more)
 }
 
-#[derive(Serialize)]
-pub struct UserView {
-    pub email: String,
-    pub name: String,
-    pub role: String,
-}
+pub use pedagog_core::api::UserView;
 
-impl From<&User> for UserView {
-    fn from(u: &User) -> Self {
-        Self {
-            email: u.email.clone(),
-            name: u.name.clone(),
-            role: u.role.to_string(),
-        }
+/// A user as listings show them.
+pub fn view(u: &User) -> UserView {
+    UserView {
+        email: u.email.clone(),
+        name: u.name.clone(),
+        role: u.role.to_string(),
     }
 }
 
@@ -126,7 +120,7 @@ pub async fn list(
         .await
         .map_err(|e| internal("reading users", e))?;
     Ok(Json(serde_json::json!({
-        "users": users.iter().map(UserView::from).collect::<Vec<_>>(),
+        "users": users.iter().map(view).collect::<Vec<_>>(),
         "total": total,
         "page": page,
         "pages": pages(total),
@@ -150,7 +144,7 @@ pub async fn show(
         Pick::One(u) => u,
         Pick::Many(us, more) => {
             return Ok(Json(serde_json::json!({
-                "matches": us.iter().map(UserView::from).collect::<Vec<_>>(),
+                "matches": us.iter().map(view).collect::<Vec<_>>(),
                 "more": more,
             }))
             .into_response());
@@ -215,7 +209,7 @@ pub async fn set_role(
         RoleSet::Set { user, from } => {
             tracing::info!(by = current.user.id, user = user.id, %role, "global role set");
             Ok(Json(serde_json::json!({
-                "user": UserView::from(&user),
+                "user": view(&user),
                 "from": from.map(|r| r.to_string()),
             }))
             .into_response())

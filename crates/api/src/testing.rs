@@ -89,6 +89,7 @@ pub async fn serve_full(pool: PgPool) -> (String, Arc<Mutex<Vec<Mail>>>, JobsSee
         auth: Authenticator::EmailCode,
         jobs: reqwest::Client::new(),
         events: crate::events::Hub::new(),
+        client_errors: Default::default(),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/api", listener.local_addr().unwrap());
@@ -187,6 +188,7 @@ pub fn state(pool: PgPool) -> (AppState, Arc<Mutex<Vec<Mail>>>) {
         auth: Authenticator::EmailCode,
         jobs: reqwest::Client::new(),
         events: crate::events::Hub::new(),
+        client_errors: Default::default(),
     };
     (state, outbox)
 }

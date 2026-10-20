@@ -18,4 +18,6 @@ pub struct AppState {
     pub jobs: reqwest::Client,
     /// Live updates for the open event streams.
     pub events: crate::events::Hub,
+    /// Rate limits for the web UI's error reports.
+    pub client_errors: crate::client_errors::Limits,
 }

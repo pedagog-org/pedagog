@@ -6,6 +6,7 @@
 
 mod assignments;
 mod auth;
+mod client_errors;
 mod config;
 mod courses;
 mod error;
@@ -88,6 +89,7 @@ async fn serve() -> anyhow::Result<()> {
             .timeout(std::time::Duration::from_secs(300))
             .build()?,
         events: events::Hub::new(),
+        client_errors: Default::default(),
     };
 
     // Background work owned here: if it stops, the service exits and is restarted.
