@@ -63,6 +63,17 @@ pub struct Uploaded {
     #[serde(default)]
     pub warnings: Vec<String>,
     pub build: Build,
+    /// Where the course's date edits differ from this file's dates (the api).
+    #[serde(default)]
+    pub date_diff: Vec<DateDiff>,
+    pub dates_note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DateDiff {
+    pub field: String,
+    pub course: String,
+    pub file: Option<String>,
 }
 
 /// What jobs did about building the upload.
@@ -241,10 +252,14 @@ pub fn send(
     archive: Vec<u8>,
     force: bool,
     regrade: Option<Notify>,
+    take_dates: bool,
 ) -> Result<Uploaded, String> {
     let mut params = Vec::new();
     if force {
         params.push(("force", "true"));
+    }
+    if take_dates {
+        params.push(("take_dates", "true"));
     }
     let notify = regrade.map(|n| n.to_string());
     if let Some(notify) = &notify {

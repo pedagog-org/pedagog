@@ -13,8 +13,9 @@ use clap::Parser;
 use miette::{GraphicalReportHandler, MietteDiagnostic, Report, Result, Severity, miette};
 
 use cli::{
-    AssignmentsCmd, Cli, Command, CoursesCmd, Format, LoginArgs, MembersCmd, PlanArgs,
-    SubmissionsArgs, SubmitArgs, UploadArgs, UseArgs, UsersCmd, VendArgs,
+    AssignmentsCmd, Cli, Command, CoursesCmd, DatesCmd, Format, LoginArgs, MembersCmd, PlanArgs,
+    ResultsCmd, SubmissionsArgs, SubmitArgs, UploadArgs, UseArgs, UsersCmd, VendArgs,
+    VisibilityCmd,
 };
 use pedagog_core::recipe::assignment::{AssignmentYaml, FileSources};
 use pedagog_core::recipe::primitives::Id;
@@ -44,6 +45,9 @@ fn main() -> Result<()> {
         Command::Assignments(cmd) => run_assignments(cmd),
         Command::Use(args) => run_use(args),
         Command::Submissions(args) => run_submissions(args),
+        Command::Dates(cmd) => run_dates(cmd),
+        Command::Visibility(cmd) => run_visibility(cmd),
+        Command::Results(cmd) => run_results(cmd),
     }
 }
 
@@ -285,6 +289,149 @@ fn run_submissions(args: SubmissionsArgs) -> Result<()> {
         ))
         .map_err(|e| miette!("{e}"))?,
     ))
+}
+
+/// `/courses/<c>/assignments/<a>` for the course a command means.
+fn assignment_path(course: Option<String>, assignment: &str) -> Result<(manage::Api, String)> {
+    let (api, c) = course_here(course)?;
+    Ok((
+        api,
+        format!("/courses/{c}/assignments/{}", segment(assignment)),
+    ))
+}
+
+fn run_dates(cmd: DatesCmd) -> Result<()> {
+    let lines = match cmd {
+        DatesCmd::Show { assignment, course } => {
+            let (api, a) = assignment_path(course, &assignment)?;
+            manage::dates(&api.get(&format!("{a}/dates")).map_err(|e| miette!("{e}"))?)
+        }
+        DatesCmd::Set {
+            assignment,
+            course,
+            open,
+            due,
+            late_due,
+        } => {
+            let (api, a) = assignment_path(course, &assignment)?;
+            manage::dates(
+                &api.put(
+                    &format!("{a}/dates"),
+                    &serde_json::json!({ "open": open, "due": due, "late_due": late_due }),
+                )
+                .map_err(|e| miette!("{e}"))?,
+            )
+        }
+        DatesCmd::Clear {
+            assignment,
+            course,
+            open,
+            due,
+            late_due,
+        } => {
+            let (api, a) = assignment_path(course, &assignment)?;
+            let fields: Vec<&str> = [("open", open), ("due", due), ("late_due", late_due)]
+                .into_iter()
+                .filter_map(|(f, on)| on.then_some(f))
+                .collect();
+            let q = manage::query(&[("fields", (!fields.is_empty()).then(|| fields.join(",")))]);
+            manage::dates(
+                &api.delete(&format!("{a}/dates{q}"))
+                    .map_err(|e| miette!("{e}"))?,
+            )
+        }
+    };
+    print_lines(lines)
+}
+
+fn run_visibility(cmd: VisibilityCmd) -> Result<()> {
+    let lines = match cmd {
+        VisibilityCmd::Show {
+            assignment,
+            course,
+            test,
+            verbose,
+        } => {
+            let (api, a) = assignment_path(course, &assignment)?;
+            manage::visibility(
+                &api.get(&format!("{a}/visibility"))
+                    .map_err(|e| miette!("{e}"))?,
+                test.as_deref(),
+                verbose,
+            )
+        }
+        VisibilityCmd::Set {
+            assignment,
+            course,
+            test,
+            score,
+            output,
+        } => {
+            let (api, a) = assignment_path(course, &assignment)?;
+            let reply = api
+                .put(
+                    &format!("{a}/visibility"),
+                    &serde_json::json!({ "test": test, "score": score, "output": output }),
+                )
+                .map_err(|e| miette!("{e}"))?;
+            let mut lines = vec![format!(
+                "saved for {}",
+                test.as_deref().unwrap_or("every test")
+            )];
+            lines.extend(reply["warning"].as_str().map(|w| format!("warning: {w}")));
+            lines
+        }
+        VisibilityCmd::Clear {
+            assignment,
+            course,
+            test,
+            all,
+        } => {
+            let (api, a) = assignment_path(course, &assignment)?;
+            let q = manage::query(&[
+                ("test", test.clone()),
+                ("all", all.then(|| "true".to_owned())),
+            ]);
+            api.delete(&format!("{a}/visibility{q}"))
+                .map_err(|e| miette!("{e}"))?;
+            vec![match (test, all) {
+                (_, true) => "cleared every override".to_owned(),
+                (Some(t), _) => format!("cleared the overrides for {t}"),
+                (None, _) => "cleared the overrides for every test".to_owned(),
+            }]
+        }
+    };
+    print_lines(lines)
+}
+
+fn run_results(cmd: ResultsCmd) -> Result<()> {
+    let lines = match cmd {
+        ResultsCmd::Release {
+            assignment,
+            course,
+            undo,
+        } => {
+            let (api, a) = assignment_path(course, &assignment)?;
+            if undo {
+                let reply = api
+                    .delete(&format!("{a}/release"))
+                    .map_err(|e| miette!("{e}"))?;
+                let mut lines = vec![format!("results of {assignment} are no longer released")];
+                lines.extend(reply["warning"].as_str().map(|w| format!("warning: {w}")));
+                lines
+            } else {
+                let reply = api
+                    .post(&format!("{a}/release"), &serde_json::json!({}))
+                    .map_err(|e| miette!("{e}"))?;
+                vec![if reply["already"].as_bool() == Some(true) {
+                    format!("results of {assignment} were already released")
+                } else {
+                    format!("results of {assignment} are released")
+                }]
+            }
+        }
+    };
+    print_lines(lines)
 }
 
 fn run_use(args: UseArgs) -> Result<()> {
@@ -665,8 +812,15 @@ fn run_upload(args: UploadArgs) -> Result<()> {
     };
     let archive = upload::pack(&dir).map_err(|e| miette!("{e}"))?;
     let regrade = args.regrade.then_some(args.notify);
-    let uploaded = upload::send(&to, &segment(&course.id), archive, args.force, regrade)
-        .map_err(|e| miette!("{e}"))?;
+    let uploaded = upload::send(
+        &to,
+        &segment(&course.id),
+        archive,
+        args.force,
+        regrade,
+        args.take_dates,
+    )
+    .map_err(|e| miette!("{e}"))?;
     println!(
         "uploaded {}/{} (tree {}, {} bytes) as upload {}{}",
         uploaded.course,
@@ -689,6 +843,20 @@ fn run_upload(args: UploadArgs) -> Result<()> {
         println!(
             "every student's latest submission will be regraded once it's current (notify: {notify})"
         );
+    }
+    if !uploaded.date_diff.is_empty() {
+        println!("the course's dates differ from the file's:");
+        for d in &uploaded.date_diff {
+            println!(
+                "  {}: course {}, file {}",
+                d.field.replace('_', " "),
+                d.course,
+                d.file.as_deref().unwrap_or("-")
+            );
+        }
+    }
+    if let Some(note) = &uploaded.dates_note {
+        println!("{note}");
     }
     for warning in &uploaded.warnings {
         emit_warning(warning, "", args.quiet);

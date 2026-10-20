@@ -45,6 +45,15 @@ pub enum Command {
     Use(UseArgs),
     /// Your submissions to an assignment (or a student's, for staff).
     Submissions(SubmissionsArgs),
+    /// An assignment's dates in this course: the file's, with the course's edits.
+    #[command(subcommand)]
+    Dates(DatesCmd),
+    /// What students see of each test: show the rules, or override them.
+    #[command(subcommand)]
+    Visibility(VisibilityCmd),
+    /// Results: release them to students (or take a release back).
+    #[command(subcommand)]
+    Results(ResultsCmd),
 }
 
 #[derive(clap::Args)]
@@ -180,6 +189,11 @@ pub struct UploadArgs {
     /// student's latest submission against it (earlier results are kept).
     #[arg(long)]
     pub regrade: bool,
+
+    /// Adopt the file's dates once this build is current, dropping the
+    /// course's date edits (by default the course's edits stay).
+    #[arg(long)]
+    pub take_dates: bool,
 
     /// With --regrade: when students are told about their new results.
     #[arg(
@@ -422,6 +436,99 @@ pub enum AssignmentsCmd {
         assignment: String,
         #[arg(short = 'c', long)]
         course: Option<String>,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum DatesCmd {
+    /// The dates in effect and where each comes from (anyone in the course).
+    Show {
+        assignment: String,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+    },
+    /// Edit the course's dates (RFC 3339 with an offset, e.g.
+    /// 2026-09-08T23:59:00-04:00); other fields keep their values.
+    Set {
+        assignment: String,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+        /// When submissions open, or `always`.
+        #[arg(long, value_name = "TIME")]
+        open: Option<String>,
+        /// After this, submissions are late.
+        #[arg(long, value_name = "TIME")]
+        due: Option<String>,
+        /// After this, submissions are refused.
+        #[arg(long, value_name = "TIME")]
+        late_due: Option<String>,
+    },
+    /// Drop the course's edits (all, or the fields given): the file's apply again.
+    Clear {
+        assignment: String,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+        #[arg(long)]
+        open: bool,
+        #[arg(long)]
+        due: bool,
+        #[arg(long)]
+        late_due: bool,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum VisibilityCmd {
+    /// Each test's resolved visibility, where it comes from, and whether
+    /// students see it now (staff).
+    Show {
+        assignment: String,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+        /// Only this test (its id, node or name).
+        #[arg(long)]
+        test: Option<String>,
+        /// Every layer's setting, not just the one that decided.
+        #[arg(short = 'v', long)]
+        verbose: bool,
+    },
+    /// Override visibility for every test, or one: visible, hidden, after_end
+    /// (after the deadline, or release) or after_publish (on release).
+    Set {
+        assignment: String,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+        /// One test, by id (else its node); every test if absent.
+        #[arg(long)]
+        test: Option<String>,
+        #[arg(long, value_name = "VISIBILITY")]
+        score: Option<String>,
+        #[arg(long, value_name = "VISIBILITY")]
+        output: Option<String>,
+    },
+    /// Drop overrides for every test (the all-tests entry), one test, or all.
+    Clear {
+        assignment: String,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+        #[arg(long, conflicts_with = "all")]
+        test: Option<String>,
+        /// Every override, all tests and each test.
+        #[arg(long)]
+        all: bool,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum ResultsCmd {
+    /// Release results: what's shown "after_publish" (and "after_end") shows now.
+    Release {
+        assignment: String,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+        /// Take the release back (students may already have seen them).
+        #[arg(long)]
+        undo: bool,
     },
 }
 
