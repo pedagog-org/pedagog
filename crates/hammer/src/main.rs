@@ -484,12 +484,20 @@ fn run_results(cmd: ResultsCmd) -> Result<()> {
                 let reply = api
                     .post(&format!("{a}/release"), &serde_json::json!({}))
                     .map_err(|e| miette!("{e}"))?;
-                vec![if reply["already"].as_bool() == Some(true) {
-                    format!("results of {assignment} were already released")
-                } else {
-                    format!("results of {assignment} are released")
-                }]
+                vec![manage::released(&assignment, &reply)]
             }
+        }
+        ResultsCmd::Notify {
+            assignment,
+            course,
+            student,
+        } => {
+            let (api, a) = assignment_path(course, &assignment)?;
+            let q = manage::query(&[("for", student)]);
+            let reply = api
+                .post(&format!("{a}/notify{q}"), &serde_json::json!({}))
+                .map_err(|e| miette!("{e}"))?;
+            vec![manage::queued(&reply)]
         }
     };
     print_lines(lines)

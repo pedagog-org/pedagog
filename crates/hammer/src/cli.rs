@@ -585,6 +585,16 @@ pub enum ResultsCmd {
         #[arg(long)]
         undo: bool,
     },
+    /// Email students what they see now (instructors): everyone who has a
+    /// submission that counts, or one student.
+    Notify {
+        assignment: String,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+        /// One student's email.
+        #[arg(long = "for")]
+        student: Option<String>,
+    },
 }
 
 #[derive(clap::Args)]
