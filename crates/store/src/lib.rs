@@ -176,6 +176,25 @@ pub enum RunStatus {
     Error,
 }
 
+/// Why a grading run errored (`grading_runs.error_kind`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
+#[strum(serialize_all = "snake_case")]
+pub enum ErrorKind {
+    /// The tests couldn't all run with the student's code (e.g. it doesn't load).
+    Load,
+    /// The run passed its deadline.
+    Timeout,
+    OutOfMemory,
+    /// It stopped unexpectedly.
+    Crash,
+    /// It ended without uploading results.
+    NoResults,
+    /// Its results didn't parse or pass the format checks.
+    Invalid,
+    /// It couldn't start.
+    Internal,
+}
+
 /// Why a grading run exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
 #[strum(serialize_all = "lowercase")]
@@ -285,6 +304,8 @@ pub struct GradingRun {
     pub results: Option<String>,
     pub problems: Vec<String>,
     pub error: Option<String>,
+    /// Why it errored.
+    pub error_kind: Option<ErrorKind>,
     pub log_tail: Option<String>,
     /// For regrades: the difference from the previous graded run, as JSON text.
     pub changes: Option<String>,

@@ -206,7 +206,7 @@ else
 fi
 out=$(submit "$UPLOAD_ID" broken "$work/broken" --wait); status=$?
 out=$(echo "$out" | flat)
-if [ $status -ne 0 ] && echo "$out" | grep -q "couldn't be loaded"; then
+if [ $status -ne 0 ] && echo "$out" | grep -q "tests couldn't all run"; then
     pass "a syntax error is a grading error, not 0/0"
 else
     fail "syntax error (exit $status): $out"

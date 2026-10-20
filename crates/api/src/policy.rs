@@ -241,9 +241,11 @@ pub async fn show_visibility(
             };
             serde_json::json!({
                 "id": t.id, "node": t.node, "name": t.name,
-                "score": field(e.score), "output": field(e.output),
+                "score": field(e.score), "feedback": field(e.feedback),
+                "stdout": field(e.stdout), "error": field(e.error),
                 "layers": e.layers.iter().map(|(layer, o)| serde_json::json!({
-                    "layer": layer.describe(), "score": o.score, "output": o.output,
+                    "layer": layer.describe(), "score": o.score, "feedback": o.feedback,
+                    "stdout": o.stdout, "error": o.error,
                 })).collect::<Vec<_>>(),
             })
         })
@@ -264,7 +266,9 @@ pub struct VisibilityBody {
     /// One test (its id, else its node); every test if absent.
     test: Option<String>,
     score: Option<Visibility>,
-    output: Option<Visibility>,
+    feedback: Option<Visibility>,
+    stdout: Option<Visibility>,
+    error: Option<Visibility>,
 }
 
 /// Override visibility for every test or one, per field.
@@ -276,8 +280,17 @@ pub async fn set_visibility(
 ) -> Result<Response, ApiError> {
     let access = require(&state, &course, &current, Need::Manage).await?;
     let a = find(&state, &access.course.id, &slug).await?;
-    if body.score.is_none() && body.output.is_none() {
-        return Err(refused(StatusCode::BAD_REQUEST, "give --score or --output"));
+    let given = FieldOverrides {
+        score: body.score,
+        feedback: body.feedback,
+        stdout: body.stdout,
+        error: body.error,
+    };
+    if given.is_empty() {
+        return Err(refused(
+            StatusCode::BAD_REQUEST,
+            "give --score, --feedback, --stdout or --error",
+        ));
     }
     let p = policy_of(&state, &a).await?;
     let warning = body.test.as_ref().and_then(|t| {
@@ -294,8 +307,10 @@ pub async fn set_visibility(
             Some(t) => v.tests.entry(t.clone()).or_default(),
             None => &mut v.visibility,
         };
-        entry.score = body.score.or(entry.score);
-        entry.output = body.output.or(entry.output);
+        entry.score = given.score.or(entry.score);
+        entry.feedback = given.feedback.or(entry.feedback);
+        entry.stdout = given.stdout.or(entry.stdout);
+        entry.error = given.error.or(entry.error);
         serde_json::to_string(&v)
     })
     .await
@@ -409,9 +424,9 @@ mod tests {
 
     const RESULTS: &str = r#"{"summary": {"score": 3, "total": 4}, "tests": [
         {"node": "t.py::test_push", "id": "push", "name": "push", "status": "pass", "score": 2, "max": 2,
-         "visibility": {"score": "visible", "output": "visible"}},
+         "visibility": {"score": "visible", "feedback": "visible", "stdout": "visible", "error": "visible"}},
         {"node": "t.py::test_stress", "name": "stress", "status": "fail", "score": 1, "max": 2,
-         "visibility": {"score": "after_publish", "output": "hidden"}}]}"#;
+         "visibility": {"score": "after_publish", "feedback": "hidden", "stdout": "hidden", "error": "hidden"}}]}"#;
 
     /// cop3502-f26 (prof teaching, ta grading, alice enrolled) with
     /// `linked-list` current: file due 2026-09-08, validated with RESULTS.
@@ -441,7 +456,7 @@ mod tests {
             submission: "{}".into(),
         };
         let policy = r#"{"dates": {"open": "2026-09-01T00:00:00-04:00", "due": "2026-09-08T23:59:00-04:00"},
-                         "results": {"visibility": {"output": "after_end"}}}"#;
+                         "results": {"visibility": {"error": "after_end"}}}"#;
         let b = start_build(
             pool,
             &NewBuild {
@@ -542,12 +557,12 @@ mod tests {
         let push = &v["tests"][0];
         assert_eq!(
             (
-                push["output"]["value"].as_str(),
-                push["output"]["from"].as_str()
+                push["error"]["value"].as_str(),
+                push["error"]["from"].as_str()
             ),
             (Some("after_end"), Some("file, all tests"))
         );
-        assert_eq!(push["output"]["shown"], true, "the assignment has ended");
+        assert_eq!(push["error"]["shown"], true, "the assignment has ended");
         let stress = &v["tests"][1];
         assert_eq!(
             stress["score"]["why"],
@@ -567,7 +582,7 @@ mod tests {
         let r = json(
             put_json(
                 &format!("{url}{BASE}/visibility"),
-                serde_json::json!({"test": "typo", "output": "hidden"}),
+                serde_json::json!({"test": "typo", "error": "hidden"}),
                 &prof,
             )
             .await,

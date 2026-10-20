@@ -23,7 +23,7 @@ use crate::error::{ApiError, internal, refused};
 use crate::state::AppState;
 
 /// Course staff, and admins acting in the course.
-fn is_staff(access: &Access) -> bool {
+pub(crate) fn is_staff(access: &Access) -> bool {
     access.role != Some(CourseRole::Student)
 }
 
@@ -37,7 +37,7 @@ fn parse_time(s: &str) -> Option<OffsetDateTime> {
 }
 
 /// "late by …" for a student's submission counted at `counted_at`.
-fn lateness(dates: &Dates, s: &Submission) -> Option<String> {
+pub(crate) fn lateness(dates: &Dates, s: &Submission) -> Option<String> {
     if s.staff {
         return None;
     }
@@ -273,6 +273,9 @@ pub async fn list(
         }
     };
     let dates = dates_of(&state, &a).await?;
+    let counting = db::counting_for(&state.pool, a.id, owner.id)
+        .await
+        .map_err(|e| internal("reading what counts", e))?;
     let mut out = Vec::new();
     for s in db::submissions_for_user(&state.pool, a.id, owner.id)
         .await
@@ -290,6 +293,11 @@ pub async fn list(
             "submitted_by": s.submitted_by,
             "staff": s.staff,
             "status": latest.as_ref().map(|r| r.status.to_string()),
+            "counts": counting.as_ref().is_some_and(|c| c.submission_id == s.id),
+            "activated_by": counting
+                .as_ref()
+                .filter(|c| c.submission_id == s.id)
+                .and_then(|c| c.activated_by.clone()),
         });
         if staff {
             view["created_at"] = serde_json::json!(s.created_at);

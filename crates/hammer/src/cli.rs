@@ -280,14 +280,33 @@ pub struct SubmitArgs {
 }
 
 #[derive(clap::Args)]
+#[command(args_conflicts_with_subcommands = true)]
 pub struct SubmissionsArgs {
+    #[command(subcommand)]
+    pub action: Option<SubmissionsCmd>,
     /// The assignment's id.
-    pub assignment: String,
+    pub assignment: Option<String>,
     /// A student's, by email (course staff); yours by default.
     #[arg(long = "for", value_name = "EMAIL")]
     pub for_: Option<String>,
     #[arg(short = 'c', long)]
     pub course: Option<String>,
+}
+
+#[derive(clap::Subcommand)]
+pub enum SubmissionsCmd {
+    /// Make an earlier submission the one that counts (course staff), until
+    /// the student submits something newer; ids come from `hammer submissions
+    /// ASSIGNMENT --for EMAIL`.
+    Activate {
+        /// The submission's id.
+        id: i64,
+        /// Go back to the latest submission counting.
+        #[arg(long)]
+        clear: bool,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+    },
 }
 
 #[derive(clap::Args)]
@@ -492,8 +511,9 @@ pub enum VisibilityCmd {
         #[arg(short = 'v', long)]
         verbose: bool,
     },
-    /// Override visibility for every test, or one: visible, hidden, after_end
-    /// (after the deadline, or release) or after_publish (on release).
+    /// Override when students see each part of every test, or one: visible,
+    /// hidden, after_end (after the deadline, or release) or after_publish
+    /// (on release).
     Set {
         assignment: String,
         #[arg(short = 'c', long)]
@@ -501,10 +521,18 @@ pub enum VisibilityCmd {
         /// One test, by id (else its node); every test if absent.
         #[arg(long)]
         test: Option<String>,
+        /// Points, and pass/fail.
         #[arg(long, value_name = "VISIBILITY")]
         score: Option<String>,
+        /// The checks (each item's steps).
         #[arg(long, value_name = "VISIBILITY")]
-        output: Option<String>,
+        feedback: Option<String>,
+        /// What the test printed.
+        #[arg(long, value_name = "VISIBILITY")]
+        stdout: Option<String>,
+        /// What went wrong (failures, exceptions, the values compared).
+        #[arg(long, value_name = "VISIBILITY")]
+        error: Option<String>,
     },
     /// Drop overrides for every test (the all-tests entry), one test, or all.
     Clear {
@@ -521,6 +549,33 @@ pub enum VisibilityCmd {
 
 #[derive(clap::Subcommand)]
 pub enum ResultsCmd {
+    /// One row per student who submitted (staff): what counts, lateness, and
+    /// the score at each stage of visibility; * marks what the student sees now.
+    List {
+        assignment: String,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+        /// Part of a name or email.
+        #[arg(long)]
+        search: Option<String>,
+        /// Include dropped students.
+        #[arg(long)]
+        dropped: bool,
+        /// Include instructors' and graders' own submissions.
+        #[arg(long)]
+        staff: bool,
+    },
+    /// Your results (as you may see them now), or a student's in full (staff).
+    Show {
+        assignment: String,
+        /// Part of a student's email or name (staff); yours if absent.
+        student: Option<String>,
+        #[arg(short = 'c', long)]
+        course: Option<String>,
+        /// Another submission than the one that counts.
+        #[arg(long)]
+        submission: Option<i64>,
+    },
     /// Release results: what's shown "after_publish" (and "after_end") shows now.
     Release {
         assignment: String,

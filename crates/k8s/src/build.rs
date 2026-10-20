@@ -404,6 +404,34 @@ impl Builder {
             .map(|_| ())
     }
 
+    /// Why Kubernetes ended `key`'s Job, if it did: its deadline (on the Job),
+    /// or a container out of memory (on its pods).
+    pub async fn stopped(&self, key: &JobKey) -> kube::Result<Option<crate::runs::Stopped>> {
+        let name = key.name();
+        let client = self.client_for(key.kind);
+        if let Some(job) = client.jobs().get_opt(&name).await? {
+            let deadline = job
+                .status
+                .as_ref()
+                .and_then(|s| s.conditions.as_ref())
+                .is_some_and(|cs| {
+                    cs.iter().any(|c| {
+                        c.type_ == "Failed" && c.reason.as_deref() == Some("DeadlineExceeded")
+                    })
+                });
+            if deadline {
+                return Ok(Some(crate::runs::Stopped::Deadline));
+            }
+        }
+        let lp = ListParams::default().labels(&format!("batch.kubernetes.io/job-name={name}"));
+        Ok(client
+            .pods()
+            .list(&lp)
+            .await?
+            .iter()
+            .find_map(crate::runs::stopped_pod))
+    }
+
     /// Best-effort logs of `key`'s pod (empty if unavailable).
     pub async fn logs(&self, key: &JobKey) -> String {
         self.capture_logs(key.kind, &key.name()).await

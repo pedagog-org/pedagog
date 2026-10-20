@@ -243,12 +243,20 @@ pub struct FieldOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<Visibility>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub output: Option<Visibility>,
+    pub feedback: Option<Visibility>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<Visibility>,
+    /// (Stored as `output` before the four parts.)
+    #[serde(default, alias = "output", skip_serializing_if = "Option::is_none")]
+    pub error: Option<Visibility>,
 }
 
 impl FieldOverrides {
     pub fn is_empty(&self) -> bool {
-        self.score.is_none() && self.output.is_none()
+        self.score.is_none()
+            && self.feedback.is_none()
+            && self.stdout.is_none()
+            && self.error.is_none()
     }
 }
 
@@ -271,10 +279,12 @@ impl ResultsPolicy {
         file: &ResultsPolicy,
         test: &TestResult,
     ) -> TestVisibility {
-        let explained = Self::explain(course, file, test);
+        let e = Self::explain(course, file, test);
         TestVisibility {
-            score: explained.score.value,
-            output: explained.output.value,
+            score: e.score.value,
+            feedback: e.feedback.value,
+            stdout: e.stdout.value,
+            error: e.error.value,
         }
     }
 
@@ -290,7 +300,9 @@ impl ResultsPolicy {
                 Layer::Test,
                 FieldOverrides {
                     score: Some(test.visibility.score),
-                    output: Some(test.visibility.output),
+                    feedback: Some(test.visibility.feedback),
+                    stdout: Some(test.visibility.stdout),
+                    error: Some(test.visibility.error),
                 },
             ),
         ];
@@ -310,7 +322,9 @@ impl ResultsPolicy {
         };
         Explained {
             score: pick(|o| o.score),
-            output: pick(|o| o.output),
+            feedback: pick(|o| o.feedback),
+            stdout: pick(|o| o.stdout),
+            error: pick(|o| o.error),
             layers: layers.to_vec(),
         }
     }
@@ -351,7 +365,9 @@ pub struct Resolved {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Explained {
     pub score: Resolved,
-    pub output: Resolved,
+    pub feedback: Resolved,
+    pub stdout: Resolved,
+    pub error: Resolved,
     /// Every layer's setting for this test, first to last.
     pub layers: Vec<(Layer, FieldOverrides)>,
 }
@@ -528,36 +544,51 @@ mod tests {
         .unwrap()
     }
 
+    fn vis(
+        score: Visibility,
+        feedback: Visibility,
+        stdout: Visibility,
+        error: Visibility,
+    ) -> TestVisibility {
+        TestVisibility {
+            score,
+            feedback,
+            stdout,
+            error,
+        }
+    }
+
     #[test]
     fn visibility_resolves_course_then_file_then_the_test() {
+        use Visibility::{AfterEnd, AfterPublish, Hidden, Visible};
         let file = policy("results:\n  visibility: { output: hidden }\n  tests:\n    pop-front: { score: after_publish }\n").unwrap().results;
         let course: ResultsPolicy =
             serde_yaml::from_str("tests:\n    t.py::test_len: { output: visible }\n").unwrap();
         let pop = test(Some("pop-front"), "t.py::test_pop");
         let len = test(None, "t.py::test_len");
         let other = test(None, "t.py::test_other");
+        // (The tests' own visibility is version 1's: output stands for every other part;
+        // overrides stored as `output` mean the error.)
         assert_eq!(
             ResultsPolicy::resolve(&course, &file, &pop),
-            TestVisibility {
-                score: Visibility::AfterPublish,
-                output: Visibility::Hidden
-            }
+            vis(AfterPublish, AfterEnd, AfterEnd, Hidden)
         );
         assert_eq!(
             ResultsPolicy::resolve(&course, &file, &len),
-            TestVisibility {
-                score: Visibility::Visible,
-                output: Visibility::Visible
-            },
+            vis(Visible, AfterEnd, AfterEnd, Visible),
             "a course override for one test beats the file's for all"
         );
         assert_eq!(
             ResultsPolicy::resolve(&ResultsPolicy::default(), &ResultsPolicy::default(), &other),
-            TestVisibility {
-                score: Visibility::Visible,
-                output: Visibility::AfterEnd
-            },
+            vis(Visible, AfterEnd, AfterEnd, AfterEnd),
             "no overrides: the test's own"
+        );
+        let feedback: ResultsPolicy =
+            serde_yaml::from_str("visibility: { feedback: hidden, stdout: after_publish }\n")
+                .unwrap();
+        assert_eq!(
+            ResultsPolicy::resolve(&feedback, &file, &other),
+            vis(Visible, Hidden, AfterPublish, Hidden)
         );
     }
 
@@ -578,7 +609,7 @@ mod tests {
             }
         );
         assert_eq!(
-            a.output,
+            a.error,
             Resolved {
                 value: Visibility::AfterPublish,
                 from: Layer::CourseAll
@@ -598,10 +629,12 @@ mod tests {
         assert_eq!(r.layers.len(), 5);
         assert_eq!(
             ResultsPolicy::resolve(&course, &file, &append),
-            TestVisibility {
-                score: Visibility::Visible,
-                output: Visibility::AfterPublish
-            }
+            vis(
+                Visibility::Visible,
+                Visibility::AfterEnd,
+                Visibility::AfterEnd,
+                Visibility::AfterPublish
+            )
         );
     }
 

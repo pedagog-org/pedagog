@@ -449,8 +449,8 @@ mod tests {
             std::fs::read_to_string(recipes().join("examples/linked-list-python/assignment.yml"))
                 .unwrap();
         let yml = original.replace(
-            "framework: pytest:1",
-            "framework: pytest:1\n  isolation: in-process",
+            "framework: pytest:2",
+            "framework: pytest:2\n  isolation: in-process",
         );
         let checked =
             check_upload(&example(&[], Some(&yml)), &LIMITS, &recipes(), REGISTRY).unwrap();

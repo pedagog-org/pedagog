@@ -30,7 +30,7 @@ async fn settle(state: &AppState, ended: RunEnded) {
         RunKind::Validation => {
             assignments::settle_validation(state, ended.id, ended.succeeded).await
         }
-        RunKind::Grading => grading::settle(state, ended.id, ended.succeeded).await,
+        RunKind::Grading => grading::settle(state, ended.id, ended.succeeded, ended.stopped).await,
     };
     if let Err(e) = settled {
         tracing::warn!(?ended, error = %e, "settling a test run failed; the sweep retries");
@@ -59,12 +59,18 @@ async fn sweep_once(state: &AppState) -> anyhow::Result<()> {
         };
         let key = JobKey::grading(&job_id(&ctx.course_id, &ctx.slug), run.id);
         if let Some(succeeded) = finished(state, &key).await? {
+            let stopped = if succeeded {
+                None
+            } else {
+                state.builder.stopped(&key).await.unwrap_or(None)
+            };
             settle(
                 state,
                 RunEnded {
                     kind: RunKind::Grading,
                     id: run.id,
                     succeeded,
+                    stopped,
                 },
             )
             .await;
@@ -82,6 +88,7 @@ async fn sweep_once(state: &AppState) -> anyhow::Result<()> {
                     kind: RunKind::Validation,
                     id: build.id,
                     succeeded,
+                    stopped: None,
                 },
             )
             .await;

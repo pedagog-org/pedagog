@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH latest AS (\n             SELECT DISTINCT ON (owner) id, user_id\n               FROM (SELECT id, user_id, counted_at, COALESCE('u' || user_id, 's' || student_id) AS owner\n                       FROM submissions WHERE assignment_id = $1) owned\n              ORDER BY owner, counted_at DESC, id DESC),\n         active AS (\n             SELECT a.user_id, a.submission_id FROM submission_activations a\n              WHERE a.assignment_id = $1\n                AND NOT EXISTS (SELECT 1 FROM submissions s\n                                 WHERE s.assignment_id = a.assignment_id AND s.user_id = a.user_id\n                                   AND s.created_at > a.activated_at))\n         INSERT INTO grading_runs (submission_id, build_id, reason, regrade_batch_id)\n         SELECT COALESCE(ac.submission_id, l.id), $2, $3, $4\n           FROM latest l LEFT JOIN active ac ON ac.user_id = l.user_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "83af2e6f392b6af81b57a849192f702357276db84457c0a67e94369dd98083d7"
+}

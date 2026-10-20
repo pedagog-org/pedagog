@@ -499,6 +499,69 @@ visibility, release, the upload date diff and `--take-dates`).
   old Kaniko cache, then garbage-collect), and disk alerts plus SETUP guidance
   (kubelet image GC thresholds, SSDs for image storage on Pis).
 
+## 4d decisions (2026-10-20)
+
+- **Which submission counts:** the latest by counted time; staff (instructors,
+  graders) may activate an earlier one (`hammer submissions activate ASSIGNMENT ID
+  [--clear]`, picked from `hammer submissions --for`). It counts until a newer
+  submission arrives. Regrades and every view use what counts.
+- **Staff list** (`hammer results list ASSIGNMENT [--search] [--dropped] [--staff]`):
+  students who submitted, sorted by name then email; the submission that counts,
+  lateness, the cumulative score columns (visible, after deadline, after release,
+  hidden) with a star on the column each student sees now, and passed; a footer with
+  how many of the active students submitted.
+- **Staff detail** (`hammer results show ASSIGNMENT STUDENT [--submission ID]`): every
+  test with result, score, and when the student sees its score, feedback and output;
+  the cumulative summary; what the student is told; everything else (output, stdout,
+  feedback, trace, the run's output, logs).
+- **Students** (`hammer results show ASSIGNMENT`): the submission that counts; tests
+  whose score is visible (with pass/fail); feedback and output where their own
+  visibility allows; one line for hidden tests; totals over what's shown.
+- **Four parts per test, each with its own visibility** (file default, course
+  override): `score` (points, pass/fail), `feedback` (the checks: each item's steps),
+  `stdout` (what the instructor prints for the student), `error` (uncaught exceptions:
+  failures outside a `check()`, exceptions from the student's code, tracebacks and
+  pytest's values). Everything defaults to `visible` except `error`, which defaults to
+  `after_end` (pytest's report can show the test's source and expected values); hide it
+  (or more) for exams. (Changed from all-visible after the kind demo, 2026-10-20.)
+  `trace` (how the score was computed) and the run's output are staff-only.
+- **Results format (pedagog-pytest 2.0.0):**
+
+  ```yaml
+  run: { status: complete, output: "" }   # error: tests couldn't all run (staff only)
+  tests:
+    - node: test_sort.py::test_sort
+      status: fail
+      score: 1
+      max: 9
+      items:                              # every scored test; @rubric_item has one
+        - id: correct
+          score: 1
+          max: 4
+          steps:                          # one per check/award, in order
+            - { id: empty, result: pass, points: 1, worth: 1, reason: "empty list" }
+            - { id: large, result: fail, points: 0, worth: 3, reason: "1000 values",
+                message: "sort() lost an element" }   # the check's assert message
+            - { points: -1, reason: "one global" }    # an award: no result
+      stdout: "..."
+      error: "..."
+      trace: "..."
+      visibility: { score: visible, feedback: visible, stdout: visible, error: after_end }
+  ```
+
+  Steps take an optional `id=` (unique within the item). `set`/`nil` stay in the
+  trace. Older results are still read: `output` as `error`, text feedback as one
+  step, `<collection>` entries as a run error; stored course overrides with `output`
+  read as `error`. `hammer visibility set` takes `--score --feedback --stdout --error`.
+- **Run status:** `run: {status: complete | error, output}`: the helper writes it when
+  tests can't all run (load or compile errors); jobs writes it when the run dies
+  outside the framework (timeout, out of memory, crash, no results). Students get a
+  plain sentence ("couldn't be graded: the tests couldn't run with your code", "timed
+  out after 10 minutes"), never the run's output.
+- **Order:** a pedagog-pytest PR (run status and output, stdout, feedback visibility),
+  core and jobs reading the new format (still accepting `<collection>` entries from
+  older helpers), then the views and activation.
+
 ## Implementation steps
 
 1. **Schema and store** (`feat/accounts-store`): users, courses, staff, enrollments,

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, submission_id, build_id, reason, regrade_batch_id, status, isolation,\n                      job_name, score, total, results::text AS \"results?\", problems, error,\n                      log_tail, changes::text AS \"changes?\", notify\n                 FROM grading_runs WHERE submission_id = $1 AND id < $2 AND status = 'graded' ORDER BY id DESC LIMIT 1",
+  "query": "SELECT id, submission_id, build_id, reason, regrade_batch_id, status, isolation,\n                      job_name, score, total, results::text AS \"results?\", problems, error,\n                      error_kind, log_tail, changes::text AS \"changes?\", notify\n                 FROM grading_runs WHERE submission_id = $1 ORDER BY id DESC",
   "describe": {
     "columns": [
       {
@@ -143,6 +143,17 @@
       },
       {
         "ordinal": 13,
+        "name": "error_kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "grading_runs",
+            "name": "error_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
         "name": "log_tail",
         "type_info": "Text",
         "origin": {
@@ -153,13 +164,13 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "changes?",
         "type_info": "Text",
         "origin": "Expression"
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "notify",
         "type_info": "Bool",
         "origin": {
@@ -172,7 +183,6 @@
     ],
     "parameters": {
       "Left": [
-        "Int8",
         "Int8"
       ]
     },
@@ -191,9 +201,10 @@
       false,
       true,
       true,
+      true,
       null,
       false
     ]
   },
-  "hash": "95d35929b05258ef719456c1e0adf76ee90b79d5329c3b976920d0226e89aef6"
+  "hash": "69c3fdadbd83f0136bce25e673eea7264a1a94fd2d2d6cd9f98a4ced9d35b18a"
 }
