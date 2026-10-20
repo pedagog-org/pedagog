@@ -13,8 +13,8 @@ use clap::Parser;
 use miette::{GraphicalReportHandler, MietteDiagnostic, Report, Result, Severity, miette};
 
 use cli::{
-    AssignmentsCmd, Cli, Command, CoursesCmd, Format, LoginArgs, MembersCmd, PlanArgs, SubmitArgs,
-    UploadArgs, UseArgs, UsersCmd, VendArgs,
+    AssignmentsCmd, Cli, Command, CoursesCmd, Format, LoginArgs, MembersCmd, PlanArgs,
+    SubmissionsArgs, SubmitArgs, UploadArgs, UseArgs, UsersCmd, VendArgs,
 };
 use pedagog_core::recipe::assignment::{AssignmentYaml, FileSources};
 use pedagog_core::recipe::primitives::Id;
@@ -43,6 +43,7 @@ fn main() -> Result<()> {
         Command::Members(cmd) => run_members(cmd),
         Command::Assignments(cmd) => run_assignments(cmd),
         Command::Use(args) => run_use(args),
+        Command::Submissions(args) => run_submissions(args),
     }
 }
 
@@ -272,6 +273,18 @@ fn course_here(flag: Option<String>) -> Result<(manage::Api, String)> {
     let here = std::env::current_dir().map_err(|e| miette!("{e}"))?;
     let (api, chosen) = course_in(flag, &here)?;
     Ok((api, segment(&chosen.id)))
+}
+
+fn run_submissions(args: SubmissionsArgs) -> Result<()> {
+    let (api, c) = course_here(args.course)?;
+    let q = manage::query(&[("for", args.for_)]);
+    print_lines(manage::submissions(
+        &api.get(&format!(
+            "/courses/{c}/assignments/{}/submissions{q}",
+            segment(&args.assignment)
+        ))
+        .map_err(|e| miette!("{e}"))?,
+    ))
 }
 
 fn run_use(args: UseArgs) -> Result<()> {
@@ -541,14 +554,40 @@ fn confirm(drops: &[String]) -> Result<bool> {
 fn run_submit(args: SubmitArgs) -> Result<()> {
     let paths: Vec<PathBuf> = args.paths.into_iter().map(expand_tilde).collect();
     let files = submit::collect(&paths).map_err(|e| miette!("{e}"))?;
-    let url = args
-        .jobs_url
-        .or_else(|| std::env::var("PEDAGOG_JOBS_URL").ok())
-        .unwrap_or_else(|| "http://localhost:18081".to_owned());
     let here = std::env::current_dir().map_err(|e| miette!("{e}"))?;
-    let course = course::choose(args.course, &here, account::load().and_then(|s| s.course))
-        .map_err(|e| miette!("{e}"))?;
-    let submitted = submit::send(&url, &course.id, &args.assignment, &args.student, &files)
+    let session = account::load();
+    let (to, course) = match args.jobs_url {
+        Some(url) => {
+            let saved = session.and_then(|s| s.course);
+            let chosen = course::choose(args.course, &here, saved).map_err(|e| miette!("{e}"))?;
+            (upload::Endpoint::Jobs(url), chosen)
+        }
+        None => {
+            let session = session.ok_or_else(|| miette!("not logged in: run `hammer login`"))?;
+            let chosen = course::choose(args.course, &here, session.course.clone())
+                .map_err(|e| miette!("{e}"))?;
+            course::check_api(&chosen, &session.api).map_err(|e| miette!("{e}"))?;
+            (
+                upload::Endpoint::Api {
+                    base: session.api,
+                    token: session.token,
+                },
+                chosen,
+            )
+        }
+    };
+    let mut params: Vec<(&str, &str)> = Vec::new();
+    if let Some(student) = &args.student {
+        params.push(("student", student));
+    }
+    if let Some(email) = &args.for_ {
+        params.push(("for", email));
+    }
+    if let Some(at) = &args.at {
+        params.push(("at", at));
+    }
+    let course_id = segment(&course.id);
+    let submitted = submit::send(&to, &course_id, &segment(&args.assignment), &params, &files)
         .map_err(|e| miette!("{e}"))?;
     for line in submit::describe(&submitted) {
         println!("{line}");
@@ -556,14 +595,17 @@ fn run_submit(args: SubmitArgs) -> Result<()> {
     if !args.wait {
         return Ok(());
     }
-    let run = submit::wait(&url, submitted.submission_id, submitted.run_id, |r| match (
-        r.status.as_str(),
-        r.queue_position,
-    ) {
-        ("queued", Some(p)) => println!("queued (position {p})..."),
-        ("grading", _) => println!("grading..."),
-        _ => {}
-    })
+    let run = submit::wait(
+        &to,
+        &course_id,
+        submitted.submission_id,
+        submitted.run_id,
+        |r| match (r.status.as_str(), r.queue_position) {
+            ("queued", Some(p)) => println!("queued (position {p})..."),
+            ("grading", _) => println!("grading..."),
+            _ => {}
+        },
+    )
     .map_err(|e| miette!("{e}"))?;
     let (graded, lines) = submit::outcome(&run);
     if graded {

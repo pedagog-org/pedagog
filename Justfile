@@ -174,7 +174,7 @@ kind-submit COURSE ASSIGNMENT STUDENT +PATHS:
     kubectl --context {{KIND_CTX}} -n pedagog-builds port-forward svc/pedagog-jobs 18081:8080 >/dev/null &
     trap 'kill $!' EXIT
     sleep 2
-    cargo run -q -p hammer -- submit {{PATHS}} -c "{{COURSE}}" --assignment "{{ASSIGNMENT}}" --student "{{STUDENT}}" --jobs-url http://localhost:18081
+    cargo run -q -p hammer -- submit "{{ASSIGNMENT}}" {{PATHS}} -c "{{COURSE}}" --student "{{STUDENT}}" --jobs-url http://localhost:18081
 
 # End-to-end check of the assignment pipeline on kind (upload, build, validate,
 # supersede, restart, egress). Run after kind-load-jobs and kind-deploy.

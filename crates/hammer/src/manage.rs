@@ -416,6 +416,44 @@ pub fn assignment(a: &serde_json::Value) -> Vec<String> {
     lines
 }
 
+/// `submissions`: latest first, with when each counts and how it stands.
+pub fn submissions(list: &serde_json::Value) -> Vec<String> {
+    or_none(
+        list.as_array()
+            .into_iter()
+            .flatten()
+            .map(|s| {
+                let mut line = format!(
+                    "#{}  {}  {}",
+                    s["id"],
+                    when(&s["counted_at"]),
+                    match s["late"].as_str() {
+                        Some(late) => format!("late by {late}"),
+                        None if s["staff"].as_bool() == Some(true) => "staff".to_owned(),
+                        None => "on time".to_owned(),
+                    }
+                );
+                if let Some(status) = s["status"].as_str() {
+                    line.push_str(&format!("  {status}"));
+                }
+                if let (Some(score), Some(total)) = (s["score"].as_f64(), s["total"].as_f64()) {
+                    line.push_str(&format!(" {score}/{total}"));
+                }
+                if let Some(by) = s["submitted_by"].as_str() {
+                    line.push_str(&format!("  submitted by {by}"));
+                }
+                if let Some(arrived) = s["created_at"].as_str()
+                    && Some(arrived) != s["counted_at"].as_str()
+                {
+                    line.push_str(&format!(" (arrived {})", when(&s["created_at"])));
+                }
+                line
+            })
+            .collect(),
+        "no submissions",
+    )
+}
+
 /// Who a sync would drop.
 pub fn would_drop(v: &serde_json::Value) -> Vec<String> {
     v["would_drop"]
@@ -589,6 +627,25 @@ mod tests {
             assignment(&shown),
             ["c/ll: LL", "  build 3: succeeded/passed (current)"]
         );
+    }
+
+    #[test]
+    fn submissions_read_well() {
+        let list = json!([
+            {"id": 14, "counted_at": "2026-09-09T03:41:00Z", "late": null, "staff": false,
+             "status": "graded", "submitted_by": "prof@ufl.edu", "created_at": "2026-09-12T15:00:00Z",
+             "score": 10.0, "total": 10.0},
+            {"id": 13, "counted_at": "2026-09-09T06:13:00Z", "late": "2 hours 14 minutes",
+             "staff": false, "status": "error", "submitted_by": null}
+        ]);
+        assert_eq!(
+            submissions(&list),
+            [
+                "#14  2026-09-09 03:41 UTC  on time  graded 10/10  submitted by prof@ufl.edu (arrived 2026-09-12 15:00 UTC)",
+                "#13  2026-09-09 06:13 UTC  late by 2 hours 14 minutes  error"
+            ]
+        );
+        assert_eq!(submissions(&json!([])), ["no submissions"]);
     }
 
     #[test]

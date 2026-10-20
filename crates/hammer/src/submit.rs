@@ -1,4 +1,5 @@
-//! `hammer submit`: send files (or one archive) to jobs as a student's submission.
+//! `hammer submit`: send files (or one archive) as a submission, through the
+//! api (as you, or for a student) or straight to jobs (operators).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -7,6 +8,8 @@ use std::time::Duration;
 use reqwest::blocking::multipart::{Form, Part};
 use serde::Deserialize;
 use walkdir::WalkDir;
+
+use crate::upload::Endpoint;
 
 const SKIPPED_DIRS: [&str; 3] = [".git", ".hg", ".svn"];
 const SUBMIT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -26,6 +29,14 @@ pub struct Submitted {
     pub unpacked: Option<String>,
     pub stripped: Option<String>,
     pub size_bytes: u64,
+    /// The api adds who it's for, who sent it, and how it counts.
+    #[serde(rename = "for")]
+    pub for_: Option<String>,
+    pub submitted_by: Option<String>,
+    #[serde(default)]
+    pub staff: bool,
+    pub late: Option<String>,
+    pub due: Option<String>,
 }
 
 /// The files to send, by the name jobs sees: paths relative to a directory
@@ -96,22 +107,20 @@ fn walk(dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     Ok(out)
 }
 
-/// POSTs the files; jobs' refusals come back as their message.
+/// POSTs the files with `params` (`student` for jobs; `for` and `at` for the
+/// api); refusals come back as their message.
 pub fn send(
-    jobs_url: &str,
+    to: &Endpoint,
     course: &str,
     assignment: &str,
-    student: &str,
+    params: &[(&str, &str)],
     files: &BTreeMap<String, PathBuf>,
 ) -> Result<Submitted, String> {
-    let url = reqwest::Url::parse_with_params(
-        &format!(
-            "{}/internal/courses/{course}/assignments/{assignment}/submissions",
-            jobs_url.trim_end_matches('/')
-        ),
-        &[("student", student)],
-    )
-    .map_err(|e| format!("invalid jobs URL {jobs_url:?}: {e}"))?;
+    let base = to.url(&format!(
+        "/courses/{course}/assignments/{assignment}/submissions"
+    ));
+    let url = reqwest::Url::parse_with_params(&base, params)
+        .map_err(|e| format!("invalid URL {base:?}: {e}"))?;
     let mut form = Form::new();
     for (name, path) in files {
         let bytes =
@@ -122,11 +131,11 @@ pub fn send(
         .timeout(SUBMIT_TIMEOUT)
         .build()
         .map_err(|e| e.to_string())?;
-    let reply = client
-        .post(url.clone())
+    let reply = to
+        .authorized(client.post(url.clone()))
         .multipart(form)
         .send()
-        .map_err(|e| format!("cannot reach jobs at {url}: {e} (is the port-forward running?)"))?;
+        .map_err(|e| format!("cannot reach {} at {url}: {e}", to.name()))?;
     let status = reply.status();
     let body = reply.text().map_err(|e| e.to_string())?;
     if !status.is_success() {
@@ -134,9 +143,13 @@ pub fn send(
             .ok()
             .and_then(|v| v.get("error")?.as_str().map(str::to_owned))
             .unwrap_or(body);
-        return Err(format!("jobs refused the submission ({status}): {message}"));
+        return Err(format!(
+            "{} refused the submission ({status}): {message}",
+            to.name()
+        ));
     }
-    serde_json::from_str(&body).map_err(|e| format!("unexpected reply from jobs: {e}: {body}"))
+    serde_json::from_str(&body)
+        .map_err(|e| format!("unexpected reply from {}: {e}: {body}", to.name()))
 }
 
 /// A grading run's status (`GET /internal/submissions/<id>`, one of its runs).
@@ -163,31 +176,36 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Polls until the run is graded or errored, calling `progress` whenever its
 /// status (or queue position) changes.
 pub fn wait(
-    jobs_url: &str,
+    to: &Endpoint,
+    course: &str,
     submission: i64,
     run: i64,
     mut progress: impl FnMut(&Run),
 ) -> Result<Run, String> {
-    let url = format!(
-        "{}/internal/submissions/{submission}",
-        jobs_url.trim_end_matches('/')
-    );
+    let url = match to {
+        Endpoint::Api { .. } => to.url(&format!("/courses/{course}/submissions/{submission}")),
+        Endpoint::Jobs(_) => to.url(&format!("/submissions/{submission}")),
+    };
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
     let mut last = String::new();
     loop {
-        let reply = client
-            .get(&url)
+        let reply = to
+            .authorized(client.get(&url))
             .send()
-            .map_err(|e| format!("cannot reach jobs at {url}: {e}"))?;
+            .map_err(|e| format!("cannot reach {} at {url}: {e}", to.name()))?;
         if !reply.status().is_success() {
-            return Err(format!("jobs answered {} for {url}", reply.status()));
+            return Err(format!(
+                "{} answered {} for {url}",
+                to.name(),
+                reply.status()
+            ));
         }
         let body = reply.text().map_err(|e| e.to_string())?;
         let status: SubmissionStatus = serde_json::from_str(&body)
-            .map_err(|e| format!("unexpected reply from jobs: {e}: {body}"))?;
+            .map_err(|e| format!("unexpected reply from {}: {e}: {body}", to.name()))?;
         let current = status
             .runs
             .into_iter()
@@ -218,11 +236,14 @@ pub fn outcome(run: &Run) -> (bool, Vec<String>) {
         lines.extend(run.problems.iter().cloned());
         return (false, lines);
     }
-    let mut lines = vec![format!(
-        "graded: {} / {}",
-        run.score.unwrap_or_default(),
-        run.total.unwrap_or_default()
-    )];
+    let (Some(score), Some(total)) = (run.score, run.total) else {
+        // Students don't see scores until results are shown to them.
+        return (
+            true,
+            vec!["graded; results aren't shown to students yet".to_owned()],
+        );
+    };
+    let mut lines = vec![format!("graded: {score} / {total}")];
     let tests = run
         .results
         .as_ref()
@@ -257,6 +278,19 @@ pub fn describe(s: &Submitted) -> Vec<String> {
             .map(|p| format!(", queue position {p}"))
             .unwrap_or_default()
     )];
+    match (&s.submitted_by, &s.for_) {
+        (Some(by), Some(owner)) => lines.push(format!("submitted for {owner} by {by}")),
+        _ if s.staff => lines.push("a staff submission (not a student's)".to_owned()),
+        _ => {}
+    }
+    if let Some(late) = &s.late {
+        let due = s
+            .due
+            .as_deref()
+            .map(|d| format!(" (due {d})"))
+            .unwrap_or_default();
+        lines.push(format!("late by {late}{due}"));
+    }
     if let Some(archive) = &s.unpacked {
         lines.push(format!("unpacked {archive}"));
     }
@@ -341,6 +375,21 @@ mod tests {
     }
 
     #[test]
+    fn students_are_told_their_results_come_later() {
+        let run: Run = serde_json::from_value(serde_json::json!({
+            "id": 1, "status": "graded", "queue_position": null
+        }))
+        .unwrap();
+        assert_eq!(
+            outcome(&run),
+            (
+                true,
+                vec!["graded; results aren't shown to students yet".to_owned()]
+            )
+        );
+    }
+
+    #[test]
     fn the_receipt_mentions_what_was_dropped() {
         let s = Submitted {
             submission_id: 4,
@@ -353,8 +402,21 @@ mod tests {
             unpacked: Some("hw1.zip".into()),
             stripped: Some("hw1".into()),
             size_bytes: 120,
+            for_: Some("alice@ufl.edu".into()),
+            submitted_by: Some("prof@ufl.edu".into()),
+            staff: false,
+            late: Some("2 hours 14 minutes".into()),
+            due: Some("2026-09-08T23:59:00-04:00".into()),
         };
         let text = describe(&s).join("\n");
+        assert!(
+            text.contains("submitted for alice@ufl.edu by prof@ufl.edu"),
+            "{text}"
+        );
+        assert!(
+            text.contains("late by 2 hours 14 minutes (due 2026-09-08T23:59:00-04:00)"),
+            "{text}"
+        );
         assert!(text.contains("queue position 3"), "{text}");
         assert!(text.contains("dropped the wrapping folder hw1/"), "{text}");
         assert!(
