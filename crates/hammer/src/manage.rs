@@ -831,7 +831,11 @@ pub fn results_mine(v: &serde_json::Value) -> Vec<String> {
         head.push_str(&format!(", submitted by {by} on your behalf"));
     }
     match v["status"].as_str() {
-        Some("error") => return vec![format!("{head}: couldn't be graded: {}", str_of(v, "why"))],
+        Some("error") => {
+            let mut lines = vec![format!("{head}: couldn't be graded: {}", str_of(v, "why"))];
+            lines.extend(v["next"].as_str().map(|n| format!("  {n}")));
+            return lines;
+        }
         Some("graded") => {}
         Some(other) => return vec![format!("{head}: {other}")],
         None => return vec![head],
@@ -1186,10 +1190,14 @@ mod tests {
             ]
         );
         let err = json!({"submission": 140, "counts": true, "late": null, "status": "error",
-                         "why": "the tests couldn't run with your code"});
+                         "why": "the tests couldn't run with your code",
+                         "next": "check your files and submit again; if problems persist, contact course staff"});
         assert_eq!(
             results_mine(&err),
-            ["#140 (counts), on time: couldn't be graded: the tests couldn't run with your code"]
+            [
+                "#140 (counts), on time: couldn't be graded: the tests couldn't run with your code",
+                "  check your files and submit again; if problems persist, contact course staff"
+            ]
         );
     }
 

@@ -33,9 +33,13 @@ pub fn sentence(kind: Option<ErrorKind>) -> &'static str {
         Some(ErrorKind::Timeout) => "it ran past the time limit",
         Some(ErrorKind::OutOfMemory) => "it ran out of memory",
         Some(ErrorKind::Crash) => "the test run stopped unexpectedly",
-        _ => "something went wrong on our side; your instructor can look into it",
+        _ => "something went wrong on our side",
     }
 }
+
+/// What a student can do about a run that couldn't be graded.
+pub const NEXT_STEP: &str =
+    "check your files and submit again; if problems persist, contact course staff";
 
 /// Each test's resolved visibility, in order.
 fn visibilities(p: &Policy, results: &Results) -> Vec<TestVisibility> {
@@ -350,6 +354,7 @@ pub async fn mine(
         "late": lateness(&p.dates(), &s),
         "status": status,
         "why": why,
+        "next": why.map(|_| NEXT_STEP),
         "results": view,
     }))
     .into_response())
