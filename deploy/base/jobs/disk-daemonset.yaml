@@ -1,0 +1,72 @@
+# Every node's disks: `pedagog-jobs disk-report` measures the node's root
+# filesystem and its image store every 10 minutes (read-only hostPath) and
+# reports to GlitchTip over 80% used (an error over 90%). No API access.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: pedagog-disk
+  namespace: pedagog-builds
+spec:
+  selector:
+    matchLabels:
+      app: pedagog-disk
+  template:
+    metadata:
+      labels:
+        app: pedagog-disk
+    spec:
+      automountServiceAccountToken: false
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: disk
+          image: pedagog-jobs
+          args: ["disk-report"]
+          env:
+            - name: PEDAGOG_DISK_PATHS
+              value: node=/host/root,images=/host/images
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: PEDAGOG_SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: pedagog-jobs-sentry
+                  key: dsn
+                  optional: true
+          volumeMounts:
+            - name: root
+              mountPath: /host/root
+              readOnly: true
+            - name: images
+              mountPath: /host/images
+              readOnly: true
+          securityContext:
+            # Root only to traverse root-owned directories; no capabilities.
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+              ephemeral-storage: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+              ephemeral-storage: 64Mi
+      volumes:
+        - name: root
+          hostPath:
+            path: /
+            type: Directory
+        # k3s's image store; kind overrides it.
+        - name: images
+          hostPath:
+            path: /var/lib/rancher/k3s/agent/containerd
+            type: Directory

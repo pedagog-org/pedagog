@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use pedagog_core::env::Env;
+use pedagog_k8s::Disk;
 use pedagog_k8s::build::BuildEnv;
 use pedagog_k8s::grade::RunSize;
 use pedagog_store::objects::ObjectsConfig;
@@ -35,6 +36,17 @@ pub const BLOCKED_CIDRS: &str = "PEDAGOG_BLOCKED_CIDRS";
 pub const BUILD_CACHE: &str = "PEDAGOG_BUILD_CACHE";
 pub const MAX_SUBMISSION_BYTES: &str = "PEDAGOG_MAX_SUBMISSION_BYTES";
 pub const MAX_SUBMISSION_FILES: &str = "PEDAGOG_MAX_SUBMISSION_FILES";
+pub const DATA_NAMESPACE: &str = "PEDAGOG_DATA_NAMESPACE";
+pub const REGISTRY_IMAGE: &str = "PEDAGOG_REGISTRY_IMAGE";
+pub const REGISTRY_PVC: &str = "PEDAGOG_REGISTRY_PVC";
+pub const POSTGRES_PVC: &str = "PEDAGOG_POSTGRES_PVC";
+pub const REGISTRY_CLEANUP_AT: &str = "PEDAGOG_REGISTRY_CLEANUP_AT";
+pub const DISK_WARN: &str = "PEDAGOG_DISK_WARN";
+pub const DISK_ERROR: &str = "PEDAGOG_DISK_ERROR";
+pub const BUILD_DISK_REQUEST: &str = "PEDAGOG_BUILD_EPHEMERAL_REQUEST";
+pub const BUILD_DISK_LIMIT: &str = "PEDAGOG_BUILD_EPHEMERAL_LIMIT";
+pub const TEST_DISK_REQUEST: &str = "PEDAGOG_TEST_EPHEMERAL_REQUEST";
+pub const TEST_DISK_LIMIT: &str = "PEDAGOG_TEST_EPHEMERAL_LIMIT";
 
 const DEFAULT_RECIPES_DIR: &str = "/opt/pedagog/recipes";
 const DEFAULT_NAMESPACE: &str = "pedagog-builds";
@@ -46,6 +58,10 @@ const DEFAULT_ASSIGNMENT_BUILD_DEADLINE: u64 = 1800;
 const DEFAULT_VALIDATION_DEADLINE: u64 = 600;
 const DEFAULT_VALIDATION_CPU: &str = "1";
 const DEFAULT_VALIDATION_MEMORY: &str = "1Gi";
+// Kaniko unpacks the base image and toolchains; a test run holds a submission
+// and what it writes.
+const DEFAULT_BUILD_DISK: (&str, &str) = ("2Gi", "8Gi");
+const DEFAULT_TEST_DISK: (&str, &str) = ("256Mi", "1Gi");
 pub const DEFAULT_SUBMISSION_LIMITS: SubmissionLimits = SubmissionLimits {
     max_bytes: 50 << 20,
     max_files: 1_000,
@@ -89,6 +105,18 @@ pub struct Config {
     pub build_cache: bool,
     /// Ceiling for a submission; an assignment's `max_size` can only lower it.
     pub submission_limits: SubmissionLimits,
+    /// Kaniko pods' local disk.
+    pub build_disk: Disk,
+    /// Where the registry and Postgres live, for their maintenance.
+    pub data_namespace: String,
+    /// The registry's image (its GC runs it) and PVC; Postgres's PVC.
+    pub registry_image: String,
+    pub registry_pvc: String,
+    pub postgres_pvc: String,
+    /// When the registry cleanup runs each day (UTC); `None`: never.
+    pub cleanup_at: Option<(u8, u8)>,
+    /// Percent used at which a disk is a warning, then an error.
+    pub disk: crate::disk::Thresholds,
 }
 
 /// A kind of test run's limits.
@@ -97,12 +125,15 @@ pub struct ValidationConfig {
     pub deadline: std::time::Duration,
     pub cpu: String,
     pub memory: String,
+    /// Local disk; validation and grading share it.
+    pub disk: Disk,
 }
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         let database_url = std::env::var(DATABASE_URL)
             .map_err(|_| anyhow::anyhow!("{DATABASE_URL} must be set"))?;
+        let test_disk = disk(TEST_DISK_REQUEST, TEST_DISK_LIMIT, DEFAULT_TEST_DISK);
         Ok(Self {
             env: Env::current(),
             database_url,
@@ -137,6 +168,7 @@ impl Config {
                 )?),
                 cpu: var_or(VALIDATION_CPU, DEFAULT_VALIDATION_CPU),
                 memory: var_or(VALIDATION_MEMORY, DEFAULT_VALIDATION_MEMORY),
+                disk: test_disk.clone(),
             },
             grading: ValidationConfig {
                 deadline: std::time::Duration::from_secs(num_or(
@@ -145,6 +177,7 @@ impl Config {
                 )?),
                 cpu: var_or(GRADING_CPU, DEFAULT_VALIDATION_CPU),
                 memory: var_or(GRADING_MEMORY, DEFAULT_VALIDATION_MEMORY),
+                disk: test_disk,
             },
             max_running: std::env::var(MAX_RUNNING)
                 .ok()
@@ -154,6 +187,14 @@ impl Config {
                 })
                 .transpose()?,
             build_cache: var_or(BUILD_CACHE, "true") != "false",
+            build_disk: disk(BUILD_DISK_REQUEST, BUILD_DISK_LIMIT, DEFAULT_BUILD_DISK),
+            data_namespace: var_or(DATA_NAMESPACE, "pedagog-data"),
+            registry_image: var_or(REGISTRY_IMAGE, "registry:2"),
+            registry_pvc: var_or(REGISTRY_PVC, "registry-pvc"),
+            postgres_pvc: var_or(POSTGRES_PVC, "postgres-pvc"),
+            cleanup_at: crate::registry::parse_at(&var_or(REGISTRY_CLEANUP_AT, "03:00"))
+                .map_err(|e| anyhow::anyhow!("{REGISTRY_CLEANUP_AT}: {e}"))?,
+            disk: thresholds()?,
             submission_limits: SubmissionLimits {
                 max_bytes: num_or(MAX_SUBMISSION_BYTES, DEFAULT_SUBMISSION_LIMITS.max_bytes)?,
                 max_files: num_or(MAX_SUBMISSION_FILES, DEFAULT_SUBMISSION_LIMITS.max_files)?,
@@ -172,6 +213,7 @@ impl Config {
         [&self.validation, &self.grading].map(|c| RunSize {
             cpu: c.cpu.clone(),
             memory: c.memory.clone(),
+            disk: c.disk.clone(),
         })
     }
 
@@ -184,6 +226,7 @@ impl Config {
             cache_repo: self
                 .build_cache
                 .then(|| format!("{}/pedagog/cache", self.registry)),
+            disk: self.build_disk.clone(),
         }
     }
 }
@@ -194,6 +237,21 @@ fn num_or<T: std::str::FromStr>(key: &str, default: T) -> anyhow::Result<T> {
             .parse()
             .map_err(|_| anyhow::anyhow!("{key} must be a number, got {v:?}")),
         Err(_) => Ok(default),
+    }
+}
+
+/// `PEDAGOG_DISK_WARN` / `_ERROR` (percent used; 80 and 90).
+pub fn thresholds() -> anyhow::Result<crate::disk::Thresholds> {
+    Ok(crate::disk::Thresholds {
+        warn: num_or(DISK_WARN, 80.0)?,
+        error: num_or(DISK_ERROR, 90.0)?,
+    })
+}
+
+fn disk(request: &str, limit: &str, (default_request, default_limit): (&str, &str)) -> Disk {
+    Disk {
+        request: var_or(request, default_request),
+        limit: var_or(limit, default_limit),
     }
 }
 

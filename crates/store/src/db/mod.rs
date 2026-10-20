@@ -9,6 +9,7 @@ use sqlx::postgres::PgPoolOptions;
 pub mod accounts;
 pub mod assignments;
 pub mod builds;
+pub mod maintenance;
 pub mod notices;
 pub mod queue;
 pub mod submissions;

@@ -33,6 +33,7 @@ resources:
   - jobs/deployment.yaml
   - jobs/service.yaml
   - jobs/network-policy.yaml
+  - jobs/disk-daemonset.yaml
   - api/deployment.yaml
   - api/service.yaml
   - api/ingress.yaml

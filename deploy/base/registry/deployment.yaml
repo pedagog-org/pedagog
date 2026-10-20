@@ -16,6 +16,10 @@ spec:
       containers:
         - name: registry
           image: registry:2
+          env:
+            # jobs deletes images nothing uses; its nightly GC Job reclaims them.
+            - name: REGISTRY_STORAGE_DELETE_ENABLED
+              value: "true"
           ports:
             - containerPort: 5000
           volumeMounts:

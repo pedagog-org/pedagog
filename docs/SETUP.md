@@ -425,6 +425,27 @@ submissions and grades them; the defaults suit a small cluster. Set these on the
 - **Capacity:** test runs wait in jobs' queue until there's room; if submissions sit
   queued, look at `pedagog-grading`'s quota (`kubectl -n pedagog-grading describe
   resourcequota`) and pending pods before raising anything.
+- **Disk:** images are the biggest consumer: assignment images in the registry's volume,
+  and every image a node has pulled in its image store.
+  - Put the image store on an SSD, not the SD card, on Pis (k3s:
+    `/var/lib/rancher/k3s/agent/containerd`; symlink or mount it before installing).
+  - Let the kubelet remove unused images before the disk fills, e.g. in
+    `/etc/rancher/k3s/config.yaml`:
+
+    ```yaml
+    kubelet-arg:
+      - image-gc-high-threshold=80
+      - image-gc-low-threshold=70
+      - eviction-hard=nodefs.available<10%,imagefs.available<10%
+    ```
+
+  - The registry is cleaned nightly (03:00 UTC, `PEDAGOG_REGISTRY_CLEANUP_AT` on jobs);
+    to clean it now, `kubectl -n pedagog-builds port-forward svc/pedagog-jobs 18081:8080`
+    and `curl -X POST localhost:18081/internal/registry/cleanup`, then
+    `kubectl -n pedagog-data logs job/registry-gc`.
+  - Disk warnings (over 80%) and errors (over 90%) reach GlitchTip (Phase 7): a node's
+    disk or image store (`pedagog-disk` DaemonSet; if a node's image store lives
+    elsewhere, patch its `images` hostPath), the registry's volume, Postgres's.
 
 ## Phase 6 — The api and Login
 

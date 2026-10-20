@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use pedagog_k8s::build::Builder;
+use pedagog_k8s::maintenance::Maintenance;
 use pedagog_store::objects::Objects;
 use sqlx::PgPool;
 
@@ -14,4 +15,6 @@ pub struct AppState {
     pub builder: Arc<Builder>,
     pub objects: Objects,
     pub config: Arc<Config>,
+    /// The data namespace's maintenance (registry GC, volume sizes).
+    pub maintenance: Arc<Maintenance>,
 }

@@ -13,6 +13,7 @@ pub use kube::Error as KubeError;
 
 pub mod build;
 pub mod grade;
+pub mod maintenance;
 pub mod runs;
 pub mod validate;
 
@@ -20,6 +21,15 @@ pub mod validate;
 /// rate limit): retrying it won't help.
 pub fn is_refusal(e: &kube::Error) -> bool {
     matches!(e, kube::Error::Api(status) if (400..500).contains(&status.code) && status.code != 409 && status.code != 429)
+}
+
+/// Local disk (ephemeral storage) a pod may use, as Kubernetes quantities
+/// (`2Gi`, `256Mi`): requested for scheduling, and the limit over which the
+/// kubelet evicts it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Disk {
+    pub request: String,
+    pub limit: String,
 }
 
 /// Thin wrapper over [`kube::Client`] pinned to a namespace, shared by build/run.

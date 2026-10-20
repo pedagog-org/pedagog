@@ -8,12 +8,14 @@ mod admission;
 mod archive;
 mod assignments;
 mod config;
+mod disk;
 mod dispatch;
 mod egress;
 mod fetch;
 mod grading;
 mod http;
 mod intake;
+mod registry;
 mod runs;
 mod settings;
 mod state;
@@ -24,12 +26,15 @@ use std::sync::Arc;
 use pedagog_core::env::Env;
 use pedagog_k8s::KubeClient;
 use pedagog_k8s::build::Builder;
+use pedagog_k8s::maintenance::Maintenance;
 use pedagog_store::db;
 use pedagog_store::objects::Objects;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 
 use crate::config::Config;
+
+const DISK_REPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
 use crate::state::AppState;
 
 /// object_store's reqwest compiles in rustls' aws-lc-rs backend while sqlx and
@@ -57,6 +62,14 @@ fn main() -> anyhow::Result<()> {
         return egress::await_egress(target, std::time::Duration::from_secs(seconds));
     }
     let _telemetry = pedagog_telemetry::init(concat!("pedagog-jobs@", env!("CARGO_PKG_VERSION")))?;
+    if args.get(1).map(String::as_str) == Some("disk-report") {
+        // The DaemonSet: this node's filesystems, mounted read-only.
+        let paths = disk::parse_paths(&std::env::var("PEDAGOG_DISK_PATHS").unwrap_or_default());
+        let node = std::env::var("NODE_NAME").unwrap_or_else(|_| "?".into());
+        anyhow::ensure!(!paths.is_empty(), "PEDAGOG_DISK_PATHS names no paths");
+        disk::report_forever(&node, &paths, config::thresholds()?, DISK_REPORT_EVERY);
+        return Ok(());
+    }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
@@ -75,6 +88,7 @@ async fn serve() -> anyhow::Result<()> {
 
     let kube = KubeClient::connect(&config.namespace).await?;
     let runs = kube.in_namespace(&config.run_namespace);
+    let maintenance = Arc::new(Maintenance::new(kube.in_namespace(&config.data_namespace)));
     let builder = Arc::new(Builder::new(kube, runs, config.build_env()));
     let objects = Objects::connect(&config.objects)?;
 
@@ -83,6 +97,7 @@ async fn serve() -> anyhow::Result<()> {
         builder,
         objects,
         config: Arc::new(config),
+        maintenance,
     };
 
     // prod builds the pinned recipes at startup; dev waits for the endpoint
@@ -115,6 +130,7 @@ async fn serve() -> anyhow::Result<()> {
     background.spawn(admission::run(state.clone()));
     background.spawn(runs::watch(state.clone()));
     background.spawn(runs::sweep(state.clone()));
+    background.spawn(registry::run(state.clone()));
 
     let addr = state.config.listen_addr.clone();
     let listener = TcpListener::bind(&addr).await?;

@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(sum(pg_database_size(datname)), 0)::bigint AS \"bytes!\" FROM pg_database",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "bytes!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "03f3845a22ae78183256135dbd6588d7e7b5129a14d7c01c0226c0d285a90e7a"
+}

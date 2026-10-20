@@ -268,6 +268,7 @@ pub async fn usable_build_for<'e>(
         "SELECT id FROM assignment_builds
           WHERE assignment_id = $1 AND image_hash = $2
             AND build_status = 'succeeded' AND validation_status IN ('passed', 'skipped')
+            AND image_deleted_at IS NULL
           ORDER BY id DESC
           LIMIT 1",
         assignment_id,
@@ -276,6 +277,34 @@ pub async fn usable_build_for<'e>(
     .fetch_optional(db)
     .await?;
     Ok(row.map(|r| r.id))
+}
+
+/// Images something still needs: each assignment's current build, builds in
+/// flight, and builds with test runs waiting or running.
+pub async fn image_refs_in_use(pool: &PgPool) -> sqlx::Result<Vec<String>> {
+    sqlx::query_scalar!(
+        r#"SELECT DISTINCT b.image_ref AS "image_ref!" FROM assignment_builds b
+            WHERE b.id IN (SELECT current_build_id FROM assignments WHERE current_build_id IS NOT NULL)
+               OR b.finished_at IS NULL
+               OR EXISTS (SELECT 1 FROM grading_runs g
+                           WHERE g.build_id = b.id AND g.status IN ('queued', 'grading'))"#
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Record that these images (`repository:tag`, without the registry's host)
+/// were deleted; returns how many builds used them.
+pub async fn images_deleted(pool: &PgPool, images: &[String]) -> sqlx::Result<u64> {
+    let done = sqlx::query!(
+        "UPDATE assignment_builds SET image_deleted_at = now()
+          WHERE substr(image_ref, strpos(image_ref, '/') + 1) = ANY($1)
+            AND image_deleted_at IS NULL",
+        images
+    )
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected())
 }
 
 /// A build attempt about to open.
@@ -894,6 +923,47 @@ mod tests {
 
         let second = start_build(&pool, &crate::db::test_build(&up, "img-b", "reg/a:2")).await?;
         assert_eq!(in_flight(&pool).await?[0].id, second);
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn images_in_use_are_kept_and_deleted_ones_never_reused(
+        pool: PgPool,
+    ) -> sqlx::Result<()> {
+        let up = uploaded(&pool, "ll", "tree-a").await?;
+        let old = start_build(&pool, &crate::db::test_build(&up, "img-a", "reg/a:1")).await?;
+        finish_build(&pool, old, true, None).await?;
+        finish_validation(&pool, old, ValidationStatus::Passed, None, &[]).await?;
+        assert_eq!(
+            image_refs_in_use(&pool).await?,
+            ["reg/a:1"],
+            "the current build"
+        );
+
+        let new = start_build(&pool, &crate::db::test_build(&up, "img-b", "reg/a:2")).await?;
+        let mut in_use = image_refs_in_use(&pool).await?;
+        in_use.sort();
+        assert_eq!(in_use, ["reg/a:1", "reg/a:2"], "and the build in flight");
+        finish_build(&pool, new, true, None).await?;
+        finish_validation(&pool, new, ValidationStatus::Passed, None, &[]).await?;
+        assert_eq!(image_refs_in_use(&pool).await?, ["reg/a:2"]);
+        // A submission accepted against the old build still needs its image.
+        crate::db::submissions::tests::submit(&pool, "s1", old).await?;
+        let mut in_use = image_refs_in_use(&pool).await?;
+        in_use.sort();
+        assert_eq!(in_use, ["reg/a:1", "reg/a:2"], "and a queued run's");
+
+        assert_eq!(
+            usable_build_for(&pool, up.assignment_id, "img-a").await?,
+            Some(old)
+        );
+        assert_eq!(images_deleted(&pool, &["a:1".into()]).await?, 1);
+        assert_eq!(
+            usable_build_for(&pool, up.assignment_id, "img-a").await?,
+            None,
+            "rebuilds"
+        );
+        assert_eq!(images_deleted(&pool, &["a:1".into()]).await?, 0);
         Ok(())
     }
 

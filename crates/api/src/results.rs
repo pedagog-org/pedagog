@@ -32,6 +32,7 @@ pub fn sentence(kind: Option<ErrorKind>) -> &'static str {
         Some(ErrorKind::Load) => "the tests couldn't run with your code",
         Some(ErrorKind::Timeout) => "it ran past the time limit",
         Some(ErrorKind::OutOfMemory) => "it ran out of memory",
+        Some(ErrorKind::OutOfDisk) => "it wrote more to disk than allowed",
         Some(ErrorKind::Crash) => "the test run stopped unexpectedly",
         _ => "something went wrong on our side",
     }

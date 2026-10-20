@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE assignment_builds SET image_deleted_at = now()\n          WHERE substr(image_ref, strpos(image_ref, '/') + 1) = ANY($1)\n            AND image_deleted_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2085721a27ea73ea219c6914bc76a7b5e5b8675305076604a20775f6836271dd"
+}

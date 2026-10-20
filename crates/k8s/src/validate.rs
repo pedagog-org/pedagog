@@ -92,6 +92,7 @@ pub struct ValidationRequest {
     pub deadline: Duration,
     pub cpu: String,
     pub memory: String,
+    pub disk: crate::Disk,
 }
 
 pub(crate) fn validation_job(name: &str, req: &ValidationRequest) -> Job {
@@ -112,6 +113,7 @@ pub(crate) fn validation_job(name: &str, req: &ValidationRequest) -> Job {
             deadline: req.deadline,
             cpu: &req.cpu,
             memory: &req.memory,
+            disk: &req.disk,
         },
     )
 }
@@ -134,6 +136,7 @@ pub(crate) struct TestRun<'a> {
     pub deadline: Duration,
     pub cpu: &'a str,
     pub memory: &'a str,
+    pub disk: &'a crate::Disk,
 }
 
 /// A test-run Job: `await-egress`, optionally `fetch-context` into the code
@@ -155,7 +158,11 @@ pub(crate) fn test_run_job(name: &str, run: &TestRun<'_>) -> Job {
     if let Some((url, tree)) = run.fetch {
         volumes.push(Volume {
             name: CODE_VOLUME.into(),
-            empty_dir: Some(EmptyDirVolumeSource::default()),
+            // Counts toward the pod's disk; capped at its limit too.
+            empty_dir: Some(EmptyDirVolumeSource {
+                size_limit: Some(Quantity(run.disk.limit.clone())),
+                ..Default::default()
+            }),
             ..Default::default()
         });
         mounts.push(VolumeMount {
@@ -200,8 +207,8 @@ pub(crate) fn test_run_job(name: &str, run: &TestRun<'_>) -> Job {
         }]),
         volume_mounts: (!mounts.is_empty()).then_some(mounts),
         resources: Some(ResourceRequirements {
-            requests: Some(limits.clone()),
-            limits: Some(limits),
+            requests: Some(with_disk(&limits, &run.disk.request)),
+            limits: Some(with_disk(&limits, &run.disk.limit)),
             ..Default::default()
         }),
         security_context: Some(SecurityContext {
@@ -255,11 +262,19 @@ pub(crate) fn test_run_job(name: &str, run: &TestRun<'_>) -> Job {
     }
 }
 
+fn with_disk(cpu_memory: &BTreeMap<String, Quantity>, disk: &str) -> BTreeMap<String, Quantity> {
+    let mut all = cpu_memory.clone();
+    all.insert("ephemeral-storage".into(), Quantity(disk.into()));
+    all
+}
+
 /// A jobs-image helper: unprivileged, tiny.
 fn helper_container(name: &str) -> Container {
     let tiny = BTreeMap::from([
         ("cpu".to_string(), Quantity("50m".into())),
         ("memory".to_string(), Quantity("64Mi".into())),
+        // Helpers write only to the code volume, not their own disk.
+        ("ephemeral-storage".to_string(), Quantity("64Mi".into())),
     ]);
     Container {
         name: name.into(),
@@ -526,6 +541,10 @@ mod tests {
             deadline: Duration::from_secs(600),
             cpu: "1".into(),
             memory: "1Gi".into(),
+            disk: crate::Disk {
+                request: "256Mi".into(),
+                limit: "1Gi".into(),
+            },
         }
     }
 

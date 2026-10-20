@@ -315,6 +315,7 @@ pub async fn launch_validation(
         deadline,
         cpu: state.config.validation.cpu.clone(),
         memory: state.config.validation.memory.clone(),
+        disk: state.config.validation.disk.clone(),
     };
     let key = JobKey::validation(&job_id(&build.course_id, &build.slug), build_id);
     let outcome = state

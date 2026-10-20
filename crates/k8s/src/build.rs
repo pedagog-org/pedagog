@@ -16,8 +16,9 @@ use std::time::Duration;
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::api::core::v1::{
     ConfigMap, ConfigMapVolumeSource, Container, EmptyDirVolumeSource, HostPathVolumeSource,
-    PodSpec, PodTemplateSpec, Volume, VolumeMount,
+    PodSpec, PodTemplateSpec, ResourceRequirements, Volume, VolumeMount,
 };
+use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::api::{
     DeleteParams, ListParams, LogParams, Patch, PatchParams, PostParams, PropagationPolicy,
@@ -53,6 +54,8 @@ pub struct BuildEnv {
     /// Repository for Kaniko's layer cache (e.g. `<registry>/pedagog/cache`);
     /// `None` builds without a cache.
     pub cache_repo: Option<String>,
+    /// Kaniko unpacks the base image and every layer onto its own disk.
+    pub disk: crate::Disk,
 }
 
 /// What a Job builds, for its name and labels.
@@ -519,6 +522,16 @@ fn recipes_volume(env: &BuildEnv) -> (Volume, Vec<Container>) {
     }
 }
 
+/// Ephemeral-storage requests and limits only (Kaniko sets no CPU or memory).
+fn disk_resources(disk: &crate::Disk) -> ResourceRequirements {
+    let one = |q: &str| BTreeMap::from([("ephemeral-storage".to_string(), Quantity(q.into()))]);
+    ResourceRequirements {
+        requests: Some(one(&disk.request)),
+        limits: Some(one(&disk.limit)),
+        ..Default::default()
+    }
+}
+
 fn kaniko_job(env: &BuildEnv, name: &str, kind: JobKind, req: &BuildRequest, cm: &str) -> Job {
     let (recipes_vol, mut init) = recipes_volume(env);
     let mut volumes = vec![recipes_vol, configmap_volume("dockerfile", cm)];
@@ -572,6 +585,7 @@ fn kaniko_job(env: &BuildEnv, name: &str, kind: JobKind, req: &BuildRequest, cm:
             .collect(),
         ),
         volume_mounts: Some(mounts),
+        resources: Some(disk_resources(&env.disk)),
         ..Default::default()
     };
 
@@ -662,6 +676,10 @@ mod tests {
             init_image: "unused-init".into(),
             recipes_hostpath: Some("/srv/recipes".into()),
             cache_repo: None,
+            disk: crate::Disk {
+                request: "2Gi".into(),
+                limit: "8Gi".into(),
+            },
         }
     }
 
@@ -672,6 +690,10 @@ mod tests {
             init_image: "registry/pedagog/jobs-init:1".into(),
             recipes_hostpath: None,
             cache_repo: Some("registry:5000/pedagog/cache".into()),
+            disk: crate::Disk {
+                request: "2Gi".into(),
+                limit: "8Gi".into(),
+            },
         }
     }
 
@@ -769,6 +791,8 @@ mod tests {
         assert!(args.contains(&"--ignore-path=/pedagog/ingredients".to_string()));
         assert!(args.contains(&"--destination=reg/pedagog/ubuntu-22:latest".to_string()));
         assert!(args.iter().any(|a| a.starts_with("--dockerfile=")));
+        let limits = kaniko.resources.clone().unwrap().limits.unwrap();
+        assert_eq!(limits["ephemeral-storage"], Quantity("8Gi".into()));
     }
 
     #[test]
