@@ -492,8 +492,9 @@ pub enum VisibilityCmd {
         #[arg(short = 'v', long)]
         verbose: bool,
     },
-    /// Override visibility for every test, or one: visible, hidden, after_end
-    /// (after the deadline, or release) or after_publish (on release).
+    /// Override when students see each part of every test, or one: visible,
+    /// hidden, after_end (after the deadline, or release) or after_publish
+    /// (on release).
     Set {
         assignment: String,
         #[arg(short = 'c', long)]
@@ -501,10 +502,18 @@ pub enum VisibilityCmd {
         /// One test, by id (else its node); every test if absent.
         #[arg(long)]
         test: Option<String>,
+        /// Points, and pass/fail.
         #[arg(long, value_name = "VISIBILITY")]
         score: Option<String>,
+        /// The checks (each item's steps).
         #[arg(long, value_name = "VISIBILITY")]
-        output: Option<String>,
+        feedback: Option<String>,
+        /// What the test printed.
+        #[arg(long, value_name = "VISIBILITY")]
+        stdout: Option<String>,
+        /// What went wrong (failures, exceptions, the values compared).
+        #[arg(long, value_name = "VISIBILITY")]
+        error: Option<String>,
     },
     /// Drop overrides for every test (the all-tests entry), one test, or all.
     Clear {

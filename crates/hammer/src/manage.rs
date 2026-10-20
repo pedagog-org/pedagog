@@ -470,7 +470,10 @@ pub fn dates(v: &serde_json::Value) -> Vec<String> {
     ]
 }
 
-/// `visibility show`: each test's two fields, decided by which layer, and
+/// The parts of a test's result, each with its own visibility.
+const PARTS: [&str; 4] = ["score", "feedback", "stdout", "error"];
+
+/// `visibility show`: each test's parts, decided by which layer, and
 /// whether students see them now; `verbose` adds every layer's setting.
 pub fn visibility(v: &serde_json::Value, test: Option<&str>, verbose: bool) -> Vec<String> {
     let mut lines = vec![format!(
@@ -510,16 +513,19 @@ pub fn visibility(v: &serde_json::Value, test: Option<&str>, verbose: bool) -> V
         } else {
             format!("{} ({id}, {})", str_of(t, "name"), str_of(t, "node"))
         });
-        lines.push(format!("  score:  {}", shown(&t["score"])));
-        lines.push(format!("  output: {}", shown(&t["output"])));
+        for part in PARTS {
+            lines.push(format!("  {:<9} {}", format!("{part}:"), shown(&t[part])));
+        }
         if verbose {
             for l in t["layers"].as_array().into_iter().flatten() {
-                let or_dash = |k: &str| l[k].as_str().unwrap_or("-").to_owned();
+                let parts: Vec<String> = PARTS
+                    .iter()
+                    .map(|p| format!("{p} {:<14}", l[*p].as_str().unwrap_or("-")))
+                    .collect();
                 lines.push(format!(
-                    "    {:<20} score {:<14} output {}",
+                    "    {:<20} {}",
                     str_of(l, "layer"),
-                    or_dash("score"),
-                    or_dash("output")
+                    parts.join(" ").trim_end()
                 ));
             }
         }
@@ -735,14 +741,20 @@ mod tests {
                 "status:   open"
             ]
         );
+        let part =
+            |value: &str, from: &str, why: &str| json!({"value": value, "from": from, "why": why});
         let v = json!({"released_at": null, "end": "2026-09-08T23:59:00-04:00", "tests": [
             {"id": "push", "node": "t.py::test_push", "name": "push",
-             "score": {"value": "visible", "from": "the test's own", "why": "always shown"},
-             "output": {"value": "after_end", "from": "file, all tests", "why": "not yet: until the end"},
-             "layers": [{"layer": "course, this test", "score": null, "output": "hidden"}]},
+             "score": part("visible", "the test's own", "always shown"),
+             "feedback": part("visible", "the test's own", "always shown"),
+             "stdout": part("visible", "the test's own", "always shown"),
+             "error": part("after_end", "file, all tests", "not yet: until the end"),
+             "layers": [{"layer": "course, this test", "score": null, "feedback": null, "stdout": null, "error": "hidden"}]},
             {"id": null, "node": "t.py::test_stress", "name": "stress",
-             "score": {"value": "hidden", "from": "course, all tests", "why": "never shown to students"},
-             "output": {"value": "hidden", "from": "course, all tests", "why": "never shown to students"},
+             "score": part("hidden", "course, all tests", "never shown to students"),
+             "feedback": part("hidden", "course, all tests", "never shown to students"),
+             "stdout": part("hidden", "course, all tests", "never shown to students"),
+             "error": part("hidden", "course, all tests", "never shown to students"),
              "layers": []}
         ]});
         let all = visibility(&v, None, false);
@@ -750,14 +762,18 @@ mod tests {
         assert_eq!(all[1], "push (push, t.py::test_push)");
         assert_eq!(
             all[2],
-            "  score:  visible       always shown  [the test's own]"
+            "  score:    visible       always shown  [the test's own]"
         );
-        assert_eq!(all[4], "stress (t.py::test_stress)");
-        let one = visibility(&v, Some("push"), true);
-        assert_eq!(one.len(), 5);
         assert_eq!(
-            one[4],
-            "    course, this test    score -              output hidden"
+            all[5],
+            "  error:    after_end     not yet: until the end  [file, all tests]"
+        );
+        assert_eq!(all[6], "stress (t.py::test_stress)");
+        let one = visibility(&v, Some("push"), true);
+        assert_eq!(one.len(), 7);
+        assert_eq!(
+            one[6],
+            "    course, this test    score -              feedback -              stdout -              error hidden"
         );
         assert_eq!(visibility(&v, Some("nope"), false)[1], "no test \"nope\"");
     }

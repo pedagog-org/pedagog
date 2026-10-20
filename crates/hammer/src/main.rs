@@ -365,13 +365,18 @@ fn run_visibility(cmd: VisibilityCmd) -> Result<()> {
             course,
             test,
             score,
-            output,
+            feedback,
+            stdout,
+            error,
         } => {
             let (api, a) = assignment_path(course, &assignment)?;
             let reply = api
                 .put(
                     &format!("{a}/visibility"),
-                    &serde_json::json!({ "test": test, "score": score, "output": output }),
+                    &serde_json::json!({
+                        "test": test, "score": score, "feedback": feedback,
+                        "stdout": stdout, "error": error,
+                    }),
                 )
                 .map_err(|e| miette!("{e}"))?;
             let mut lines = vec![format!(
