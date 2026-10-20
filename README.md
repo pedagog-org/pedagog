@@ -9,8 +9,10 @@ See [docs/SETUP.md](docs/SETUP.md) for infrastructure setup instructions.
 ## Development
 
 Run once per clone to enable the git hooks (a pre-commit hook runs `cargo fmt --check`
-and `cargo clippy --workspace --all-targets -- -D warnings`, rejecting unformatted code
-or any warning — bypass with `git commit --no-verify`):
+and `cargo clippy --workspace --all-targets --all-features -- -D warnings`, rejecting
+unformatted code or any warning, and, when a query or migration is staged, checks the
+`.sqlx/` cache against an empty database (`just db-prepare-check`; needs `just db-up`).
+Bypass with `git commit --no-verify`):
 
 ```sh
 just install-hooks

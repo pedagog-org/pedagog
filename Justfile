@@ -83,11 +83,27 @@ db-down:
 db-shell:
     podman exec -it pedagog-db psql -U pedagog -d pedagog
 
-# Apply migrations to the dev DB and refresh the committed .sqlx/ offline query cache.
-# --all-features so the feature-gated store::db queries are reached.
-db-prepare:
+# A freshly migrated, empty database for the .sqlx/ cache: column nullability is
+# inferred from query plans, which change with table statistics, so a populated
+# dev DB can give a different cache than CI's.
+PREPARE_URL := "postgres://pedagog:pedagog@localhost:5432/pedagog_prepare"
+
+[private]
+db-empty:
+    podman exec pedagog-db psql -U pedagog -q -c "DROP DATABASE IF EXISTS pedagog_prepare" -c "CREATE DATABASE pedagog_prepare"
+    DATABASE_URL={{PREPARE_URL}} cargo sqlx migrate run --source crates/store/migrations
+
+# Apply migrations to the dev DB and refresh the committed .sqlx/ offline query cache
+# (against an empty DB, as CI). --all-features so the feature-gated store::db
+# queries are reached, --all-targets for the tests'.
+db-prepare: db-empty
     cargo sqlx migrate run --source crates/store/migrations
-    cargo sqlx prepare --workspace -- --all-features
+    DATABASE_URL={{PREPARE_URL}} cargo sqlx prepare --workspace -- --all-targets --all-features
+
+# Check the committed .sqlx/ cache against an empty DB (the pre-commit hook runs this
+# when a query or migration is staged).
+db-prepare-check: db-empty
+    DATABASE_URL={{PREPARE_URL}} cargo sqlx prepare --workspace --check -- --all-targets --all-features
 
 # ---- Local kind cluster (podman) for end-to-end tests -----------------------
 KIND := "KIND_EXPERIMENTAL_PROVIDER=podman kind"
