@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id FROM assignment_builds\n          WHERE assignment_id = $1 AND image_hash = $2\n            AND build_status = 'succeeded' AND validation_status IN ('passed', 'skipped')\n          ORDER BY id DESC\n          LIMIT 1",
+  "query": "SELECT id FROM assignment_builds\n          WHERE assignment_id = $1 AND image_hash = $2\n            AND build_status = 'succeeded' AND validation_status IN ('passed', 'skipped')\n            AND image_deleted_at IS NULL\n          ORDER BY id DESC\n          LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -25,5 +25,5 @@
       false
     ]
   },
-  "hash": "6ef60f22ff78643f08271e0d5cb0d589eb2ef7765de9bb3c6988ad384f4a53ac"
+  "hash": "dbe50b81015bb8cd5be5c854cbde1708779c2bd3a145eba004d52209ab6e4916"
 }

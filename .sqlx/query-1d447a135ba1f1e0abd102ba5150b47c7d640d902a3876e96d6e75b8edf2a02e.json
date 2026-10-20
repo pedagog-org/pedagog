@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT b.image_ref AS \"image_ref!\" FROM assignment_builds b\n            WHERE b.id IN (SELECT current_build_id FROM assignments WHERE current_build_id IS NOT NULL)\n               OR b.finished_at IS NULL\n               OR EXISTS (SELECT 1 FROM grading_runs g\n                           WHERE g.build_id = b.id AND g.status IN ('queued', 'grading'))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "image_ref!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "image_ref"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1d447a135ba1f1e0abd102ba5150b47c7d640d902a3876e96d6e75b8edf2a02e"
+}
