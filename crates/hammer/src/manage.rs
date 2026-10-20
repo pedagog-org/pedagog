@@ -442,9 +442,8 @@ pub fn submissions(list: &serde_json::Value) -> Vec<String> {
                 if let Some(by) = s["submitted_by"].as_str() {
                     line.push_str(&format!("  submitted by {by}"));
                 }
-                if let Some(arrived) = s["created_at"].as_str()
-                    && Some(arrived) != s["counted_at"].as_str()
-                {
+                // As shown: a fraction of a second apart is the same time.
+                if s["created_at"].is_string() && when(&s["created_at"]) != when(&s["counted_at"]) {
                     line.push_str(&format!(" (arrived {})", when(&s["created_at"])));
                 }
                 line
@@ -635,8 +634,8 @@ mod tests {
             {"id": 14, "counted_at": "2026-09-09T03:41:00Z", "late": null, "staff": false,
              "status": "graded", "submitted_by": "prof@ufl.edu", "created_at": "2026-09-12T15:00:00Z",
              "score": 10.0, "total": 10.0},
-            {"id": 13, "counted_at": "2026-09-09T06:13:00Z", "late": "2 hours 14 minutes",
-             "staff": false, "status": "error", "submitted_by": null}
+            {"id": 13, "counted_at": "2026-09-09T06:13:00.123456Z", "late": "2 hours 14 minutes",
+             "staff": false, "status": "error", "submitted_by": null, "created_at": "2026-09-09T06:13:00Z"}
         ]);
         assert_eq!(
             submissions(&list),
