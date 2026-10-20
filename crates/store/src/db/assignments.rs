@@ -347,9 +347,10 @@ async fn queue_regrades(
     .id;
     let runs = sqlx::query!(
         "INSERT INTO grading_runs (submission_id, build_id, reason, regrade_batch_id)
-         SELECT DISTINCT ON (student_id) id, $2, $3, $4
-           FROM submissions WHERE assignment_id = $1
-          ORDER BY student_id, id DESC",
+         SELECT DISTINCT ON (owner) id, $2, $3, $4
+           FROM (SELECT id, counted_at, COALESCE('u' || user_id, 's' || student_id) AS owner
+                   FROM submissions WHERE assignment_id = $1) latest
+          ORDER BY owner, counted_at DESC, id DESC",
         assignment_id,
         build,
         RunReason::Regrade.to_string(),
@@ -762,6 +763,54 @@ mod tests {
         .fetch_one(&pool)
         .await?;
         assert_eq!((batch.notify.as_str(), batch.runs), ("changed", 2));
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn regrades_take_the_latest_by_counted_time(pool: PgPool) -> sqlx::Result<()> {
+        use crate::db::accounts::upsert_user;
+        use crate::db::queue::{claim_next, enqueue_validation};
+        use crate::db::submissions::tests::current_build;
+        use crate::db::submissions::{NewSubmission, Owner, record_submission};
+        use crate::{QueuedRun, SubmissionSource};
+
+        let old = current_build(&pool, "ll", "img-a").await?;
+        let a = build_by_id(&pool, old).await?.unwrap().assignment_id;
+        let alice = upsert_user(&pool, "alice@ufl.edu", "").await?;
+        let sub = |at: Option<&'static str>| NewSubmission {
+            assignment_id: a,
+            owner: Owner::User(alice.id),
+            submitted_by: None,
+            staff: false,
+            counted_at: at,
+            build_id: old,
+            source: SubmissionSource::Upload,
+            tree_hash: "t",
+            object_key: "k",
+            size_bytes: 1,
+            receipt: "{}",
+        };
+        let latest = record_submission(&pool, &sub(None)).await?;
+        record_submission(&pool, &sub(Some("2026-01-01T00:00:00Z"))).await?;
+        let mut conn = pool.acquire().await?;
+        while claim_next(&mut conn).await?.is_some() {}
+
+        let up = uploaded(&pool, "ll", "tree-b").await?;
+        let new = start_build(&pool, &crate::db::test_build(&up, "img-b", "reg/a:2")).await?;
+        request_regrade(&pool, new, Notify::Never).await?;
+        finish_build(&pool, new, true, None).await?;
+        enqueue_validation(&pool, new).await?;
+        claim_next(&mut conn).await?;
+        start_validation(&pool, new).await?;
+        finish_validation(&pool, new, ValidationStatus::Passed, Some("{}"), &[]).await?;
+        let Some(QueuedRun::Grading(run)) = claim_next(&mut conn).await? else {
+            panic!("a regrade run")
+        };
+        assert_eq!(claim_next(&mut conn).await?, None, "one per student");
+        let ctx = crate::db::submissions::run_context(&pool, run)
+            .await?
+            .unwrap();
+        assert_eq!(ctx.submission_id, latest.submission_id);
         Ok(())
     }
 

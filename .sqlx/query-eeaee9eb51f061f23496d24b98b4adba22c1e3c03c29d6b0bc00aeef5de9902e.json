@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO submissions (assignment_id, user_id, student_id, build_id, source, tree_hash, object_key, size_bytes)\n             VALUES ($1, $2, 's', $3, 'upload', 't', 'k', 1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eeaee9eb51f061f23496d24b98b4adba22c1e3c03c29d6b0bc00aeef5de9902e"
+}

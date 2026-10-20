@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO submissions\n           (assignment_id, student_id, build_id, source, tree_hash, object_key, size_bytes, receipt)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::jsonb)\n         RETURNING id",
+  "query": "INSERT INTO submissions\n           (assignment_id, user_id, student_id, submitted_by, staff, counted_at,\n            build_id, source, tree_hash, object_key, size_bytes, receipt)\n         VALUES ($1, $2, $3, $4, $5, COALESCE($6::text::timestamptz, now()),\n                 $7, $8, $9, $10, $11, $12::text::jsonb)\n         RETURNING id",
   "describe": {
     "columns": [
       {
@@ -18,6 +18,10 @@
     "parameters": {
       "Left": [
         "Int8",
+        "Int8",
+        "Text",
+        "Int8",
+        "Bool",
         "Text",
         "Int8",
         "Text",
@@ -31,5 +35,5 @@
       false
     ]
   },
-  "hash": "dc0f6de68dd20a584727b8620e3c41b7a78e303da15402ead297e9be5e0a810d"
+  "hash": "b78c39d6f1c909365f3c2afd83b8591b6b247d6ba19b951cb6dcd2ddb81091bb"
 }

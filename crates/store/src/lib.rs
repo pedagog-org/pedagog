@@ -135,12 +135,24 @@ pub enum SubmissionSource {
     Workspace,
 }
 
-/// A `submissions` row.
+/// A `submissions` row. Times are RFC 3339 (UTC).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Submission {
     pub id: i64,
     pub assignment_id: i64,
-    pub student_id: String,
+    /// Whose it is: a user, or (operator submissions) an opaque student id.
+    pub user_id: Option<i64>,
+    pub student_id: Option<String>,
+    /// The owner's email, for users.
+    pub user_email: Option<String>,
+    /// Who sent it, when someone else did (on the owner's behalf).
+    pub submitted_by: Option<String>,
+    /// An instructor's or grader's own submission.
+    pub staff: bool,
+    /// The time it counts at (lateness, which is latest).
+    pub counted_at: String,
+    /// When it really arrived.
+    pub created_at: String,
     /// The build current when the submission was accepted.
     pub build_id: i64,
     pub source: SubmissionSource,
