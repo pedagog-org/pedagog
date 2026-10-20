@@ -12,6 +12,7 @@ patches:
   - path: patches/jobs-kind.yaml
   - path: patches/api-kind.yaml
   - path: patches/no-api-ingress.yaml
+  - path: patches/glitchtip-kind.yaml
 
 images:
   - name: pedagog-jobs
@@ -32,6 +33,19 @@ secretGenerator:
     namespace: pedagog-builds
     literals:
       - url=postgres://pedagog:pedagog@postgres-service.pedagog-data.svc:5432/pedagog
+  - name: glitchtip-db
+    namespace: pedagog-data
+    literals:
+      - password=glitchtip
+      - url=postgres://glitchtip:glitchtip@postgres-service.pedagog-data.svc:5432/glitchtip
+  - name: glitchtip-secrets
+    namespace: pedagog-data
+    literals:
+      - secret-key=pedagog-dev-glitchtip-secret-key
+      - email-url=smtp://mailpit.pedagog-data.svc:1025
+      # GlitchTip refuses reserved domains such as .local in emails.
+      - admin-email=admin@pedagog.dev
+      - admin-password=pedagog-dev
   - name: pedagog-api-db
     namespace: pedagog-system
     literals:

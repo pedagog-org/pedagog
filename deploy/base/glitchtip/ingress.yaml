@@ -1,0 +1,25 @@
+# https://<glitchtip host>/ → GlitchTip's UI (its own login), with a Let's
+# Encrypt certificate. Services send events in-cluster, not through here.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: glitchtip
+  namespace: pedagog-data
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [REPLACE-WITH-GLITCHTIP-HOSTNAME]
+      secretName: glitchtip-tls
+  rules:
+    - host: REPLACE-WITH-GLITCHTIP-HOSTNAME
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: glitchtip
+                port:
+                  number: 8000

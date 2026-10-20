@@ -28,7 +28,6 @@ use pedagog_store::db;
 use pedagog_store::objects::Objects;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
-use tracing_subscriber::EnvFilter;
 
 use crate::config::Config;
 use crate::state::AppState;
@@ -57,6 +56,7 @@ fn main() -> anyhow::Result<()> {
         let seconds: u64 = seconds.parse()?;
         return egress::await_egress(target, std::time::Duration::from_secs(seconds));
     }
+    let _telemetry = pedagog_telemetry::init(concat!("pedagog-jobs@", env!("CARGO_PKG_VERSION")))?;
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
@@ -64,12 +64,6 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn serve() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-
     let config = Config::from_env()?;
     tracing::info!(
         env = ?config.env, namespace = %config.namespace, runs = %config.run_namespace,

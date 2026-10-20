@@ -140,14 +140,16 @@ kind-load-api:
 kind-add-admin EMAIL:
     kubectl --context {{KIND_CTX}} -n pedagog-system exec deploy/pedagog-api -- /usr/local/bin/pedagog-api add-admin "{{EMAIL}}"
 
-# Port-forward the api (http://localhost:18082) and Mailpit's inbox
-# (http://localhost:18025) until interrupted.
+# Port-forward the api (http://localhost:18082), Mailpit's inbox
+# (http://localhost:18025) and GlitchTip (http://localhost:18000) until interrupted.
 kind-api:
     #!/usr/bin/env bash
     set -euo pipefail
     kubectl --context {{KIND_CTX}} -n pedagog-data port-forward svc/mailpit 18025:8025 >/dev/null &
-    trap 'kill $!' EXIT
-    echo "api: http://localhost:18082   mail: http://localhost:18025"
+    mail=$!
+    kubectl --context {{KIND_CTX}} -n pedagog-data port-forward svc/glitchtip 18000:8000 >/dev/null &
+    trap 'kill $mail $!' EXIT
+    echo "api: http://localhost:18082   mail: http://localhost:18025   errors: http://localhost:18000"
     kubectl --context {{KIND_CTX}} -n pedagog-system port-forward svc/pedagog-api 18082:8080
 
 # Apply the kind overlay (full base, dev-mode jobs, local-path storage).

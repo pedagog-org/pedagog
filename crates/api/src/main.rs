@@ -28,7 +28,6 @@ use std::time::Duration;
 use pedagog_store::db;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
-use tracing_subscriber::EnvFilter;
 
 use crate::auth::Authenticator;
 use crate::config::Config;
@@ -40,11 +39,7 @@ const CLEANUP_EVERY: Duration = Duration::from_secs(3600);
 fn main() -> anyhow::Result<()> {
     // sqlx and lettre both use rustls; pick ring explicitly, as jobs does.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    let _telemetry = pedagog_telemetry::init(concat!("pedagog-api@", env!("CARGO_PKG_VERSION")))?;
     let args: Vec<String> = std::env::args().collect();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

@@ -1,0 +1,85 @@
+# GlitchTip (Sentry-compatible error tracking) in one process: web, worker and
+# scheduler (SERVER_ROLE=all_in_one). Its database lives in our Postgres
+# (bootstrap-job.yaml makes it); with VALKEY_URL empty, Postgres also holds its
+# queue, cache and sessions. Migrations run at start.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glitchtip
+  namespace: pedagog-data
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: glitchtip
+  template:
+    metadata:
+      labels:
+        app: glitchtip
+    spec:
+      containers:
+        - name: glitchtip
+          image: docker.io/glitchtip/glitchtip:6.2.6
+          env:
+            - name: SERVER_ROLE
+              value: all_in_one
+            - name: VALKEY_URL
+              value: ""
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: glitchtip-db
+                  key: url
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: glitchtip-secrets
+                  key: secret-key
+            # smtp://[user:password@]host:port, for alert emails.
+            - name: EMAIL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: glitchtip-secrets
+                  key: email-url
+            # Overlays set the public URL (links in alert emails) and the sender.
+            - name: GLITCHTIP_DOMAIN
+              value: https://REPLACE-WITH-GLITCHTIP-HOSTNAME
+            - name: DEFAULT_FROM_EMAIL
+              value: REPLACE-WITH-SENDER-ADDRESS
+            # Only the superuser (bootstrap-job.yaml) signs up; they invite others.
+            - name: ENABLE_USER_REGISTRATION
+              value: "false"
+            - name: GLITCHTIP_RETENTION_DAYS
+              value: "90"
+          ports:
+            - containerPort: 8000
+          startupProbe:
+            httpGet:
+              path: /_health/
+              port: 8000
+            periodSeconds: 5
+            failureThreshold: 120
+          readinessProbe:
+            httpGet:
+              path: /_health/
+              port: 8000
+          livenessProbe:
+            httpGet:
+              path: /_health/
+              port: 8000
+            periodSeconds: 30
+          securityContext:
+            # The image's user, `app` (by number, so runAsNonRoot can check it).
+            runAsUser: 5000
+            runAsGroup: 5000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi

@@ -1,0 +1,17 @@
+[package]
+name = "pedagog-telemetry"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+sentry = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+sentry = { workspace = true, features = ["test"] }
+
+[lints]
+workspace = true

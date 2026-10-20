@@ -27,6 +27,13 @@ spec:
                 secretKeyRef:
                   name: pedagog-jobs-db
                   key: url
+            # Warnings and errors to GlitchTip, once its DSN is in this Secret.
+            - name: PEDAGOG_SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: pedagog-jobs-sentry
+                  key: dsn
+                  optional: true
             - name: PEDAGOG_REGISTRY
               value: registry-service.pedagog-data.svc:5000
             - name: PEDAGOG_BUILD_NAMESPACE

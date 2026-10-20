@@ -604,6 +604,20 @@ Step 5 ships as three PRs: **5a** `feat/notices`, **5b** `test/api-e2e`, **5c**
 - **E2E course:** a fresh course per run (`e2e-<unix time>`), created through the api by
   the admin persona, so no dates, releases, activations or roster leak between runs.
 
+### 5c decisions (2026-10-20)
+
+- **GlitchTip 6.2, all-in-one** (web, worker and scheduler in one process; the only
+  mode from GlitchTip 7): one Deployment in `pedagog-data`, migrations on start.
+- **No Valkey** (revises step 5): Postgres holds GlitchTip's queue, cache and sessions
+  (`VALKEY_URL=""`); Valkey can be added later with one variable.
+- **Plain kustomize** in `deploy/base/glitchtip/`, like garage and the registry.
+- **UI:** an Ingress with TLS at `glitchtip.<domain>`, GlitchTip's own login,
+  registration closed after the first user. Services send events to the internal
+  Service (the DSN's host), so nothing leaves the cluster. On kind, port-forward.
+- **Bootstrap:** a re-runnable Job creates the `glitchtip` role and database in our
+  Postgres and the superuser; the org, a project per service and the DSN Secrets
+  are made by hand once (SETUP).
+
 ## Implementation steps
 
 1. **Schema and store** (`feat/accounts-store`): users, courses, staff, enrollments,

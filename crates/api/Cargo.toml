@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 pedagog-core = { path = "../core" }
 pedagog-store = { path = "../store", features = ["db"] }
+pedagog-telemetry = { path = "../telemetry" }
 anyhow = { workspace = true }
 axum = { workspace = true }
 blake3 = { workspace = true }
@@ -25,7 +26,6 @@ sqlx = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

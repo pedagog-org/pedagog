@@ -22,6 +22,11 @@ resources:
   - garage/service.yaml
   - garage/bootstrap-job.yaml
   - garage/network-policy.yaml
+  - glitchtip/deployment.yaml
+  - glitchtip/service.yaml
+  - glitchtip/network-policy.yaml
+  - glitchtip/ingress.yaml
+  - glitchtip/bootstrap-job.yaml
   - jobs/rbac.yaml
   - jobs/limit-range.yaml
   - jobs/resource-quota.yaml

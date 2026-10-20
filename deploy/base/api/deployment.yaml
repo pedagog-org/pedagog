@@ -30,6 +30,13 @@ spec:
                 secretKeyRef:
                   name: pedagog-api-db
                   key: url
+            # Warnings and errors to GlitchTip, once its DSN is in this Secret.
+            - name: PEDAGOG_SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: pedagog-api-sentry
+                  key: dsn
+                  optional: true
             # Overlays set the public URL and the SMTP relay.
             - name: PEDAGOG_PUBLIC_URL
               value: https://REPLACE-WITH-HOSTNAME
