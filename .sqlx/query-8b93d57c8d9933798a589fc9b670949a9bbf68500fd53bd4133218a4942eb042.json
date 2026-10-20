@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT s.id, s.assignment_id, s.user_id, s.student_id, u.email AS \"user_email?\",\n                      b.email AS \"submitted_by?\", s.staff,\n                      to_char(s.counted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS \"counted_at!\",\n                      to_char(s.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS \"created_at!\",\n                      s.build_id, s.source, s.tree_hash, s.object_key, s.size_bytes,\n                      s.receipt::text AS \"receipt!\"\n                 FROM submissions s\n                 LEFT JOIN users u ON u.id = s.user_id\n                 LEFT JOIN users b ON b.id = s.submitted_by WHERE s.id = ANY($1)",
+  "query": "SELECT s.id AS \"id!\", s.assignment_id AS \"assignment_id!\", s.user_id, s.student_id,\n                      u.email AS \"user_email?\", b.email AS \"submitted_by?\", s.staff AS \"staff!\",\n                      to_char(s.counted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS \"counted_at!\",\n                      to_char(s.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS \"created_at!\",\n                      s.build_id AS \"build_id!\", s.source AS \"source!\", s.tree_hash AS \"tree_hash!\",\n                      s.object_key AS \"object_key!\", s.size_bytes AS \"size_bytes!\",\n                      s.receipt::text AS \"receipt!\"\n                 FROM submissions s\n                 LEFT JOIN users u ON u.id = s.user_id\n                 LEFT JOIN users b ON b.id = s.submitted_by WHERE s.id = ANY($1)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
+        "name": "id!",
         "type_info": "Int8",
         "origin": {
           "Table": {
@@ -16,7 +16,7 @@
       },
       {
         "ordinal": 1,
-        "name": "assignment_id",
+        "name": "assignment_id!",
         "type_info": "Int8",
         "origin": {
           "Table": {
@@ -71,7 +71,7 @@
       },
       {
         "ordinal": 6,
-        "name": "staff",
+        "name": "staff!",
         "type_info": "Bool",
         "origin": {
           "Table": {
@@ -94,7 +94,7 @@
       },
       {
         "ordinal": 9,
-        "name": "build_id",
+        "name": "build_id!",
         "type_info": "Int8",
         "origin": {
           "Table": {
@@ -105,7 +105,7 @@
       },
       {
         "ordinal": 10,
-        "name": "source",
+        "name": "source!",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -116,7 +116,7 @@
       },
       {
         "ordinal": 11,
-        "name": "tree_hash",
+        "name": "tree_hash!",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -127,7 +127,7 @@
       },
       {
         "ordinal": 12,
-        "name": "object_key",
+        "name": "object_key!",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -138,7 +138,7 @@
       },
       {
         "ordinal": 13,
-        "name": "size_bytes",
+        "name": "size_bytes!",
         "type_info": "Int8",
         "origin": {
           "Table": {
@@ -177,5 +177,5 @@
       null
     ]
   },
-  "hash": "41256689d984379b3dbfede8b90cbd1d384c8d65862725b60b82876a2d6e9a8c"
+  "hash": "8b93d57c8d9933798a589fc9b670949a9bbf68500fd53bd4133218a4942eb042"
 }

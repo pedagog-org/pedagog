@@ -221,11 +221,12 @@ macro_rules! select_submissions {
     ($tail:literal $(, $arg:expr)* $(,)?) => {
         sqlx::query_as!(
             SubmissionRow,
-            r#"SELECT s.id, s.assignment_id, s.user_id, s.student_id, u.email AS "user_email?",
-                      b.email AS "submitted_by?", s.staff,
+            r#"SELECT s.id AS "id!", s.assignment_id AS "assignment_id!", s.user_id, s.student_id,
+                      u.email AS "user_email?", b.email AS "submitted_by?", s.staff AS "staff!",
                       to_char(s.counted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "counted_at!",
                       to_char(s.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "created_at!",
-                      s.build_id, s.source, s.tree_hash, s.object_key, s.size_bytes,
+                      s.build_id AS "build_id!", s.source AS "source!", s.tree_hash AS "tree_hash!",
+                      s.object_key AS "object_key!", s.size_bytes AS "size_bytes!",
                       s.receipt::text AS "receipt!"
                  FROM submissions s
                  LEFT JOIN users u ON u.id = s.user_id
