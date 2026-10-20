@@ -517,19 +517,45 @@ visibility, release, the upload date diff and `--take-dates`).
 - **Students** (`hammer results show ASSIGNMENT`): the submission that counts; tests
   whose score is visible (with pass/fail); feedback and output where their own
   visibility allows; one line for hidden tests; totals over what's shown.
-- **Three visibilities per test:** `score`, `feedback` (the instructor's reasons, per
-  rubric item) and `output` (the framework's failure text and what the test printed).
-  Defaults: score visible, feedback visible, output after_end. Results without a
-  feedback setting use their output setting. Overrides, `visibility show` and the
-  helper's marker (`visibility(score=, feedback=, output=)`) gain `feedback`.
-- **Results format:** a run-level `run: {status: complete | error, output}` replaces
-  `<collection>` entries: the helper writes it when tests can't all run (load or
-  compile errors); jobs writes it when the run dies outside the framework (timeout,
-  out of memory, crash, no results). Tests gain `stdout`. The run's output is never
-  shown to students: they get a plain sentence ("couldn't be graded: the tests
-  couldn't run with your code", "timed out after 10 minutes").
-- **Console output** is captured per test (`stdout`) and shown under output visibility
-  (debug values can help students); feedback stays the instructor's written channel.
+- **Four parts per test, each with its own visibility** (file default, course
+  override): `score` (points, pass/fail), `feedback` (the checks: each item's steps),
+  `stdout` (what the instructor prints for the student), `debug` (uncaught exceptions:
+  failures outside a `check()`, exceptions from the student's code, tracebacks and
+  pytest's values). Everything defaults to `visible`; hide `debug` (or more) for exams.
+  `trace` (how the score was computed) and the run's output are staff-only.
+- **Results format (pedagog-pytest 2.0.0):**
+
+  ```yaml
+  run: { status: complete, output: "" }   # error: tests couldn't all run (staff only)
+  tests:
+    - node: test_sort.py::test_sort
+      status: fail
+      score: 1
+      max: 9
+      items:                              # every scored test; @rubric_item has one
+        - id: correct
+          score: 1
+          max: 4
+          steps:                          # one per check/award, in order
+            - { id: empty, result: pass, points: 1, worth: 1, reason: "empty list" }
+            - { id: large, result: fail, points: 0, worth: 3, reason: "1000 values",
+                message: "sort() lost an element" }   # the check's assert message
+            - { points: -1, reason: "one global" }    # an award: no result
+      stdout: "..."
+      debug: "..."
+      trace: "..."
+      visibility: { score: visible, feedback: visible, stdout: visible, debug: visible }
+  ```
+
+  Steps take an optional `id=` (unique within the item). `set`/`nil` stay in the
+  trace. Older results are still read: `output` as `debug`, text feedback as one
+  step, `<collection>` entries as a run error; stored course overrides with `output`
+  read as `debug`. `hammer visibility set` takes `--score --feedback --stdout --debug`.
+- **Run status:** `run: {status: complete | error, output}`: the helper writes it when
+  tests can't all run (load or compile errors); jobs writes it when the run dies
+  outside the framework (timeout, out of memory, crash, no results). Students get a
+  plain sentence ("couldn't be graded: the tests couldn't run with your code", "timed
+  out after 10 minutes"), never the run's output.
 - **Order:** a pedagog-pytest PR (run status and output, stdout, feedback visibility),
   core and jobs reading the new format (still accepting `<collection>` entries from
   older helpers), then the views and activation.
