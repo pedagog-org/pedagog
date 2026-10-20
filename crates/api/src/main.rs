@@ -9,6 +9,7 @@ mod auth;
 mod config;
 mod courses;
 mod error;
+mod events;
 mod http;
 mod mail;
 mod members;
@@ -86,12 +87,14 @@ async fn serve() -> anyhow::Result<()> {
         jobs: reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(300))
             .build()?,
+        events: events::Hub::new(),
     };
 
     // Background work owned here: if it stops, the service exits and is restarted.
     let mut background = JoinSet::new();
     background.spawn(cleanup(state.clone()));
     background.spawn(notices::run(state.clone()));
+    background.spawn(events::listen(state.pool.clone(), state.events.clone()));
 
     let addr = state.config.listen_addr.clone();
     let web = state.config.web_dir.clone();

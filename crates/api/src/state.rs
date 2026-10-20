@@ -16,4 +16,6 @@ pub struct AppState {
     pub auth: Authenticator,
     /// For jobs' internal endpoints.
     pub jobs: reqwest::Client,
+    /// Live updates for the open event streams.
+    pub events: crate::events::Hub,
 }
