@@ -576,7 +576,7 @@ mod tests {
         assert_eq!(
             last(&jobs),
             format!(
-                "/internal/courses/cop3502-f26/assignments/linked-list/submissions?user={}&by={ta_id}&at=2020-01-31T23%3A00%3A00Z",
+                "/internal/courses/cop3502-f26/assignments/linked-list/submissions?user={}&by={ta_id}&at=2020-01-31T23%3A00%3A00.000000Z",
                 alice.id
             )
         );

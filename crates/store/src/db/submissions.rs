@@ -217,7 +217,7 @@ macro_rules! select_submissions {
             SubmissionRow,
             r#"SELECT s.id, s.assignment_id, s.user_id, s.student_id, u.email AS "user_email?",
                       b.email AS "submitted_by?", s.staff,
-                      to_char(s.counted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "counted_at!",
+                      to_char(s.counted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "counted_at!",
                       to_char(s.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "created_at!",
                       s.build_id, s.source, s.tree_hash, s.object_key, s.size_bytes,
                       s.receipt::text AS "receipt!"
@@ -580,10 +580,24 @@ pub(crate) mod tests {
             (
                 Some("alice@ufl.edu"),
                 Some("prof@ufl.edu"),
-                "2026-09-09T03:41:00Z"
+                "2026-09-09T03:41:00.000000Z"
             )
         );
         assert_ne!(f.counted_at, f.created_at);
+        // Counted to the microsecond: "at their last time" ties exactly, and the
+        // later submission comes first.
+        let again = record_submission(
+            &pool,
+            &NewSubmission {
+                counted_at: Some(mine[0].counted_at.as_str()),
+                ..new(Some(prof.id), None)
+            },
+        )
+        .await?;
+        assert_eq!(
+            submissions_for_user(&pool, a, alice.id).await?[0].id,
+            again.submission_id
+        );
         assert!(submissions_for_user(&pool, a, prof.id).await?.is_empty());
 
         let both = sqlx::query!(

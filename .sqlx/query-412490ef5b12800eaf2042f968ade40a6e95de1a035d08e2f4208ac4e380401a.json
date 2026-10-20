@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT s.id, s.assignment_id, s.user_id, s.student_id, u.email AS \"user_email?\",\n                      b.email AS \"submitted_by?\", s.staff,\n                      to_char(s.counted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS \"counted_at!\",\n                      to_char(s.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS \"created_at!\",\n                      s.build_id, s.source, s.tree_hash, s.object_key, s.size_bytes,\n                      s.receipt::text AS \"receipt!\"\n                 FROM submissions s\n                 LEFT JOIN users u ON u.id = s.user_id\n                 LEFT JOIN users b ON b.id = s.submitted_by WHERE s.id = $1",
+  "query": "SELECT s.id, s.assignment_id, s.user_id, s.student_id, u.email AS \"user_email?\",\n                      b.email AS \"submitted_by?\", s.staff,\n                      to_char(s.counted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS \"counted_at!\",\n                      to_char(s.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS \"created_at!\",\n                      s.build_id, s.source, s.tree_hash, s.object_key, s.size_bytes,\n                      s.receipt::text AS \"receipt!\"\n                 FROM submissions s\n                 LEFT JOIN users u ON u.id = s.user_id\n                 LEFT JOIN users b ON b.id = s.submitted_by WHERE s.id = $1",
   "describe": {
     "columns": [
       {
@@ -177,5 +177,5 @@
       null
     ]
   },
-  "hash": "95af9b22cb53d94087ba4dbf5b3c44bd233bd8c899cc6ebfe4baf59d486df50a"
+  "hash": "412490ef5b12800eaf2042f968ade40a6e95de1a035d08e2f4208ac4e380401a"
 }
