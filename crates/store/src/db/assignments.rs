@@ -293,12 +293,14 @@ pub async fn image_refs_in_use(pool: &PgPool) -> sqlx::Result<Vec<String>> {
     .await
 }
 
-/// Record that these images were deleted; returns how many builds used them.
-pub async fn images_deleted(pool: &PgPool, refs: &[String]) -> sqlx::Result<u64> {
+/// Record that these images (`repository:tag`, without the registry's host)
+/// were deleted; returns how many builds used them.
+pub async fn images_deleted(pool: &PgPool, images: &[String]) -> sqlx::Result<u64> {
     let done = sqlx::query!(
         "UPDATE assignment_builds SET image_deleted_at = now()
-          WHERE image_ref = ANY($1) AND image_deleted_at IS NULL",
-        refs
+          WHERE substr(image_ref, strpos(image_ref, '/') + 1) = ANY($1)
+            AND image_deleted_at IS NULL",
+        images
     )
     .execute(pool)
     .await?;
@@ -955,13 +957,13 @@ mod tests {
             usable_build_for(&pool, up.assignment_id, "img-a").await?,
             Some(old)
         );
-        assert_eq!(images_deleted(&pool, &["reg/a:1".into()]).await?, 1);
+        assert_eq!(images_deleted(&pool, &["a:1".into()]).await?, 1);
         assert_eq!(
             usable_build_for(&pool, up.assignment_id, "img-a").await?,
             None,
             "rebuilds"
         );
-        assert_eq!(images_deleted(&pool, &["reg/a:1".into()]).await?, 0);
+        assert_eq!(images_deleted(&pool, &["a:1".into()]).await?, 0);
         Ok(())
     }
 

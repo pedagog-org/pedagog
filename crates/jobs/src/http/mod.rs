@@ -26,6 +26,7 @@ pub fn router(state: AppState) -> Router {
         .saturating_add(MULTIPART_OVERHEAD);
     Router::new()
         .route("/internal/recipes/rebuild", post(rebuild))
+        .route("/internal/registry/cleanup", post(registry_cleanup))
         .route(
             "/internal/courses/{course}/assignments",
             post(intake::upload).layer(DefaultBodyLimit::max(max_upload)),
@@ -54,6 +55,18 @@ struct RebuildQuery {
 
 /// Runs a dispatch pass and returns immediately with what was kicked off —
 /// not the build outcome (callers read `build_runs` / the live Job).
+/// Run the registry cleanup now (operators; it also runs nightly), in the
+/// background: its result is logged.
+async fn registry_cleanup(State(state): State<AppState>) -> impl IntoResponse {
+    tokio::spawn(async move {
+        match crate::registry::cleanup(&state).await {
+            Ok(c) => tracing::info!(?c, "registry cleanup done"),
+            Err(e) => tracing::error!(error = %e, "registry cleanup failed"),
+        }
+    });
+    StatusCode::ACCEPTED
+}
+
 async fn rebuild(
     State(state): State<AppState>,
     Query(q): Query<RebuildQuery>,

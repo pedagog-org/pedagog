@@ -13,6 +13,7 @@ pub use kube::Error as KubeError;
 
 pub mod build;
 pub mod grade;
+pub mod maintenance;
 pub mod runs;
 pub mod validate;
 
