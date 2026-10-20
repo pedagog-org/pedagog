@@ -1,0 +1,71 @@
+/* Placeholder design tokens until the designs land: neutral, light and dark
+   (the system's, or forced with data-theme on <html>). */
+:root {
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --radius: 6px;
+  --bg: #ffffff;
+  --surface: #f5f6f8;
+  --text: #1b1f24;
+  --muted: #59636e;
+  --border: #d0d7de;
+  --accent: #2f5bd3;
+  --ok: #1a7f37;
+  --bad: #c62828;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1216;
+    --surface: #171b21;
+    --text: #e6e8eb;
+    --muted: #9aa4af;
+    --border: #2d333b;
+    --accent: #7aa2ff;
+    --ok: #57c26f;
+    --bad: #ff7b72;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0f1216;
+  --surface: #171b21;
+  --text: #e6e8eb;
+  --muted: #9aa4af;
+  --border: #2d333b;
+  --accent: #7aa2ff;
+  --ok: #57c26f;
+  --bad: #ff7b72;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+main {
+  max-width: 40rem;
+  margin: var(--space-4) auto;
+  padding: 0 var(--space-3);
+}
+
+.status {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.status.ok {
+  color: var(--ok);
+}
+
+.status.bad {
+  color: var(--bad);
+}

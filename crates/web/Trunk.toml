@@ -1,0 +1,12 @@
+# `just web-dev`: the UI on http://localhost:3000, with /api/ proxied to the
+# kind api (`just kind-api`), so the browser sees one origin as in production.
+[build]
+target = "index.html"
+dist = "../../target/web"
+
+[serve]
+port = 3000
+
+[[proxy]]
+rewrite = "/api/"
+backend = "http://localhost:18082/"

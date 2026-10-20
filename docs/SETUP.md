@@ -47,6 +47,18 @@ just db-down     # stop it (keeps the named volume)
 CI compiles offline via the committed `.sqlx/` cache (`SQLX_OFFLINE=true`); only
 regenerating that cache needs a live DB.
 
+### Web UI
+
+The web UI (`crates/web`) is a Leptos app compiled to WebAssembly and built with
+[trunk](https://trunkrs.dev); the wasm target comes with `rust-toolchain.toml`.
+
+```sh
+brew install trunk   # or: cargo install trunk --locked
+just kind-api        # in one terminal: the api (and Mailpit, GlitchTip) from kind
+just web-dev         # in another: http://localhost:3000, /api/ proxied to the api
+just web-build       # the static files, into target/web
+```
+
 ### Local cluster (kind)
 
 To exercise in-cluster builds without the Pi cluster, run the platform on a local

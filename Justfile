@@ -105,6 +105,17 @@ db-prepare: db-empty
 db-prepare-check: db-empty
     DATABASE_URL={{PREPARE_URL}} cargo sqlx prepare --workspace --check -- --all-targets --all-features
 
+# ---- Web UI (crates/web: Leptos in the browser, built with trunk) -----------
+
+# /api/ goes to the kind api (run `just kind-api` alongside); needs trunk.
+# Serve the web UI on http://localhost:3000, rebuilding on change.
+web-dev:
+    cd crates/web && trunk serve
+
+# Build the web UI's static files (index.html, .wasm, .js, .css) into target/web.
+web-build:
+    cd crates/web && trunk build --release
+
 # ---- Local kind cluster (podman) for end-to-end tests -----------------------
 KIND := "KIND_EXPERIMENTAL_PROVIDER=podman kind"
 KIND_CTX := "kind-pedagog"

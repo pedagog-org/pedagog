@@ -74,6 +74,8 @@ jobs:
       # --locked: fail if Cargo.lock is out of date instead of silently updating it.
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace --all-features
+      # The web UI as browsers run it (the workspace build above is native).
+      - run: cargo clippy --locked -p pedagog-web --target wasm32-unknown-unknown -- -D warnings
 
       # Fails if a query changed without regenerating .sqlx/ (`just db-prepare`).
       - name: Check sqlx offline cache

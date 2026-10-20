@@ -704,9 +704,9 @@ The `k8s` crate is the sole holder of `kube`/`k8s-openapi`: its `build` submodul
 
 ## Frontend
 
-The web UI is built with **Leptos** (Rust → WASM) and lives in the `web` crate of the workspace. It calls the platform REST API directly. Shared Rust types (request/response structs) come from the `core` crate, giving the frontend full type safety when deserializing API responses without duplicating definitions.
+The web UI is built with **Leptos** (Rust → WASM), rendered in the browser (client-side), and lives in the `web` crate. `trunk` builds it into static files (`index.html`, the `.wasm` and its JS glue, CSS; ~55 KB gzipped for the skeleton). It calls the platform REST API on the same host under `/api`, with the session cookie (no CORS). Shared Rust types (request/response structs) come from the `core` crate, giving the frontend full type safety when deserializing API responses without duplicating definitions. Design tokens are CSS custom properties, light and dark. The screens are specified in `docs/design/web-ui-brief.md`.
 
-The frontend and API are independently deployable. The API is callable by any HTTP client — the Leptos frontend is one consumer, not a dependency.
+The frontend and API are independently deployable. The API is callable by any HTTP client — the Leptos frontend is one consumer, not a dependency. In development, `just web-dev` serves the UI and proxies `/api/` to the api.
 
 ---
 
