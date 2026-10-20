@@ -35,7 +35,7 @@ pub const REGRADE_PRIORITY: i16 = 1;
 /// A submission intake accepted, pinned to `build_id`.
 #[derive(Clone, Debug)]
 pub struct NewSubmission<'a> {
-    pub assignment_id: &'a str,
+    pub assignment_id: i64,
     pub student_id: &'a str,
     pub build_id: i64,
     pub source: SubmissionSource,
@@ -206,7 +206,7 @@ pub async fn get_submission(pool: &PgPool, id: i64) -> sqlx::Result<Option<Submi
 /// A student's submissions to an assignment, latest first.
 pub async fn submissions_for_student(
     pool: &PgPool,
-    assignment_id: &str,
+    assignment_id: i64,
     student_id: &str,
 ) -> sqlx::Result<Vec<Submission>> {
     sqlx::query_as!(
@@ -230,7 +230,10 @@ pub async fn submissions_for_student(
 pub struct RunContext {
     pub run_id: i64,
     pub submission_id: i64,
-    pub assignment_id: String,
+    pub assignment_id: i64,
+    /// The assignment's course and slug (for names in the cluster).
+    pub course_id: String,
+    pub slug: String,
     pub build_id: i64,
     pub image_ref: String,
     pub upload_id: i64,
@@ -244,10 +247,12 @@ pub struct RunContext {
 pub async fn run_context(pool: &PgPool, run: i64) -> sqlx::Result<Option<RunContext>> {
     sqlx::query_as!(
         RunContext,
-        "SELECT g.id AS run_id, s.id AS submission_id, s.assignment_id, b.id AS build_id,
-                b.image_ref, b.upload_id, s.object_key, s.tree_hash, g.regrade_batch_id
+        "SELECT g.id AS run_id, s.id AS submission_id, s.assignment_id, a.course_id, a.slug,
+                b.id AS build_id, b.image_ref, b.upload_id, s.object_key, s.tree_hash,
+                g.regrade_batch_id
            FROM grading_runs g
            JOIN submissions s ON s.id = g.submission_id
+           JOIN assignments a ON a.id = s.assignment_id
            JOIN assignment_builds b ON b.id = g.build_id
           WHERE g.id = $1",
         run
@@ -308,7 +313,7 @@ fn decode(e: strum::ParseError) -> sqlx::Error {
 
 struct SubmissionRow {
     id: i64,
-    assignment_id: String,
+    assignment_id: i64,
     student_id: String,
     build_id: i64,
     source: String,
@@ -387,37 +392,35 @@ impl TryFrom<RunRow> for GradingRun {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::db::assignments::{
-        finish_build, finish_validation, record_upload, start_build, upsert_assignment,
-    };
+    use crate::db::assignments::{finish_build, finish_validation, record_upload, start_build};
     use crate::db::queue::claim_next;
     use crate::{QueuedRun, ValidationStatus};
 
     /// An assignment with a current (validated) build; returns the build.
-    pub(crate) async fn current_build(pool: &PgPool, id: &str, image: &str) -> sqlx::Result<i64> {
-        upsert_assignment(pool, id, "Linked List").await?;
-        let up =
-            record_upload(pool, id, image, &format!("assignments/{id}/{image}.tgz"), 1).await?;
-        let build = start_build(
+    pub(crate) async fn current_build(pool: &PgPool, slug: &str, image: &str) -> sqlx::Result<i64> {
+        let a = crate::db::test_assignment(pool, slug).await?;
+        let up = record_upload(
             pool,
-            id,
-            up.id,
+            a.id,
             image,
-            "reg/a:1",
-            &crate::db::test_settings(),
+            &format!("assignments/c/{slug}/{image}.tgz"),
+            1,
         )
         .await?;
+        let build = start_build(pool, &crate::db::test_build(&up, image, "reg/a:1")).await?;
         finish_build(pool, build, true, None).await?;
         finish_validation(pool, build, ValidationStatus::Skipped, None, &[]).await?;
         Ok(build)
     }
 
-    pub(crate) async fn submit(
-        pool: &PgPool,
-        assignment: &str,
-        student: &str,
-        build: i64,
-    ) -> sqlx::Result<Accepted> {
+    /// A submission by `student` against `build` (of its assignment).
+    pub(crate) async fn submit(pool: &PgPool, student: &str, build: i64) -> sqlx::Result<Accepted> {
+        let assignment = sqlx::query_scalar!(
+            "SELECT assignment_id FROM assignment_builds WHERE id = $1",
+            build
+        )
+        .fetch_one(pool)
+        .await?;
         record_submission(
             pool,
             &NewSubmission {
@@ -437,7 +440,7 @@ pub(crate) mod tests {
     #[sqlx::test]
     async fn a_submission_queues_its_first_run(pool: PgPool) -> sqlx::Result<()> {
         let build = current_build(&pool, "ll", "img-a").await?;
-        let acc = submit(&pool, "ll", "s1", build).await?;
+        let acc = submit(&pool, "s1", build).await?;
 
         let sub = get_submission(&pool, acc.submission_id).await?.unwrap();
         assert_eq!(
@@ -451,8 +454,9 @@ pub(crate) mod tests {
             (runs[0].id, runs[0].status, runs[0].reason),
             (acc.run_id, RunStatus::Queued, RunReason::Submission)
         );
-        assert_eq!(submissions_for_student(&pool, "ll", "s1").await?, [sub]);
-        assert!(submissions_for_student(&pool, "ll", "s2").await?.is_empty());
+        let a = sub.assignment_id;
+        assert_eq!(submissions_for_student(&pool, a, "s1").await?, [sub]);
+        assert!(submissions_for_student(&pool, a, "s2").await?.is_empty());
 
         let mut conn = pool.acquire().await?;
         assert_eq!(
@@ -465,7 +469,7 @@ pub(crate) mod tests {
     #[sqlx::test]
     async fn runs_finish_once_and_only_from_grading(pool: PgPool) -> sqlx::Result<()> {
         let build = current_build(&pool, "ll", "img-a").await?;
-        let acc = submit(&pool, "ll", "s1", build).await?;
+        let acc = submit(&pool, "s1", build).await?;
         let graded = RunOutcome {
             score: Some((7.5, 10.0)),
             results: Some(r#"{"summary": {"score": 7.5, "total": 10}}"#),
@@ -494,11 +498,16 @@ pub(crate) mod tests {
     #[sqlx::test]
     async fn run_context_joins_submission_and_build(pool: PgPool) -> sqlx::Result<()> {
         let build = current_build(&pool, "ll", "img-a").await?;
-        let acc = submit(&pool, "ll", "s1", build).await?;
+        let acc = submit(&pool, "s1", build).await?;
         let ctx = run_context(&pool, acc.run_id).await?.unwrap();
         assert_eq!(
-            (ctx.submission_id, ctx.build_id, ctx.assignment_id.as_str()),
-            (acc.submission_id, build, "ll")
+            (
+                ctx.submission_id,
+                ctx.build_id,
+                ctx.course_id.as_str(),
+                ctx.slug.as_str()
+            ),
+            (acc.submission_id, build, "c", "ll")
         );
         assert_eq!(
             (ctx.image_ref.as_str(), ctx.tree_hash.as_str()),
@@ -511,7 +520,7 @@ pub(crate) mod tests {
     #[sqlx::test]
     async fn errors_keep_no_results(pool: PgPool) -> sqlx::Result<()> {
         let build = current_build(&pool, "ll", "img-a").await?;
-        let acc = submit(&pool, "ll", "s1", build).await?;
+        let acc = submit(&pool, "s1", build).await?;
         let mut conn = pool.acquire().await?;
         start_grading(&mut conn, acc.run_id, "grade-1", Isolation::InProcess).await?;
         let problems = vec!["results.yaml is missing".to_string()];
@@ -533,7 +542,7 @@ pub(crate) mod tests {
     #[sqlx::test]
     async fn abandoned_runs_end_as_errors_once(pool: PgPool) -> sqlx::Result<()> {
         let build = current_build(&pool, "ll", "img-a").await?;
-        let acc = submit(&pool, "ll", "s1", build).await?;
+        let acc = submit(&pool, "s1", build).await?;
         assert!(abandon_run(&pool, acc.run_id, "couldn't start: no plan").await?);
         assert!(!abandon_run(&pool, acc.run_id, "again").await?);
         let run = get_run(&pool, acc.run_id).await?.unwrap();
@@ -546,7 +555,8 @@ pub(crate) mod tests {
     async fn batch_notify_reads_the_batch(pool: PgPool) -> sqlx::Result<()> {
         let build = current_build(&pool, "ll", "img-a").await?;
         let batch = sqlx::query!(
-            "INSERT INTO regrade_batches (assignment_id, build_id, notify, runs) VALUES ('ll', $1, 'changed', 0) RETURNING id",
+            "INSERT INTO regrade_batches (assignment_id, build_id, notify, runs)
+             SELECT assignment_id, id, 'changed', 0 FROM assignment_builds WHERE id = $1 RETURNING id",
             build
         )
         .fetch_one(&pool)
@@ -560,7 +570,7 @@ pub(crate) mod tests {
     #[sqlx::test]
     async fn previous_graded_run_skips_errors(pool: PgPool) -> sqlx::Result<()> {
         let build = current_build(&pool, "ll", "img-a").await?;
-        let acc = submit(&pool, "ll", "s1", build).await?;
+        let acc = submit(&pool, "s1", build).await?;
         let mut conn = pool.acquire().await?;
         start_grading(&mut conn, acc.run_id, "g", Isolation::Process).await?;
         let graded = RunOutcome {

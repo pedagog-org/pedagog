@@ -9,8 +9,50 @@ use crate::config::{AuthLimits, Config, Smtp, TlsMode};
 use crate::mail::{Mail, Mailer};
 use crate::state::AppState;
 
+/// What the stand-in jobs was asked: `(path and query, body length)`.
+pub type JobsSeen = Arc<Mutex<Vec<(String, usize)>>>;
+
+/// A stand-in for jobs' upload endpoint: records the request and answers as
+/// jobs would.
+async fn stub_jobs() -> (String, JobsSeen) {
+    use axum::extract::{Path, RawQuery};
+    let seen: JobsSeen = Arc::default();
+    let recorded = seen.clone();
+    let app = axum::Router::new().route(
+        "/internal/courses/{course}/assignments",
+        axum::routing::post(
+            move |Path(course): Path<String>, RawQuery(q): RawQuery, body: axum::body::Bytes| {
+                let recorded = recorded.clone();
+                async move {
+                    let path = format!("/internal/courses/{course}/assignments");
+                    let full = q.map(|q| format!("{path}?{q}")).unwrap_or(path);
+                    recorded.lock().unwrap().push((full, body.len()));
+                    (
+                        axum::http::StatusCode::CREATED,
+                        axum::Json(serde_json::json!({
+                            "course": course, "assignment": "linked-list",
+                            "build": {"status": "dispatched", "build_id": 1}, "warnings": []
+                        })),
+                    )
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    (url, seen)
+}
+
 /// A running api on a free port, with mail kept in memory.
 pub async fn serve(pool: PgPool) -> (String, Arc<Mutex<Vec<Mail>>>) {
+    let (url, outbox, _) = serve_full(pool).await;
+    (url, outbox)
+}
+
+/// [`serve`], plus what the stand-in jobs was asked.
+pub async fn serve_full(pool: PgPool) -> (String, Arc<Mutex<Vec<Mail>>>, JobsSeen) {
+    let (jobs_url, seen) = stub_jobs().await;
     let (mailer, outbox) = Mailer::memory();
     let config = Config {
         database_url: String::new(),
@@ -28,17 +70,20 @@ pub async fn serve(pool: PgPool) -> (String, Arc<Mutex<Vec<Mail>>>) {
         },
         limits: AuthLimits::default(),
         login_domain: "ufl.edu".into(),
+        jobs_url,
+        max_upload_bytes: 1 << 20,
     };
     let state = AppState {
         pool,
         config: Arc::new(config),
         mailer,
         auth: Authenticator::EmailCode,
+        jobs: reqwest::Client::new(),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, crate::http::router(state)).await });
-    (url, outbox)
+    (url, outbox, seen)
 }
 
 pub async fn post(url: &str, body: serde_json::Value, token: Option<&str>) -> reqwest::Response {

@@ -1,4 +1,5 @@
-//! `hammer upload`: pack an assignment directory and POST it to jobs.
+//! `hammer upload`: pack an assignment directory and POST it to a course,
+//! through the api (as you) or straight to jobs (operators).
 
 use std::path::Path;
 use std::time::Duration;
@@ -10,8 +11,41 @@ use serde::Deserialize;
 use tar::{Builder, EntryType, Header};
 use walkdir::WalkDir;
 
-pub const JOBS_URL_ENV: &str = "PEDAGOG_JOBS_URL";
-pub const DEFAULT_JOBS_URL: &str = "http://localhost:18081";
+/// Where uploads and build statuses go.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Endpoint {
+    /// The api, with the session's token.
+    Api { base: String, token: String },
+    /// jobs' internal endpoints (no login; operators and e2e).
+    Jobs(String),
+}
+
+impl Endpoint {
+    /// `path` (e.g. `/courses/c/assignments`) on this endpoint.
+    pub fn url(&self, path: &str) -> String {
+        match self {
+            Endpoint::Api { base, .. } => format!("{}{path}", base.trim_end_matches('/')),
+            Endpoint::Jobs(base) => format!("{}/internal{path}", base.trim_end_matches('/')),
+        }
+    }
+
+    fn authorized(
+        &self,
+        req: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
+        match self {
+            Endpoint::Api { token, .. } => req.bearer_auth(token),
+            Endpoint::Jobs(_) => req,
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Endpoint::Api { .. } => "the api",
+            Endpoint::Jobs(_) => "jobs",
+        }
+    }
+}
 
 /// VCS metadata never belongs in an assignment.
 const SKIPPED_DIRS: [&str; 3] = [".git", ".hg", ".svn"];
@@ -20,7 +54,9 @@ const UPLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 /// jobs' reply to an accepted upload.
 #[derive(Debug, Deserialize)]
 pub struct Uploaded {
-    pub assignment_id: String,
+    pub course: String,
+    /// The assignment's slug.
+    pub assignment: String,
     pub upload_id: i64,
     pub tree_hash: String,
     pub size_bytes: i64,
@@ -54,31 +90,35 @@ const POLL_INTERVAL: Duration = Duration::from_secs(3);
 
 /// Polls until the attempt finishes, calling `progress` whenever its stage changes.
 pub fn wait(
-    jobs_url: &str,
+    to: &Endpoint,
+    course: &str,
     assignment: &str,
     build: i64,
     mut progress: impl FnMut(&Status),
 ) -> Result<Status, String> {
-    let url = format!(
-        "{}/internal/assignments/{assignment}/builds/{build}",
-        jobs_url.trim_end_matches('/')
-    );
+    let url = to.url(&format!(
+        "/courses/{course}/assignments/{assignment}/builds/{build}"
+    ));
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
     let mut last = String::new();
     loop {
-        let reply = client
-            .get(&url)
+        let reply = to
+            .authorized(client.get(&url))
             .send()
-            .map_err(|e| format!("cannot reach jobs at {url}: {e}"))?;
+            .map_err(|e| format!("cannot reach {} at {url}: {e}", to.name()))?;
         if !reply.status().is_success() {
-            return Err(format!("jobs answered {} for {url}", reply.status()));
+            return Err(format!(
+                "{} answered {} for {url}",
+                to.name(),
+                reply.status()
+            ));
         }
         let body = reply.text().map_err(|e| e.to_string())?;
         let status: Status = serde_json::from_str(&body)
-            .map_err(|e| format!("unexpected reply from jobs: {e}: {body}"))?;
+            .map_err(|e| format!("unexpected reply from {}: {e}: {body}", to.name()))?;
         let stage = format!("{}/{}", status.build_status, status.validation_status);
         if stage != last {
             progress(&status);
@@ -193,10 +233,11 @@ fn is_executable(_: &Path) -> bool {
     false
 }
 
-/// POSTs the archive; jobs' refusals come back as their message. `regrade`
-/// asks for a regrade, telling students per its `Notify`.
+/// POSTs the archive to `course`; refusals come back as their message.
+/// `regrade` asks for a regrade, telling students per its `Notify`.
 pub fn send(
-    jobs_url: &str,
+    to: &Endpoint,
+    course: &str,
     archive: Vec<u8>,
     force: bool,
     regrade: Option<Notify>,
@@ -209,21 +250,24 @@ pub fn send(
     if let Some(notify) = &notify {
         params.push(("regrade", notify.as_str()));
     }
-    let url = reqwest::Url::parse_with_params(
-        &format!("{}/internal/assignments", jobs_url.trim_end_matches('/')),
-        &params,
-    )
-    .map_err(|e| format!("invalid jobs URL {jobs_url:?}: {e}"))?;
+    let base = to.url(&format!("/courses/{course}/assignments"));
+    let url = reqwest::Url::parse_with_params(&base, &params)
+        .map_err(|e| format!("invalid URL {base:?}: {e}"))?;
     let client = reqwest::blocking::Client::builder()
         .timeout(UPLOAD_TIMEOUT)
         .build()
         .map_err(|e| e.to_string())?;
-    let reply = client
-        .post(url.clone())
+    let reply = to
+        .authorized(client.post(url.clone()))
         .header(reqwest::header::CONTENT_TYPE, "application/gzip")
         .body(archive)
         .send()
-        .map_err(|e| format!("cannot reach jobs at {url}: {e} (is the port-forward running?)"))?;
+        .map_err(|e| {
+            format!(
+                "cannot reach {} at {url}: {e} (is the port-forward running?)",
+                to.name()
+            )
+        })?;
     let status = reply.status();
     let body = reply.text().map_err(|e| e.to_string())?;
     if !status.is_success() {
@@ -231,9 +275,13 @@ pub fn send(
             .ok()
             .and_then(|v| v.get("error")?.as_str().map(str::to_owned))
             .unwrap_or(body);
-        return Err(format!("jobs refused the upload ({status}): {message}"));
+        return Err(format!(
+            "{} refused the upload ({status}): {message}",
+            to.name()
+        ));
     }
-    serde_json::from_str(&body).map_err(|e| format!("unexpected reply from jobs: {e}: {body}"))
+    serde_json::from_str(&body)
+        .map_err(|e| format!("unexpected reply from {}: {e}: {body}", to.name()))
 }
 
 #[cfg(test)]

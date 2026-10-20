@@ -107,13 +107,13 @@ impl Objects {
 }
 
 /// Object key for an uploaded assignment archive, by content hash.
-pub fn archive_key(assignment_id: &str, sha256: &str) -> String {
-    format!("assignments/{assignment_id}/{sha256}.tgz")
+pub fn archive_key(course: &str, slug: &str, sha256: &str) -> String {
+    format!("assignments/{course}/{slug}/{sha256}.tgz")
 }
 
 /// Object key for a submission's normalized tree, by content hash.
-pub fn submission_key(assignment_id: &str, tree_hash: &str) -> String {
-    format!("submissions/{assignment_id}/{tree_hash}.tgz")
+pub fn submission_key(course: &str, slug: &str, tree_hash: &str) -> String {
+    format!("submissions/{course}/{slug}/{tree_hash}.tgz")
 }
 
 /// Object key a grading run uploads its `results.yaml` to.
@@ -133,8 +133,8 @@ mod tests {
     #[test]
     fn keys_are_namespaced_and_stable() {
         assert_eq!(
-            archive_key("pointers", "ab12"),
-            "assignments/pointers/ab12.tgz"
+            archive_key("cop3502-f26", "pointers", "ab12"),
+            "assignments/cop3502-f26/pointers/ab12.tgz"
         );
         assert_eq!(results_key(42), "results/42/results.yaml");
     }

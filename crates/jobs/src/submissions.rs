@@ -1,10 +1,11 @@
-//! `POST /internal/assignments/{id}/submissions?student=<id>`: accept a
+//! `POST /internal/courses/{course}/assignments/{slug}/submissions?student=<id>`: accept a
 //! submission (several files, or one archive), normalize it with the
 //! assignment's `submission:` rules, store it, and queue its grading run
 //! against the current build.
 //!
 //! `GET /internal/submissions/{id}` and
-//! `GET /internal/assignments/{id}/submissions?student=<id>` report them.
+//! `GET /internal/courses/{course}/assignments/{slug}/submissions?student=<id>`
+//! report them.
 //!
 //! Normalization, in order: unpack a single archive (unless `archives: keep`),
 //! drop OS clutter, strip one wrapping folder (`strip: auto`), apply
@@ -20,14 +21,14 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use pedagog_core::recipe::platform::PlatformKind;
 use pedagog_core::recipe::submission::{Archives, Strip, SubmissionRules, Unmatched, is_junk};
-use pedagog_store::QueuedRun;
-use pedagog_store::SubmissionSource;
 use pedagog_store::db::{assignments as builds_db, queue, submissions as db};
 use pedagog_store::objects::submission_key;
+use pedagog_store::{Assignment, QueuedRun, SubmissionSource};
 use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, ArchiveError, Entry, Limits, TreeFile};
 use crate::http::error::{Refused, internal, refused};
+use crate::intake::find_assignment;
 use crate::settings::{RunSettings, settings_of};
 use crate::state::AppState;
 
@@ -320,7 +321,7 @@ const MAX_STUDENT_ID: usize = 128;
 
 pub async fn submit(
     State(state): State<AppState>,
-    UrlPath(id): UrlPath<String>,
+    UrlPath((course, slug)): UrlPath<(String, String)>,
     Query(query): Query<SubmitQuery>,
     multipart: Multipart,
 ) -> Result<Response, Refused> {
@@ -332,12 +333,13 @@ pub async fn submit(
             format!("student must be 1–{MAX_STUDENT_ID} printable characters"),
         ));
     }
-    let (build_id, settings) = current_settings(&state, &id).await?;
+    let assignment = find_assignment(&state, &course, &slug).await?;
+    let (build_id, settings) = current_settings(&state, &assignment).await?;
     if settings.platform != PlatformKind::Upload {
         return Err(refused(
             StatusCode::CONFLICT,
             format!(
-                "{id} is a {} assignment: its submissions come from the session workspace, which arrives with sessions",
+                "{slug} is a {} assignment: its submissions come from the session workspace, which arrives with sessions",
                 settings.platform
             ),
         ));
@@ -356,7 +358,7 @@ pub async fn submit(
     .map_err(|e| internal("normalizing the submission", e))??;
     let (bytes, tree_hash) = packed;
 
-    let key = submission_key(&id, &tree_hash);
+    let key = submission_key(&course, &slug, &tree_hash);
     let size = i64::try_from(normalized.receipt.size_bytes).unwrap_or(i64::MAX);
     state
         .objects
@@ -368,7 +370,7 @@ pub async fn submit(
     let accepted = db::record_submission(
         &state.pool,
         &db::NewSubmission {
-            assignment_id: &id,
+            assignment_id: assignment.id,
             student_id: &student,
             build_id,
             source: SubmissionSource::Upload,
@@ -384,7 +386,7 @@ pub async fn submit(
         .await
         .map_err(|e| internal("reading the queue", e))?;
     tracing::info!(
-        assignment = %id, student = %student, submission = accepted.submission_id,
+        %course, assignment = %slug, student = %student, submission = accepted.submission_id,
         run = accepted.run_id, build = build_id, files = normalized.receipt.files.len(),
         "submission accepted"
     );
@@ -424,7 +426,8 @@ pub struct RunStatus {
 #[derive(Debug, Serialize)]
 pub struct SubmissionStatus {
     pub id: i64,
-    pub assignment_id: String,
+    pub course: String,
+    pub assignment: String,
     pub student_id: String,
     /// The build current when it was accepted.
     pub build_id: i64,
@@ -454,14 +457,15 @@ pub struct StudentQuery {
     student: String,
 }
 
-/// `GET /internal/assignments/{id}/submissions?student=<id>`: a student's
-/// submissions to an assignment, latest first, each with its runs.
+/// `GET /internal/courses/{course}/assignments/{slug}/submissions?student=<id>`:
+/// a student's submissions to an assignment, latest first, each with its runs.
 pub async fn student_submissions(
     State(state): State<AppState>,
-    UrlPath(id): UrlPath<String>,
+    UrlPath((course, slug)): UrlPath<(String, String)>,
     Query(query): Query<StudentQuery>,
 ) -> Result<Response, Refused> {
-    let submissions = db::submissions_for_student(&state.pool, &id, &query.student)
+    let assignment = find_assignment(&state, &course, &slug).await?;
+    let submissions = db::submissions_for_student(&state.pool, assignment.id, &query.student)
         .await
         .map_err(|e| internal("reading the submissions", e))?;
     let mut out = Vec::with_capacity(submissions.len());
@@ -476,6 +480,10 @@ async fn status_of(
     submission: pedagog_store::Submission,
 ) -> Result<SubmissionStatus, Refused> {
     let json = |text: Option<String>| text.and_then(|t| serde_json::from_str(&t).ok());
+    let assignment = builds_db::assignment_by_id(&state.pool, submission.assignment_id)
+        .await
+        .map_err(|e| internal("reading the assignment", e))?
+        .ok_or_else(|| internal("reading the assignment", "missing"))?;
     let mut runs = Vec::new();
     for run in db::runs_for_submission(&state.pool, submission.id)
         .await
@@ -507,7 +515,8 @@ async fn status_of(
     }
     Ok(SubmissionStatus {
         id: submission.id,
-        assignment_id: submission.assignment_id,
+        course: assignment.course_id,
+        assignment: assignment.slug,
         student_id: submission.student_id,
         build_id: submission.build_id,
         source: submission.source.to_string(),
@@ -520,16 +529,19 @@ async fn status_of(
 
 /// The assignment's current build and its run settings (from the build row;
 /// no archive is read).
-async fn current_settings(state: &AppState, id: &str) -> Result<(i64, RunSettings), Refused> {
-    let build_id = builds_db::current_build_id(&state.pool, id)
-        .await
-        .map_err(|e| internal("reading the assignment", e))?
-        .ok_or_else(|| {
-            refused(
-                StatusCode::CONFLICT,
-                format!("{id} has no usable build yet: upload it and wait for validation"),
-            )
-        })?;
+async fn current_settings(
+    state: &AppState,
+    assignment: &Assignment,
+) -> Result<(i64, RunSettings), Refused> {
+    let build_id = assignment.current_build_id.ok_or_else(|| {
+        refused(
+            StatusCode::CONFLICT,
+            format!(
+                "{} has no usable build yet: upload it and wait for validation",
+                assignment.slug
+            ),
+        )
+    })?;
     let build = builds_db::build_by_id(&state.pool, build_id)
         .await
         .map_err(|e| internal("reading the build", e))?

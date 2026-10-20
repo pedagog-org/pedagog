@@ -11,7 +11,7 @@ use pedagog_k8s::runs::{RunEnded, RunKind};
 use pedagog_store::ValidationStatus;
 use pedagog_store::db::{assignments as builds_db, queue, submissions as db};
 
-use crate::assignments;
+use crate::assignments::{self, job_id};
 use crate::grading;
 use crate::state::AppState;
 
@@ -57,7 +57,7 @@ async fn sweep_once(state: &AppState) -> anyhow::Result<()> {
         let Some(ctx) = db::run_context(&state.pool, run.id).await? else {
             continue;
         };
-        let key = JobKey::grading(&ctx.assignment_id, run.id);
+        let key = JobKey::grading(&job_id(&ctx.course_id, &ctx.slug), run.id);
         if let Some(succeeded) = finished(state, &key).await? {
             settle(
                 state,
@@ -74,7 +74,7 @@ async fn sweep_once(state: &AppState) -> anyhow::Result<()> {
         if build.validation_status != ValidationStatus::Running {
             continue;
         }
-        let key = JobKey::validation(&build.assignment_id, build.id);
+        let key = JobKey::validation(&job_id(&build.course_id, &build.slug), build.id);
         if let Some(succeeded) = finished(state, &key).await? {
             settle(
                 state,

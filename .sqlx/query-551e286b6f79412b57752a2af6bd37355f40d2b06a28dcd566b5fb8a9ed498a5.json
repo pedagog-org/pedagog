@@ -17,7 +17,7 @@
       {
         "ordinal": 1,
         "name": "assignment_id",
-        "type_info": "Text",
+        "type_info": "Int8",
         "origin": {
           "Table": {
             "table": "submissions",
@@ -100,7 +100,7 @@
     ],
     "parameters": {
       "Left": [
-        "Text",
+        "Int8",
         "Text"
       ]
     },

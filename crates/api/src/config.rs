@@ -15,8 +15,13 @@ pub const MAIL_FROM_NAME: &str = "PEDAGOG_MAIL_FROM_NAME";
 pub const MAIL_FROM_ADDRESS: &str = "PEDAGOG_MAIL_FROM_ADDRESS";
 pub const MAIL_REPLY_TO: &str = "PEDAGOG_MAIL_REPLY_TO";
 pub const LOGIN_DOMAIN: &str = "PEDAGOG_LOGIN_DOMAIN";
+pub const JOBS_URL: &str = "PEDAGOG_JOBS_URL";
+pub const MAX_UPLOAD_BYTES: &str = "PEDAGOG_MAX_UPLOAD_BYTES";
 
 const DEFAULT_LISTEN: &str = "0.0.0.0:8080";
+const DEFAULT_JOBS_URL: &str = "http://pedagog-jobs.pedagog-builds.svc:8080";
+/// jobs' own default limit on an assignment archive.
+const DEFAULT_MAX_UPLOAD: usize = 50 << 20;
 
 pub struct Config {
     pub database_url: String,
@@ -29,6 +34,10 @@ pub struct Config {
     pub limits: AuthLimits,
     /// Canvas roster logins become `<login>@<this>`.
     pub login_domain: String,
+    /// jobs' internal endpoints (uploads, submissions).
+    pub jobs_url: String,
+    /// The largest assignment archive passed on to jobs.
+    pub max_upload_bytes: usize,
 }
 
 /// How mail leaves: a relay that may or may not want a login, with or
@@ -133,6 +142,16 @@ impl Config {
             },
             limits: AuthLimits::default(),
             login_domain: var(LOGIN_DOMAIN).unwrap_or_else(|| "ufl.edu".to_owned()),
+            jobs_url: var(JOBS_URL)
+                .unwrap_or_else(|| DEFAULT_JOBS_URL.to_owned())
+                .trim_end_matches('/')
+                .to_owned(),
+            max_upload_bytes: match var(MAX_UPLOAD_BYTES) {
+                Some(n) => n.parse().map_err(|_| {
+                    anyhow::anyhow!("{MAX_UPLOAD_BYTES} must be a number of bytes, got {n:?}")
+                })?,
+                None => DEFAULT_MAX_UPLOAD,
+            },
         })
     }
 }
@@ -167,6 +186,9 @@ mod tests {
         assert_eq!(c.public_url, "https://pedagog.example");
         assert!(c.cookie_secure);
         assert_eq!(c.smtp.from_name, "Pedagog");
+        assert_eq!(c.jobs_url, DEFAULT_JOBS_URL);
+        assert_eq!(c.max_upload_bytes, 50 << 20);
+        assert!(config(&[(MAX_UPLOAD_BYTES, "lots")]).is_err());
     }
 
     #[test]

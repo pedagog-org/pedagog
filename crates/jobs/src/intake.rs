@@ -1,6 +1,8 @@
-//! `POST /internal/assignments[?force=true]`: accept an assignment archive,
-//! check it, store it in Garage, and dispatch its build.
-//! `GET /internal/assignments/{id}/builds/{build}`: an attempt's progress and outcome.
+//! `POST /internal/courses/{course}/assignments[?force=true]`: accept an
+//! assignment archive for a course, check it, store it in Garage, and dispatch
+//! its build.
+//! `GET /internal/courses/{course}/assignments/{slug}/builds/{build}`: an
+//! attempt's progress and outcome.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -14,9 +16,9 @@ use pedagog_core::recipe::render::containerfile::Containerfile;
 use pedagog_core::recipe::render::{AssignmentFiles, FromSource, Render, RenderOptions};
 use pedagog_core::recipe::resolve::resolve;
 use pedagog_core::recipe::store::RecipeStore;
-use pedagog_store::Notify;
 use pedagog_store::db::assignments as db;
 use pedagog_store::objects::archive_key;
+use pedagog_store::{Assignment, Notify};
 use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, ArchiveError, Limits};
@@ -27,7 +29,9 @@ use crate::state::AppState;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct Uploaded {
-    pub assignment_id: String,
+    pub course: String,
+    /// The assignment's slug (its id in assignment.yml).
+    pub assignment: String,
     pub upload_id: i64,
     pub tree_hash: String,
     pub size_bytes: i64,
@@ -131,11 +135,39 @@ pub fn check_upload(
     })
 }
 
+/// The course's assignment named by a URL, or 404.
+pub(crate) async fn find_assignment(
+    state: &AppState,
+    course: &str,
+    slug: &str,
+) -> Result<Assignment, Refused> {
+    db::assignment(&state.pool, course, slug)
+        .await
+        .map_err(|e| internal("reading the assignment", e))?
+        .ok_or_else(|| {
+            refused(
+                StatusCode::NOT_FOUND,
+                format!("{course} has no assignment {slug}"),
+            )
+        })
+}
+
 pub async fn upload(
     State(state): State<AppState>,
+    UrlPath(course): UrlPath<String>,
     Query(query): Query<UploadQuery>,
     body: Bytes,
 ) -> Result<Response, Refused> {
+    if pedagog_store::db::accounts::course(&state.pool, &course)
+        .await
+        .map_err(|e| internal("reading the course", e))?
+        .is_none()
+    {
+        return Err(refused(
+            StatusCode::NOT_FOUND,
+            format!("no course {course}"),
+        ));
+    }
     let regrade = query
         .regrade
         .as_deref()
@@ -157,25 +189,26 @@ pub async fn upload(
             .await
             .map_err(|e| internal("checking the upload", e))??;
 
-    let id = checked.assignment.id.to_string();
-    let key = archive_key(&id, &checked.tree_hash);
+    let slug = checked.assignment.id.to_string();
+    let key = archive_key(&course, &slug, &checked.tree_hash);
     state
         .objects
         .put(&key, body.to_vec())
         .await
         .map_err(|e| internal("storing the archive", e))?;
-    db::upsert_assignment(&state.pool, &id, &checked.assignment.name)
+    let assignment = db::upsert_assignment(&state.pool, &course, &slug, &checked.assignment.name)
         .await
         .map_err(|e| internal("recording the assignment", e))?;
     let size = i64::try_from(body.len()).unwrap_or(i64::MAX);
-    let upload = db::record_upload(&state.pool, &id, &checked.tree_hash, &key, size)
+    let upload = db::record_upload(&state.pool, assignment.id, &checked.tree_hash, &key, size)
         .await
         .map_err(|e| internal("recording the upload", e))?;
-    tracing::info!(assignment = %id, upload = upload.id, tree = %checked.tree_hash, "upload stored");
+    tracing::info!(%course, assignment = %slug, upload = upload.id, tree = %checked.tree_hash, "upload stored");
 
     let tree_hash = checked.tree_hash.clone();
     let mut warnings = checked.warnings.clone();
-    let plan = Plan::from_checked(checked, upload.id, key, query.force);
+    let plan = Plan::from_checked(checked, &assignment, upload.id, key, query.force)
+        .map_err(|e| internal("planning the build", e))?;
     let build = assignments::dispatch(&state, plan)
         .await
         .map_err(|e| internal("dispatching the build", e))?;
@@ -193,7 +226,8 @@ pub async fn upload(
     }
 
     let reply = Uploaded {
-        assignment_id: id,
+        course,
+        assignment: slug,
         upload_id: upload.id,
         tree_hash,
         size_bytes: size,
@@ -209,7 +243,8 @@ const ERROR_TAIL: usize = 4000;
 #[derive(Debug, Serialize)]
 pub struct BuildStatus {
     pub id: i64,
-    pub assignment_id: String,
+    pub course: String,
+    pub assignment: String,
     pub image_ref: String,
     pub build_status: String,
     pub validation_status: String,
@@ -224,24 +259,27 @@ pub struct BuildStatus {
 
 pub async fn build_status(
     State(state): State<AppState>,
-    UrlPath((id, build)): UrlPath<(String, i64)>,
+    UrlPath((course, slug, build)): UrlPath<(String, String, i64)>,
 ) -> Result<Response, Refused> {
-    let row = db::get_build(&state.pool, &id, build)
+    let assignment = find_assignment(&state, &course, &slug).await?;
+    let row = db::get_build(&state.pool, assignment.id, build)
         .await
         .map_err(|e| internal("reading the build", e))?
-        .ok_or_else(|| refused(StatusCode::NOT_FOUND, format!("{id} has no build {build}")))?;
-    let current = db::current_build_id(&state.pool, &id)
-        .await
-        .map_err(|e| internal("reading the assignment", e))?
-        == Some(row.id);
+        .ok_or_else(|| {
+            refused(
+                StatusCode::NOT_FOUND,
+                format!("{course}/{slug} has no build {build}"),
+            )
+        })?;
     let reply = BuildStatus {
         id: row.id,
-        assignment_id: row.assignment_id,
+        current: assignment.current_build_id == Some(row.id),
+        course,
+        assignment: slug,
         image_ref: row.image_ref,
         build_status: row.build_status.to_string(),
         validation_status: row.validation_status.to_string(),
         finished: row.finished,
-        current,
         error: row
             .error
             .map(|e| e[e.len().saturating_sub(ERROR_TAIL)..].to_owned()),
@@ -252,17 +290,26 @@ pub async fn build_status(
 }
 
 impl Plan {
-    pub fn from_checked(checked: Checked, upload_id: i64, object_key: String, force: bool) -> Self {
-        Plan {
-            assignment_id: checked.assignment.id.to_string(),
+    pub fn from_checked(
+        checked: Checked,
+        assignment: &Assignment,
+        upload_id: i64,
+        object_key: String,
+        force: bool,
+    ) -> anyhow::Result<Self> {
+        Ok(Plan {
+            assignment_id: assignment.id,
+            course: assignment.course_id.clone(),
+            slug: assignment.slug.clone(),
             upload_id,
             tree_hash: checked.tree_hash,
             object_key,
             containerfile: checked.containerfile,
             has_solution: checked.has_solution,
             settings: RunSettings::of(&checked.assignment),
+            policy: serde_json::to_string(&checked.assignment.assignment)?,
             force,
-        }
+        })
     }
 }
 

@@ -68,11 +68,23 @@ impl ValidationStatus {
     }
 }
 
+/// An `assignments` row: an assignment of one course, keyed by `id`; `slug` is
+/// the id in its `assignment.yml`, unique within the course.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Assignment {
+    pub id: i64,
+    pub course_id: String,
+    pub slug: String,
+    pub name: String,
+    /// The build sessions and grading use.
+    pub current_build_id: Option<i64>,
+}
+
 /// An `assignment_uploads` row: one distinct file tree of an assignment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AssignmentUpload {
     pub id: i64,
-    pub assignment_id: String,
+    pub assignment_id: i64,
     pub tree_hash: String,
     pub object_key: String,
     pub size_bytes: i64,
@@ -82,7 +94,10 @@ pub struct AssignmentUpload {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AssignmentBuild {
     pub id: i64,
-    pub assignment_id: String,
+    pub assignment_id: i64,
+    /// The assignment's course and slug (for names in the cluster).
+    pub course_id: String,
+    pub slug: String,
     pub upload_id: i64,
     pub image_hash: String,
     pub image_ref: String,
@@ -96,6 +111,9 @@ pub struct AssignmentBuild {
     pub finished: bool,
     /// What its test runs need; `None` for builds from before they were saved.
     pub settings: Option<BuildSettings>,
+    /// The file's `assignment:` policy as JSON text; `None` for builds from
+    /// before it was saved (the default policy).
+    pub policy: Option<String>,
 }
 
 /// A build's run settings as stored; `jobs` owns what the JSON means.
@@ -121,7 +139,7 @@ pub enum SubmissionSource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Submission {
     pub id: i64,
-    pub assignment_id: String,
+    pub assignment_id: i64,
     pub student_id: String,
     /// The build current when the submission was accepted.
     pub build_id: i64,

@@ -3,7 +3,9 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde::Deserialize;
 
-const ID_PATTERN: &str = r"^[a-z][a-z0-9-]*$";
+// Ids go into image references and Kubernetes names: a letter first, a letter
+// or digit last, at most 40 characters.
+const ID_PATTERN: &str = r"^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$";
 const PKG_PATTERN: &str = r"^[a-z0-9][a-z0-9+.-]*$";
 
 #[allow(clippy::expect_used)]
@@ -95,6 +97,9 @@ mod tests {
         assert!(Id::try_from("GCC".to_owned()).is_err());
         assert!(Id::try_from("gcc_13".to_owned()).is_err());
         assert!(Id::try_from("gcc 13".to_owned()).is_err());
+        assert!(Id::try_from("gcc-".to_owned()).is_err());
+        assert!(Id::try_from("a".repeat(41)).is_err());
+        assert!(Id::try_from("a".repeat(40)).is_ok());
     }
 
     #[test]

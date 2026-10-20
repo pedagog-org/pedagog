@@ -27,15 +27,15 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/internal/recipes/rebuild", post(rebuild))
         .route(
-            "/internal/assignments",
+            "/internal/courses/{course}/assignments",
             post(intake::upload).layer(DefaultBodyLimit::max(max_upload)),
         )
         .route(
-            "/internal/assignments/{id}/builds/{build}",
+            "/internal/courses/{course}/assignments/{slug}/builds/{build}",
             get(intake::build_status),
         )
         .route(
-            "/internal/assignments/{id}/submissions",
+            "/internal/courses/{course}/assignments/{slug}/submissions",
             post(submissions::submit)
                 .layer(DefaultBodyLimit::max(max_submission))
                 .get(submissions::student_submissions),

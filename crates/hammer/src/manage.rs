@@ -88,6 +88,15 @@ impl Api {
         )
     }
 
+    pub fn patch(&self, path: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+        self.send(
+            self.client
+                .patch(self.url(path))
+                .header("content-type", "application/json")
+                .body(body.to_string()),
+        )
+    }
+
     pub fn delete(&self, path: &str) -> Result<serde_json::Value, String> {
         self.send(self.client.delete(self.url(path)))
     }
@@ -351,6 +360,62 @@ pub fn added(v: &serde_json::Value) -> String {
     }
 }
 
+fn build_line(b: &serde_json::Value) -> String {
+    format!(
+        "build {}: {}/{}{}{}",
+        b["id"],
+        str_of(b, "build_status"),
+        str_of(b, "validation_status"),
+        if b["finished"].as_bool() == Some(false) {
+            " (in progress)"
+        } else {
+            ""
+        },
+        if b["current"].as_bool() == Some(true) {
+            " (current)"
+        } else {
+            ""
+        }
+    )
+}
+
+/// `assignments list`.
+pub fn assignments(list: &serde_json::Value) -> Vec<String> {
+    or_none(
+        list.as_array()
+            .into_iter()
+            .flatten()
+            .map(|a| {
+                let line = format!("{}: {}", str_of(a, "slug"), str_of(a, "name"));
+                match a.get("latest_build") {
+                    Some(b) if !b.is_null() => format!("{line}  [{}]", build_line(b)),
+                    Some(_) => format!("{line}  [no builds]"),
+                    None => line,
+                }
+            })
+            .collect(),
+        "no assignments",
+    )
+}
+
+/// `assignments show`.
+pub fn assignment(a: &serde_json::Value) -> Vec<String> {
+    let mut lines = vec![format!(
+        "{}/{}: {}",
+        str_of(a, "course"),
+        str_of(a, "slug"),
+        str_of(a, "name")
+    )];
+    let builds: Vec<String> = a["builds"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|b| format!("  {}", build_line(b)))
+        .collect();
+    lines.extend(or_none(builds, "  no builds"));
+    lines
+}
+
 /// Who a sync would drop.
 pub fn would_drop(v: &serde_json::Value) -> Vec<String> {
     v["would_drop"]
@@ -498,6 +563,31 @@ mod tests {
                 &json!({"email": "b@ufl.edu", "role": "grader", "change": "changed", "from": "student"})
             ),
             "b@ufl.edu: student -> grader"
+        );
+    }
+
+    #[test]
+    fn assignments_read_well() {
+        let list = json!([
+            {"slug": "linked-list", "name": "Linked List", "current_build": 3,
+             "latest_build": {"id": 4, "build_status": "running", "validation_status": "pending", "finished": false, "current": false}},
+            {"slug": "maps", "name": "Maps", "latest_build": null},
+            {"slug": "graphs", "name": "Graphs"}
+        ]);
+        assert_eq!(
+            assignments(&list),
+            [
+                "linked-list: Linked List  [build 4: running/pending (in progress)]",
+                "maps: Maps  [no builds]",
+                "graphs: Graphs"
+            ]
+        );
+        let shown = json!({"course": "c", "slug": "ll", "name": "LL", "builds": [
+            {"id": 3, "build_status": "succeeded", "validation_status": "passed", "finished": true, "current": true}
+        ]});
+        assert_eq!(
+            assignment(&shown),
+            ["c/ll: LL", "  build 3: succeeded/passed (current)"]
         );
     }
 

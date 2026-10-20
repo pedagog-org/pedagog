@@ -99,13 +99,14 @@ fn walk(dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
 /// POSTs the files; jobs' refusals come back as their message.
 pub fn send(
     jobs_url: &str,
+    course: &str,
     assignment: &str,
     student: &str,
     files: &BTreeMap<String, PathBuf>,
 ) -> Result<Submitted, String> {
     let url = reqwest::Url::parse_with_params(
         &format!(
-            "{}/internal/assignments/{assignment}/submissions",
+            "{}/internal/courses/{course}/assignments/{assignment}/submissions",
             jobs_url.trim_end_matches('/')
         ),
         &[("student", student)],

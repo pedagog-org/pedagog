@@ -16,6 +16,8 @@ UPLOAD_EXAMPLE=recipes/examples/linked-list-python-upload
 UPLOAD_ID=linked-list-python-upload
 PORT=18081
 URL=http://localhost:$PORT
+# Uploads go straight to jobs (no login), into a course of their own.
+COURSE=e2e
 export HAMMER_RECIPES="$PWD/recipes"
 
 failures=0
@@ -26,10 +28,10 @@ sql() { k -n pedagog-data exec deploy/postgres -- psql -U pedagog -d pedagog -tA
 
 cargo build -q -p hammer
 HAMMER=target/debug/hammer
-upload() { "$HAMMER" upload "$1" --jobs-url "$URL" -q "${@:2}" 2>&1; }
+upload() { "$HAMMER" upload "$1" -c "$COURSE" --jobs-url "$URL" -q "${@:2}" 2>&1; }
 build_id() { grep -oE "build [0-9]+" | head -1 | grep -oE "[0-9]+"; }
 # Fixed student ids, so each run's regrade covers the same few submissions.
-submit() { "$HAMMER" submit "${@:3}" --assignment "$1" --student "e2e-$2" --jobs-url "$URL" 2>&1; }
+submit() { "$HAMMER" submit "${@:3}" -c "$COURSE" --assignment "$1" --student "e2e-$2" --jobs-url "$URL" 2>&1; }
 # hammer's error report wraps long lines: join them (and drop its colors and frame).
 flat() { sed 's/\x1b\[[0-9;]*m//g; s/[│×]//g' | tr -s ' \n' ' '; }
 
@@ -51,6 +53,7 @@ forward() {
     exit 1
 }
 forward
+sql "INSERT INTO courses (id, name) VALUES ('$COURSE', 'End-to-end checks') ON CONFLICT DO NOTHING" >/dev/null
 work=$(mktemp -d)
 trap 'kill $PF 2>/dev/null; rm -rf "$work"' EXIT
 
@@ -71,7 +74,7 @@ if [ $status -ne 0 ] && echo "$out" | grep -q "pop-front: expected the solution 
 else
     fail "buggy solution fails with the mismatch (exit $status): $out"
 fi
-current=$(sql "SELECT b.validation_status FROM assignments a JOIN assignment_builds b ON b.id = a.current_build_id WHERE a.id = 'linked-list-python'")
+current=$(sql "SELECT b.validation_status FROM assignments a JOIN assignment_builds b ON b.id = a.current_build_id WHERE a.course_id = '$COURSE' AND a.slug = '$EXAMPLE_ID'")
 if [ "$current" = passed ]; then pass "a failed build doesn't replace the current one"; else fail "current build is '$current'"; fi
 
 echo "== 4. a newer upload supersedes an attempt in flight"

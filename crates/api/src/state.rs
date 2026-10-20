@@ -14,4 +14,6 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub mailer: Mailer,
     pub auth: Authenticator,
+    /// For jobs' internal endpoints.
+    pub jobs: reqwest::Client,
 }

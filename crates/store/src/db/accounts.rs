@@ -263,6 +263,82 @@ pub async fn course(pool: &PgPool, id: &str) -> sqlx::Result<Option<Course>> {
         .await
 }
 
+/// What renaming a course did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Renamed {
+    Done(Course),
+    /// The new slug belongs to another course.
+    Taken,
+    Missing,
+}
+
+/// Change a course's slug and/or name. Memberships and assignments follow the
+/// slug; the old one is remembered (see [`renamed_to`]).
+pub async fn rename_course(
+    pool: &PgPool,
+    id: &str,
+    new_id: Option<&str>,
+    new_name: Option<&str>,
+) -> sqlx::Result<Renamed> {
+    let mut tx = pool.begin().await?;
+    let to = new_id.unwrap_or(id);
+    if to != id
+        && sqlx::query_scalar!("SELECT id FROM courses WHERE id = $1", to)
+            .fetch_optional(&mut *tx)
+            .await?
+            .is_some()
+    {
+        return Ok(Renamed::Taken);
+    }
+    let Some(course) = sqlx::query_as!(
+        Course,
+        "UPDATE courses SET id = $2, name = COALESCE($3, name) WHERE id = $1 RETURNING id, name",
+        id,
+        to,
+        new_name
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    else {
+        return Ok(Renamed::Missing);
+    };
+    if to != id {
+        // Older slugs point at the newest; the new slug is no longer a rename.
+        sqlx::query!(
+            "UPDATE course_renames SET new_id = $2 WHERE new_id = $1",
+            id,
+            to
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query!("DELETE FROM course_renames WHERE old_id = $1", to)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query!(
+            "INSERT INTO course_renames (old_id, new_id) VALUES ($1, $2)
+             ON CONFLICT (old_id) DO UPDATE SET new_id = EXCLUDED.new_id, renamed_at = now()",
+            id,
+            to
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(Renamed::Done(course))
+}
+
+/// Where a renamed course's old slug went, and when (RFC 3339).
+pub async fn renamed_to(pool: &PgPool, old: &str) -> sqlx::Result<Option<(String, String)>> {
+    Ok(sqlx::query!(
+        r#"SELECT new_id, to_char(renamed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "at!"
+             FROM course_renames WHERE old_id = $1"#,
+        old
+    )
+    .fetch_optional(pool)
+    .await?
+    .map(|r| (r.new_id, r.at)))
+}
+
 /// One page of every course (optionally matching part of the id or name),
 /// and how many match in all.
 pub async fn all_courses(
@@ -991,6 +1067,63 @@ mod tests {
         assert_eq!(page[0].id, "cop3502-f26");
         assert_eq!(all_courses(&pool, Some("games"), 50, 0).await?.1, 1);
         assert_eq!(all_courses(&pool, None, 50, 0).await?.1, 3);
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn renamed_courses_take_their_members_and_remember_the_old_slug(
+        pool: PgPool,
+    ) -> sqlx::Result<()> {
+        let prof = upsert_user(&pool, "prof@ufl.edu", "").await?;
+        create_course(&pool, "cop3502-f26", "Prog 1", prof.id, &[prof.id]).await?;
+        create_course(&pool, "other", "Other", prof.id, &[prof.id]).await?;
+        assert_eq!(
+            rename_course(&pool, "cop3502-f26", Some("other"), None).await?,
+            Renamed::Taken
+        );
+        assert_eq!(
+            rename_course(&pool, "nope", None, Some("x")).await?,
+            Renamed::Missing
+        );
+        let Renamed::Done(c) = rename_course(
+            &pool,
+            "cop3502-f26",
+            Some("cop3502-fall26"),
+            Some("Programming 1"),
+        )
+        .await?
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (c.id.as_str(), c.name.as_str()),
+            ("cop3502-fall26", "Programming 1")
+        );
+        assert_eq!(
+            role_in(&pool, "cop3502-fall26", prof.id).await?,
+            Some(CourseRole::Instructor)
+        );
+        assert_eq!(
+            renamed_to(&pool, "cop3502-f26").await?.unwrap().0,
+            "cop3502-fall26"
+        );
+
+        rename_course(&pool, "cop3502-fall26", Some("cop3502-26f"), None).await?;
+        assert_eq!(
+            renamed_to(&pool, "cop3502-f26").await?.unwrap().0,
+            "cop3502-26f",
+            "older slugs point at the newest"
+        );
+        rename_course(&pool, "cop3502-26f", Some("cop3502-f26"), None).await?;
+        assert_eq!(
+            renamed_to(&pool, "cop3502-f26").await?,
+            None,
+            "the slug is back in use"
+        );
+        assert_eq!(
+            renamed_to(&pool, "cop3502-26f").await?.unwrap().0,
+            "cop3502-f26"
+        );
         Ok(())
     }
 

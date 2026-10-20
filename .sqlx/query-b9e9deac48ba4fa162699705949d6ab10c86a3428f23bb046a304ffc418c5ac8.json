@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO courses (id, name) VALUES ('d', 'D')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "b9e9deac48ba4fa162699705949d6ab10c86a3428f23bb046a304ffc418c5ac8"
+}
