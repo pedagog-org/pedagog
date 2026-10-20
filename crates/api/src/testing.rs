@@ -91,7 +91,7 @@ pub async fn serve_full(pool: PgPool) -> (String, Arc<Mutex<Vec<Mail>>>, JobsSee
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/api", listener.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(listener, crate::http::router(state)).await });
+    tokio::spawn(async move { axum::serve(listener, crate::http::router(state).unwrap()).await });
     (url, outbox, seen)
 }
 
@@ -209,5 +209,6 @@ fn config(jobs_url: String) -> Config {
         jobs_url,
         max_upload_bytes: 1 << 20,
         mail_per_second: 1000,
+        web_dir: None,
     }
 }

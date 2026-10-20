@@ -21,9 +21,20 @@ use crate::state::AppState;
 use crate::users::UserView;
 use crate::{assignments, courses, members, notices, policy, results, submissions, users};
 
-/// The service: the REST api under `/api`.
-pub fn router(state: AppState) -> Router {
-    Router::new().nest("/api", api(state))
+/// The service: the REST api under `/api`, and the web UI (when its files are
+/// configured) everywhere else.
+pub fn router(state: AppState) -> anyhow::Result<Router> {
+    let web = state
+        .config
+        .web_dir
+        .as_deref()
+        .map(crate::web::router)
+        .transpose()?;
+    let app = Router::new().nest("/api", api(state));
+    Ok(match web {
+        Some(web) => app.fallback_service(web),
+        None => app,
+    })
 }
 
 fn api(state: AppState) -> Router {
@@ -106,6 +117,8 @@ fn api(state: AppState) -> Router {
             "/courses/{course}/members/{query}",
             get(members::show).put(members::add).delete(members::remove),
         )
+        .fallback(|| async { refused(StatusCode::NOT_FOUND, "no such api endpoint") })
+        .layer(axum::middleware::from_fn(crate::auth::require_web_header))
         .with_state(state)
 }
 
@@ -362,6 +375,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(me.status(), 200);
+
+        // A change riding on the cookie alone (as a cross-site form would) is refused.
+        let logout = |header: bool| {
+            let mut req = reqwest::Client::new()
+                .post(format!("{url}/auth/logout"))
+                .header("cookie", session);
+            if header {
+                req = req.header("x-pedagog", "web");
+            }
+            req.send()
+        };
+        assert_eq!(logout(false).await.unwrap().status(), 403);
+        assert_eq!(logout(true).await.unwrap().status(), 204);
         Ok(())
     }
 

@@ -21,6 +21,7 @@ mod submissions;
 #[cfg(test)]
 mod testing;
 mod users;
+mod web;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -92,10 +93,13 @@ async fn serve() -> anyhow::Result<()> {
     background.spawn(cleanup(state.clone()));
     background.spawn(notices::run(state.clone()));
 
-    let listener = TcpListener::bind(&state.config.listen_addr).await?;
-    tracing::info!(addr = %state.config.listen_addr, "listening");
+    let addr = state.config.listen_addr.clone();
+    let web = state.config.web_dir.clone();
+    let router = http::router(state)?;
+    let listener = TcpListener::bind(&addr).await?;
+    tracing::info!(%addr, web = ?web, "listening");
     tokio::select! {
-        served = axum::serve(listener, http::router(state)) => served?,
+        served = axum::serve(listener, router) => served?,
         Some(stopped) = background.join_next() => {
             anyhow::bail!("a background task stopped: {stopped:?}");
         }

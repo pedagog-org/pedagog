@@ -18,12 +18,14 @@ pub const LOGIN_DOMAIN: &str = "PEDAGOG_LOGIN_DOMAIN";
 pub const JOBS_URL: &str = "PEDAGOG_JOBS_URL";
 pub const MAX_UPLOAD_BYTES: &str = "PEDAGOG_MAX_UPLOAD_BYTES";
 pub const MAIL_PER_SECOND: &str = "PEDAGOG_MAIL_PER_SECOND";
+pub const WEB_DIR: &str = "PEDAGOG_WEB_DIR";
 
 const DEFAULT_LISTEN: &str = "0.0.0.0:8080";
 const DEFAULT_JOBS_URL: &str = "http://pedagog-jobs.pedagog-builds.svc:8080";
 /// jobs' own default limit on an assignment archive.
 const DEFAULT_MAX_UPLOAD: usize = 50 << 20;
 
+#[derive(Clone)]
 pub struct Config {
     pub database_url: String,
     pub listen_addr: String,
@@ -41,6 +43,8 @@ pub struct Config {
     pub max_upload_bytes: usize,
     /// How many notices are sent per second, at most.
     pub mail_per_second: u32,
+    /// The web UI's built files, served outside `/api`; none: the api alone.
+    pub web_dir: Option<std::path::PathBuf>,
 }
 
 /// How mail leaves: a relay that may or may not want a login, with or
@@ -161,6 +165,7 @@ impl Config {
                 })?,
                 None => 5,
             },
+            web_dir: var(WEB_DIR).filter(|d| !d.is_empty()).map(Into::into),
         })
     }
 }
@@ -200,6 +205,11 @@ mod tests {
         assert!(config(&[(MAX_UPLOAD_BYTES, "lots")]).is_err());
         assert_eq!(c.mail_per_second, 5);
         assert!(config(&[(MAIL_PER_SECOND, "0")]).is_err());
+        assert_eq!(c.web_dir, None);
+        assert_eq!(
+            config(&[(WEB_DIR, "/srv/web")]).unwrap().web_dir,
+            Some("/srv/web".into())
+        );
     }
 
     #[test]
