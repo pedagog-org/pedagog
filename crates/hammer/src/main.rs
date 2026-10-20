@@ -816,8 +816,9 @@ fn run_submit(args: SubmitArgs) -> Result<()> {
     )
     .map_err(|e| miette!("{e}"))?;
     let (graded, lines) = submit::outcome(&run);
-    if graded && run.score.is_none() && matches!(to, upload::Endpoint::Api { .. }) {
-        // A student: show what they may see now.
+    // The api gives students no scores or problems: show them what they may see now.
+    let student = run.score.is_none() && run.problems.is_empty() && run.error.is_none();
+    if student && matches!(to, upload::Endpoint::Api { .. }) {
         let mine = api()?
             .get(&format!(
                 "/courses/{course_id}/assignments/{}/my-results?submission={}",
@@ -825,7 +826,12 @@ fn run_submit(args: SubmitArgs) -> Result<()> {
                 submitted.submission_id
             ))
             .map_err(|e| miette!("{e}"))?;
-        return print_lines(manage::results_mine(&mine));
+        let lines = manage::results_mine(&mine);
+        return if graded {
+            print_lines(lines)
+        } else {
+            Err(miette!("{}", lines.join("\n")))
+        };
     }
     if graded {
         for line in lines {
