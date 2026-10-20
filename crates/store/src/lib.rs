@@ -185,6 +185,8 @@ pub enum ErrorKind {
     /// The run passed its deadline.
     Timeout,
     OutOfMemory,
+    /// It used more local disk than its limit.
+    OutOfDisk,
     /// It stopped unexpectedly.
     Crash,
     /// It ended without uploading results.

@@ -72,6 +72,7 @@ pub async fn launch(state: &AppState, conn: &mut PgConnection, run: i64) -> Resu
         deadline: limits.deadline,
         cpu: limits.cpu.clone(),
         memory: limits.memory.clone(),
+        disk: limits.disk.clone(),
     };
     let outcome = state
         .builder
@@ -112,6 +113,10 @@ pub async fn settle(
         let (kind, error) = match stopped {
             Some(Stopped::Deadline) => (ErrorKind::Timeout, "the run passed its time limit"),
             Some(Stopped::OutOfMemory) => (ErrorKind::OutOfMemory, "the run ran out of memory"),
+            Some(Stopped::OutOfDisk) => (
+                ErrorKind::OutOfDisk,
+                "the run used more local disk than its limit",
+            ),
             None => (ErrorKind::Crash, "the run stopped unexpectedly"),
         };
         verdict.kind = Some(kind);

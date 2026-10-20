@@ -34,6 +34,8 @@ pub enum Stopped {
     Deadline,
     /// A container went over its memory limit.
     OutOfMemory,
+    /// The pod was evicted for using more local disk than its limit.
+    OutOfDisk,
 }
 
 /// Why a pod's run was stopped, from its status.
@@ -46,8 +48,18 @@ pub(crate) fn stopped_pod(pod: &Pod) -> Option<Stopped> {
         .flatten()
         .filter_map(|c| c.state.as_ref()?.terminated.as_ref())
         .any(|t| t.reason.as_deref() == Some("OOMKilled"));
+    // The kubelet's message for it: "Pod ephemeral local storage usage exceeds
+    // the total limit of containers 1Gi." (or "Container ... exceeded its local
+    // ephemeral storage limit").
+    let disk = status.reason.as_deref() == Some("Evicted")
+        && status
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("ephemeral"));
     if oom {
         Some(Stopped::OutOfMemory)
+    } else if disk {
+        Some(Stopped::OutOfDisk)
     } else if status.reason.as_deref() == Some("DeadlineExceeded") {
         Some(Stopped::Deadline)
     } else {
@@ -182,6 +194,24 @@ mod tests {
             super::ended(&late).unwrap().stopped,
             Some(Stopped::Deadline)
         );
+    }
+
+    #[test]
+    fn evicted_for_disk_says_so() {
+        let evicted = |message: &str| {
+            let mut p = pod("grade", "Failed", None);
+            let status = p.status.as_mut().unwrap();
+            status.reason = Some("Evicted".into());
+            status.message = Some(message.into());
+            super::ended(&p).unwrap().stopped
+        };
+        assert_eq!(
+            evicted(
+                "Pod ephemeral local storage usage exceeds the total limit of containers 1Gi. "
+            ),
+            Some(Stopped::OutOfDisk)
+        );
+        assert_eq!(evicted("The node was low on resource: memory."), None);
     }
 
     #[test]

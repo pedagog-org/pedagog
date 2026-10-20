@@ -33,6 +33,7 @@ pub struct GradingRequest {
     pub deadline: Duration,
     pub cpu: String,
     pub memory: String,
+    pub disk: crate::Disk,
 }
 
 pub(crate) fn grading_job(name: &str, req: &GradingRequest) -> Job {
@@ -53,6 +54,7 @@ pub(crate) fn grading_job(name: &str, req: &GradingRequest) -> Job {
             deadline: req.deadline,
             cpu: &req.cpu,
             memory: &req.memory,
+            disk: &req.disk,
         },
     )
 }
@@ -72,6 +74,7 @@ pub struct Backlog {
 pub struct RunSize {
     pub cpu: String,
     pub memory: String,
+    pub disk: crate::Disk,
 }
 
 impl Builder {
@@ -151,6 +154,8 @@ fn fits(quota: &ResourceQuota, size: &RunSize) -> bool {
         ("requests.memory", &size.memory),
         ("limits.memory", &size.memory),
         ("memory", &size.memory),
+        ("requests.ephemeral-storage", &size.disk.request),
+        ("limits.ephemeral-storage", &size.disk.limit),
         ("pods", &"1".to_owned()),
         ("count/pods", &"1".to_owned()),
     ];
@@ -216,6 +221,7 @@ mod tests {
 
     use k8s_openapi::api::batch::v1::JobStatus;
     use k8s_openapi::api::core::v1::PodSpec;
+    use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 
     use crate::validate::EGRESS_PROBE;
 
@@ -232,6 +238,10 @@ mod tests {
             deadline: Duration::from_secs(600),
             cpu: "1".into(),
             memory: "1Gi".into(),
+            disk: crate::Disk {
+                request: "256Mi".into(),
+                limit: "1Gi".into(),
+            },
         }
     }
 
@@ -279,7 +289,21 @@ mod tests {
             (mount.mount_path.as_str(), mount.read_only),
             (SUBMISSION_DIR, Some(true))
         );
-        assert_eq!(pod.volumes.unwrap()[0].name, mount.name);
+        let volume = &pod.volumes.unwrap()[0];
+        assert_eq!(volume.name, mount.name);
+        assert_eq!(
+            volume.empty_dir.clone().unwrap().size_limit,
+            Some(Quantity("1Gi".into())),
+            "the submission's volume counts toward the disk limit"
+        );
+        let resources = main.resources.clone().unwrap();
+        assert_eq!(
+            (
+                &resources.requests.unwrap()["ephemeral-storage"],
+                &resources.limits.unwrap()["ephemeral-storage"]
+            ),
+            (&Quantity("256Mi".into()), &Quantity("1Gi".into()))
+        );
         assert_eq!(pod.automount_service_account_token, Some(false));
     }
 
@@ -327,6 +351,10 @@ mod tests {
         let size = RunSize {
             cpu: "1".into(),
             memory: "1Gi".into(),
+            disk: crate::Disk {
+                request: "256Mi".into(),
+                limit: "1Gi".into(),
+            },
         };
         let hard = [("requests.cpu", "3500m"), ("requests.memory", "4Gi")];
         assert!(fits(
@@ -351,6 +379,14 @@ mod tests {
             "memory"
         );
         assert!(fits(&quota(&hard, &[]), &size), "nothing used yet");
+        let disk = [("requests.ephemeral-storage", "1Gi")];
+        assert!(
+            !fits(
+                &quota(&disk, &[("requests.ephemeral-storage", "800Mi")]),
+                &size
+            ),
+            "disk: 800Mi + 256Mi > 1Gi"
+        );
         assert!(fits(&ResourceQuota::default(), &size), "no status yet");
     }
 
