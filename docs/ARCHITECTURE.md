@@ -651,7 +651,7 @@ Students and instructors authenticate via email: the platform sends a short word
 
 - **The api** (`crates/api`, `pedagog-system`, behind Traefik) is the only public entry point; a NetworkPolicy lets only it reach `jobs`, which stays internal.
 - **Login:** `POST /auth/start {email}` mails a three-word code (the EFF short word list; about 2.2 × 10⁹ possibilities) to a known user, and gives everyone the same reply, so it doesn't reveal who's registered. Codes last 10 minutes and die after 5 wrong tries; a new one once a minute per email. `POST /auth/finish {email, code, client}` opens a session.
-- **Sessions:** a random 32-byte token; Postgres stores only its blake3 hash, with the user, kind and expiry. The web gets an `HttpOnly; Secure; SameSite=Lax` cookie (12 h); `hammer login` saves a 30-day token (mode 0600) in `~/.config/pedagog/session.json` and sends it as a bearer token. Logging out deletes the row; expired sessions and codes are swept hourly.
+- **Sessions:** a random 32-byte token; Postgres stores only its blake3 hash, with the user, kind and expiry. The web gets an `HttpOnly; Secure; SameSite=Lax` cookie (12 h), and every change it makes carries `X-Pedagog: web`: a cookie-authenticated POST, PUT, PATCH or DELETE without it is refused (403), so a cross-site form can't ride on the session; `hammer login` saves a 30-day token (mode 0600) in `~/.config/pedagog/session.json` and sends it as a bearer token. Logging out deletes the row; expired sessions and codes are swept hourly.
 - **Mail** goes over SMTP to a relay, with or without a login and TLS (`PEDAGOG_SMTP_*`); on kind, Mailpit catches it.
 - **The first admin** is made with `pedagog-api add-admin <email>`; admins set global roles afterwards, and can sign a user out everywhere.
 
@@ -710,7 +710,13 @@ The `k8s` crate is the sole holder of `kube`/`k8s-openapi`: its `build` submodul
 
 The web UI is built with **Leptos** (Rust → WASM), rendered in the browser (client-side), and lives in the `web` crate. `trunk` builds it into static files (`index.html`, the `.wasm` and its JS glue, CSS; ~55 KB gzipped for the skeleton). It calls the platform REST API on the same host under `/api`, with the session cookie (no CORS). Shared Rust types (request/response structs) come from the `core` crate, giving the frontend full type safety when deserializing API responses without duplicating definitions. Design tokens are CSS custom properties, light and dark. The screens are specified in `docs/design/web-ui-brief.md`.
 
-The frontend and API are independently deployable. The API is callable by any HTTP client — the Leptos frontend is one consumer, not a dependency. In development, `just web-dev` serves the UI and proxies `/api/` to the api.
+The API is callable by any HTTP client; the Leptos frontend is one consumer, not a dependency. In development, `just web-dev` serves the UI and proxies `/api/` to the api.
+
+- **Serving:** the api serves the UI's files beside `/api` (`PEDAGOG_WEB_DIR`; its image builds them with trunk and gzips them): any other path is a file, else `index.html`, so links into the app reload. Hashed assets are cached for good, `index.html` never. Unknown `/api` paths stay JSON 404s.
+- **Security headers:** a strict CSP (only our own scripts, styles, fonts and api; `index.html`'s inline scripts allowed by their hash, computed when the api starts; `wasm-unsafe-eval` for WASM; inline `style` attributes only), no framing, `nosniff`, `same-origin` referrer and opener policies.
+- **Live updates:** a Postgres trigger announces every grading run's and build's status change (`pedagog_events`); each api replica listens once and fans changes out to the server-sent event streams open on assignment pages (`GET /api/courses/{c}/assignments/{a}/events`). A stream carries only what its viewer may see: a student their own submissions' runs (status and queue position, never a score), staff every run (with the student and score) and the assignment's builds. Queue positions refresh every 5 s; the session and membership are re-checked every 15 s and the stream closes when either ends. A stream that fell behind gets `resync`. Pages fall back to polling when a stream is down.
+- **Errors:** the UI reports what it didn't expect to `POST /api/client-errors` (signed in, 20 a minute, 16 KiB), logged as warnings, so they reach GlitchTip.
+- **Shared types:** request and response bodies move into `core::api` endpoint by endpoint (`Me` first), used by both sides.
 
 ---
 
