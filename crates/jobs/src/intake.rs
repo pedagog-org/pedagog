@@ -38,6 +38,8 @@ pub struct Uploaded {
     /// Things the uploader should know that don't block the upload.
     pub warnings: Vec<String>,
     pub build: Decision,
+    /// The file's `assignment:` policy (dates, visibility defaults).
+    pub policy: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +50,9 @@ pub struct UploadQuery {
     /// Regrade every student's latest submission once this build becomes
     /// current, telling students `never`, when their results `changed`, or `always`.
     regrade: Option<String>,
+    /// Clear the course's date edits once this build becomes current.
+    #[serde(default)]
+    take_dates: bool,
 }
 
 /// An upload that passed every check and is ready to store.
@@ -207,6 +212,8 @@ pub async fn upload(
 
     let tree_hash = checked.tree_hash.clone();
     let mut warnings = checked.warnings.clone();
+    let policy = serde_json::to_value(&checked.assignment.assignment)
+        .map_err(|e| internal("reading the policy", e))?;
     let plan = Plan::from_checked(checked, &assignment, upload.id, key, query.force)
         .map_err(|e| internal("planning the build", e))?;
     let build = assignments::dispatch(&state, plan)
@@ -225,6 +232,29 @@ pub async fn upload(
         }
     }
 
+    if query.take_dates {
+        match build {
+            Decision::Dispatched { build_id } => {
+                db::request_take_dates(&state.pool, build_id)
+                    .await
+                    .map_err(|e| internal("taking the file's dates", e))?;
+            }
+            // This exact upload is already built: if it's current, its dates
+            // apply now.
+            Decision::AlreadyBuilt { build_id } if assignment.current_build_id == Some(build_id) => {
+                db::edit_overrides(&state.pool, assignment.id, db::Overrides::Dates, |_| {
+                    Ok::<_, std::convert::Infallible>("{}".to_owned())
+                })
+                .await
+                .map_err(|e| internal("taking the file's dates", e))?
+                .unwrap_or_else(|never| match never {});
+            }
+            Decision::AlreadyBuilt { .. } => warnings.push(
+                "the file's dates weren't taken: this exact upload is already built but isn't current (--force rebuilds it)".to_owned(),
+            ),
+        }
+    }
+
     let reply = Uploaded {
         course,
         assignment: slug,
@@ -233,6 +263,7 @@ pub async fn upload(
         size_bytes: size,
         warnings,
         build,
+        policy,
     };
     Ok((StatusCode::CREATED, Json(reply)).into_response())
 }
