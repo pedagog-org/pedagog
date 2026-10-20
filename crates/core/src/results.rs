@@ -205,6 +205,27 @@ pub struct TestVisibility {
     pub error: Visibility,
 }
 
+/// The parts of a test's result, each with its own visibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Part {
+    Score,
+    Feedback,
+    Stdout,
+    Error,
+}
+
+impl TestVisibility {
+    pub fn of(&self, part: Part) -> Visibility {
+        match part {
+            Part::Score => self.score,
+            Part::Feedback => self.feedback,
+            Part::Stdout => self.stdout,
+            Part::Error => self.error,
+        }
+    }
+}
+
 /// Version 2's four parts, or version 1's `score` and `output` (which then
 /// covered feedback, and stands for stdout too).
 #[derive(Deserialize)]
