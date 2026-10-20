@@ -1,0 +1,94 @@
+# Re-runnable: makes GlitchTip's role and database in our Postgres (and sets the
+# role's password from glitchtip-db), then, once GlitchTip is up (it migrates
+# at start), its superuser from glitchtip-secrets. Delete and re-apply to rerun.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: glitchtip-bootstrap
+  namespace: pedagog-data
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: glitchtip-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: database
+          image: postgres:16-alpine
+          env:
+            - name: PGHOST
+              value: postgres-service.pedagog-data.svc
+            - name: PGUSER
+              value: pedagog
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
+            - name: GLITCHTIP_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: glitchtip-db
+                  key: password
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              until pg_isready -q; do sleep 2; done
+              psql -d pedagog -v ON_ERROR_STOP=1 -v pw="$GLITCHTIP_DB_PASSWORD" <<'SQL'
+              SELECT 'CREATE ROLE glitchtip LOGIN'
+               WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'glitchtip')\gexec
+              ALTER ROLE glitchtip PASSWORD :'pw';
+              SELECT 'CREATE DATABASE glitchtip OWNER glitchtip'
+               WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'glitchtip')\gexec
+              SQL
+      containers:
+        - name: superuser
+          image: docker.io/glitchtip/glitchtip:6.2.6
+          env:
+            - name: VALKEY_URL
+              value: ""
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: glitchtip-db
+                  key: url
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: glitchtip-secrets
+                  key: secret-key
+            - name: DJANGO_SUPERUSER_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: glitchtip-secrets
+                  key: admin-email
+            - name: DJANGO_SUPERUSER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: glitchtip-secrets
+                  key: admin-password
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              until python -c "import urllib.request as u; u.urlopen('http://glitchtip.pedagog-data.svc:8000/_health/', timeout=5)" 2>/dev/null; do
+                sleep 5
+              done
+              if ! python manage.py createsuperuser --noinput 2>/tmp/err; then
+                grep -q "already" /tmp/err || { cat /tmp/err; exit 1; }
+                echo "superuser $DJANGO_SUPERUSER_EMAIL already exists"
+              fi
+          securityContext:
+            # The image's user, `app` (by number, so runAsNonRoot can check it).
+            runAsUser: 5000
+            runAsGroup: 5000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
