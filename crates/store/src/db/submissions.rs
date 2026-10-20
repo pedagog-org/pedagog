@@ -9,7 +9,9 @@ use std::str::FromStr;
 
 use sqlx::{PgConnection, PgPool};
 
-use crate::{GradingRun, Isolation, Notify, RunReason, RunStatus, Submission, SubmissionSource};
+use crate::{
+    ErrorKind, GradingRun, Isolation, Notify, RunReason, RunStatus, Submission, SubmissionSource,
+};
 
 /// `grading_runs` as [`RunRow`] reads it: one copy of the column list for
 /// every query, still checked at compile time (sqlx joins `+`-separated
@@ -20,7 +22,7 @@ macro_rules! select_runs {
             RunRow,
             r#"SELECT id, submission_id, build_id, reason, regrade_batch_id, status, isolation,
                       job_name, score, total, results::text AS "results?", problems, error,
-                      log_tail, changes::text AS "changes?", notify
+                      error_kind, log_tail, changes::text AS "changes?", notify
                  FROM grading_runs "# + $tail
             $(, $arg)*
         )
@@ -151,6 +153,8 @@ pub struct RunOutcome<'a> {
     pub results: Option<&'a str>,
     pub problems: &'a [String],
     pub error: Option<&'a str>,
+    /// Why it errored (`None` when graded).
+    pub error_kind: Option<ErrorKind>,
     pub log_tail: Option<&'a str>,
     /// Regrades: the difference from the previous graded run, as JSON text.
     pub changes: Option<&'a str>,
@@ -169,7 +173,7 @@ pub async fn finish_run(pool: &PgPool, run: i64, outcome: &RunOutcome<'_>) -> sq
         "UPDATE grading_runs
             SET status = $2, score = $3, total = $4, results = $5::text::jsonb, problems = $6,
                 error = $7, log_tail = $8, changes = $9::text::jsonb, notify = $10,
-                finished_at = now()
+                error_kind = $11, finished_at = now()
           WHERE id = $1 AND status = 'grading'",
         run,
         status.to_string(),
@@ -180,7 +184,8 @@ pub async fn finish_run(pool: &PgPool, run: i64, outcome: &RunOutcome<'_>) -> sq
         outcome.error,
         outcome.log_tail,
         outcome.changes,
-        outcome.notify
+        outcome.notify,
+        outcome.error_kind.map(|k| k.to_string())
     )
     .execute(pool)
     .await?;
@@ -191,11 +196,12 @@ pub async fn finish_run(pool: &PgPool, run: i64, outcome: &RunOutcome<'_>) -> sq
 /// failed) as an error. Returns false if it had already finished.
 pub async fn abandon_run(pool: &PgPool, run: i64, error: &str) -> sqlx::Result<bool> {
     let done = sqlx::query!(
-        "UPDATE grading_runs SET status = $2, error = $3, finished_at = now()
+        "UPDATE grading_runs SET status = $2, error = $3, error_kind = $4, finished_at = now()
           WHERE id = $1 AND status IN ('queued', 'grading')",
         run,
         RunStatus::Error.to_string(),
-        error
+        error,
+        ErrorKind::Internal.to_string()
     )
     .execute(pool)
     .await?;
@@ -418,6 +424,7 @@ struct RunRow {
     results: Option<String>,
     problems: Vec<String>,
     error: Option<String>,
+    error_kind: Option<String>,
     log_tail: Option<String>,
     changes: Option<String>,
     notify: bool,
@@ -445,6 +452,11 @@ impl TryFrom<RunRow> for GradingRun {
             results: row.results,
             problems: row.problems,
             error: row.error,
+            error_kind: row
+                .error_kind
+                .map(|k| ErrorKind::from_str(&k))
+                .transpose()
+                .map_err(decode)?,
             log_tail: row.log_tail,
             changes: row.changes,
             notify: row.notify,
@@ -674,6 +686,7 @@ pub(crate) mod tests {
         let outcome = RunOutcome {
             problems: &problems,
             error: Some("timed out"),
+            error_kind: Some(ErrorKind::Timeout),
             log_tail: Some("Killed"),
             ..Default::default()
         };
@@ -683,6 +696,7 @@ pub(crate) mod tests {
         assert_eq!(run.results, None);
         assert_eq!(run.problems, problems);
         assert_eq!(run.log_tail.as_deref(), Some("Killed"));
+        assert_eq!(run.error_kind, Some(ErrorKind::Timeout));
         Ok(())
     }
 
@@ -695,6 +709,7 @@ pub(crate) mod tests {
         let run = get_run(&pool, acc.run_id).await?.unwrap();
         assert_eq!(run.status, RunStatus::Error);
         assert_eq!(run.error.as_deref(), Some("couldn't start: no plan"));
+        assert_eq!(run.error_kind, Some(ErrorKind::Internal));
         Ok(())
     }
 
