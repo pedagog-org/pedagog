@@ -149,7 +149,9 @@ assignment:
   duration: 120m           # workspace platform: max session length
   attempts: 1
   results:
-    visibility: score-only  # full | score-only | hidden
+    visibility: { error: after_end }   # score | feedback | stdout | error, for every test
+    tests:
+      pop-front: { feedback: hidden }  # one test, by id (else node)
   late_policy:
     grace: 15m
     penalty:
@@ -186,11 +188,31 @@ The `assignment:` block is treated as a **suggestion**. When an instructor publi
 
 ### Result Visibility
 
-Configured in `assignment.results.visibility`:
+Each test's result has four parts, each with its own visibility: `visible`, `hidden`,
+`after_end` (after the deadline, or on release) or `after_publish` (on release):
 
-- `full` — student sees all test output and score immediately on submission
-- `score-only` — student sees their score but not test details
-- `hidden` — student sees only a confirmation of receipt; results released manually by instructor
+| Part | What it is |
+| --- | --- |
+| `score` | points, and pass/fail |
+| `feedback` | the checks: each rubric item's steps (the instructor's reasons, and a failed check's assert message) |
+| `stdout` | what the test printed (the instructor's channel for e.g. intermediate values) |
+| `error` | what went wrong: failures, exceptions, and the values the framework compared |
+
+- **Layers:** the test's own (from its code; everything `visible` by default), then the
+  file's `assignment.results.visibility` (all tests) and `tests` (one test), then the
+  course's overrides, which apply at once (`hammer visibility set|clear`; `hammer
+  visibility show [--verbose]` explains each test).
+- **Release:** `hammer results release` shows `after_publish` (and `after_end` early).
+- **Students** see only tests whose score is shown, each part as its visibility allows;
+  one line says other tests are hidden until the deadline or release, with no points.
+  Totals count what's shown. The trace and the run's own output are staff only; a run
+  that couldn't be graded is a plain sentence (its code didn't load, it timed out, it
+  ran out of memory, it crashed, or a problem on our side).
+- **Staff** see everything, with cumulative score columns (visible, after deadline,
+  after release, hidden) and a star on what each student sees now (`hammer results
+  list`, `hammer results show <assignment> <student>`).
+- **What counts:** a student's latest submission by counted time, unless staff activate
+  an earlier one (`hammer submissions activate <id>`), until the student submits again.
 
 ---
 
@@ -230,7 +252,7 @@ Assignments belong to a course: a numeric id keys them, and the `id` in `assignm
   - Deadline `PEDAGOG_VALIDATION_DEADLINE` (10 min), resources `PEDAGOG_VALIDATION_CPU`/`PEDAGOG_VALIDATION_MEMORY` (1 CPU, 1 GiB).
 - **Policy:** the file's `assignment:` policy (dates, visibility defaults) is saved on each build, so the current build's policy is the file's. The course's policy sits over it on the assignment and applies at once, without building:
   - **Dates:** `hammer dates show|set|clear` edits `open`, `due` and `late_due` field by field; the merged dates must be in order. Every member sees them (and whether the assignment is open, late or closed).
-  - **Visibility:** `hammer visibility set|clear` overrides `score` and `output` for every test or one; `hammer visibility show [--verbose]` lists each test of the current build's validation with its resolved values, the layer that decided them, and whether students see them now and why.
+  - **Visibility:** `hammer visibility set|clear` overrides `score`, `feedback`, `stdout` and `error` for every test or one; `hammer visibility show [--verbose]` lists each test of the current build's validation with its resolved values, the layer that decided them, and whether students see them now and why.
   - **Release:** `hammer results release [--undo]` shows what's `after_publish` (and `after_end` early); taking it back warns that students may have seen them.
   - **Re-uploads** keep the course's date edits and say at once where they differ from the file's; `hammer upload --take-dates` drops the edits when that build becomes current.
 - **Status:** `GET /courses/<course>/assignments/<slug>/builds/<build>` on the api (instructors and graders; `jobs` has the same under `/internal`); `hammer upload --wait` follows it and fails on a failed build or validation. `hammer assignments list|show` lists a course's assignments and their recent builds; students see only the list.
@@ -519,11 +541,11 @@ Students submit with `hammer submit <assignment> <files>` through the api (`POST
 - **Who and when:** a submission belongs to a user (`user_id`; operator submissions keep an opaque `student_id` instead), records who sent it when someone else did (`submitted_by`), and counts at `counted_at` (lateness, and which is latest), apart from when it really arrived (`created_at`).
 - **Acceptance:** a student's own submission is accepted from the assignment's `open` until its `late_due` (or `due`), by the dates of its current build; refusals say why (not open yet, deadline passed, no dates set). Instructors', graders' and admins' own submissions are marked `staff` and accepted whatever the dates (graded and regraded, never notified). Staff may also submit for a student (`--for`), accepted whatever the dates, counted `--at now`, `last` (the student's latest counted time) or a given time; the student sees who submitted it.
 - **Late** isn't stored: it's computed when shown, from the counted time and the dates in effect then ("late by 2 hours 14 minutes"), so moving a deadline changes it.
-- **What students see:** their submissions, receipts, statuses, lateness and who submitted them; scores and tests wait for visibility filtering. Staff see everything, including both times (`hammer submissions <assignment> [--for <email>]`).
+- **What students see:** their submissions, receipts, statuses, lateness and who submitted them (`hammer submissions <assignment>`), and their results as visibility allows (`hammer results show <assignment>`; see Result Visibility). Staff see everything, including both times (`--for <email>`).
 - **Intake:** `POST /internal/courses/<course>/assignments/<slug>/submissions?student=<id>` takes several files or one `.zip`/`.tar.gz`, normalizes them with the assignment's `submission:` rules (unpack, drop OS clutter, strip a wrapping folder, include/exclude, required files, size), stores the tree in Garage, pins it to the assignment's current build, and queues a grading run. Refused (409) while there's no usable build. The reply is a receipt: files kept and ignored, and the queue position.
 - **Admission:** validation and grading runs wait in a Postgres queue (`run_queue`), submissions and validations ahead of regrades. One `jobs` replica at a time (under an advisory lock) releases the next run, but only while one more run fits `pedagog-grading`'s ResourceQuota and no test run is waiting for a node (a Job without its pod, or a pod not yet scheduled). It wakes when a run is queued or a test run ends (Postgres `NOTIFY` on `pedagog_run_queue`, sent in the queueing transaction, so every replica hears it on commit), 250 ms after a release, and otherwise every two seconds, so the pace follows the cluster's real capacity; `PEDAGOG_MAX_RUNNING_TESTS` adds an optional ceiling. A run's Job is created in the transaction that releases it, so its deadline starts then. Kueue can replace this gate for multi-course fair sharing.
 - **Grading run:** a Job in `pedagog-grading` from the pinned build's image: `await-egress`, then `fetch-context` puts the submission at `/pedagog/submission` (read-only), then `/pedagog/bin/run-tests --code /pedagog/submission`, with validation's pod security, network policies and limits (`PEDAGOG_GRADING_DEADLINE`, `_CPU`, `_MEMORY`). The code under test is exactly the submission.
-- **Outcome:** `graded` when results parse and pass the format checks (failing tests included), with score, total and full results; otherwise `error`, with the problems and the pod's log tail. A test file that couldn't be loaded (the helper reports it as `<file>::<collection>`, e.g. the submission has a syntax error) means its tests never ran, so the run is an `error` with the load error, not a 0 out of 0. `in-process` isolation is allowed, but uploads warn that student code can then read the tests and alter its results; each run records its isolation.
+- **Outcome:** `graded` when results parse and pass the format checks (failing tests included), with score, total and full results; otherwise `error`, with the problems and the pod's log tail. Tests that couldn't all run (the helper reports `run.status: error`, e.g. the submission has a syntax error) mean the run is an `error` with the load error, not a 0 out of 0. Each error records its kind (see Results YAML Format). `in-process` isolation is allowed, but uploads warn that student code can then read the tests and alter its results; each run records its isolation.
 - **Regrades:** `hammer upload --regrade [--notify never|changed|always]` asks for one. When that build validates and becomes current, every student's latest submission (by counted time) gets a new run against it, queued behind new submissions (a build that fails validation or is superseded never regrades; identical content that's already built has nothing to regrade). Earlier runs stay as history; the latest is the one shown. Each regrade run stores a change summary against the submission's previous graded run (score before and after, tests added, removed or changed, matched by id, else node) and whether to tell the student: `never` (the default: the instructor may be testing), `changed` (only if the summary isn't empty), or `always`. Delivering notifications comes with the api.
 - **Status:** `GET /internal/submissions/<id>` (the submission, its receipt, and its runs latest first: status, queue position, score, problems, log tail, change summary, results) and `GET /internal/courses/<course>/assignments/<slug>/submissions?student=<id>`. Internal callers see everything; what students see is filtered by the api later. `hammer submit --wait` follows a run and prints the score and the tests that didn't pass.
 - **Settling runs:** one watch on `pedagog-grading`'s test-run pods (labeled with their build or run id) judges a validation or records a grading run as soon as its main container ends, from the results it uploaded (results land about a second after the tests finish). A sweep every 30 s settles what the watch can't see: a Job that failed before it had a pod, or one whose pods are gone. Settling is idempotent, so the two can overlap. Admission, the watch and the sweep are owned by the service's main task: if one stops, the service exits and Kubernetes restarts it.
@@ -543,80 +565,44 @@ For unsupported frameworks or custom pipelines, use `run:` with explicit command
 
 ### Results YAML Format
 
-The platform writes (and reads) a standard results file at `/pedagog/results/results.yaml`:
+The platform writes (and reads) a standard results file at `/pedagog/results/results.yaml`
+(format version 2, from pedagog-pytest 2):
 
 ```yaml
 submission-id: ~           # UUID, or null for test runs
 run-id: ~                  # UUID, or null for test runs
+run:
+  status: complete         # complete | error (tests couldn't all run, e.g. the code doesn't load)
+  output: ""               # what stopped them; staff only
 summary:
   score: 12                # sum of the tests' scores
   total: 32                # sum of the tests' maxes
 tests:
   - number: 1
-    id: null-ptr           # stable id; only when the test declares one
-    node: test_null_ptr.py::test_null_ptr   # the framework's own identifier
-    name: Null pointer check
-    status: pass           # pass | fail | error | skip
-    score: 10
-    max: 10
-    output: ""             # the framework's failure text
-    feedback: "✓ +10 handles NULL"   # what the student is told about the score
-    trace: "..."           # how the score was calculated; instructors only
-    visibility:
-      score: visible       # visible | hidden | after_end | after_publish
-      output: after_end    # also governs feedback
-    clamp: [0, 10]         # single-item tests: score bounds (null = unbounded)
-    extra-credit: none     # none | bonus | attempted-work
-    attempted: true
-  - number: 2
-    node: test_leak.py::test_memory_leak
-    name: Memory leak check
-    status: fail
-    score: 0
-    max: 20
-    output: "4 memory leaks detected"
-    visibility:
-      score: visible
-      output: after_end
-  - number: 3
-    id: design
-    node: test_design.py::test_design
-    name: Design
-    status: pass
-    score: 2               # sum of its items' scores
-    max: 2                 # sum of the maxes of its items that count (see extra-credit)
-    visibility:
-      score: visible
-      output: after_end
-    items:                 # only on tests scored by a multi-item rubric
-      - id: memory_safe
-        name: No leaks
-        score: 2
-        max: 2
-        clamp: [0, 2]
-        extra-credit: none
-        attempted: true
-        feedback: "✓ +2 no leaks"
-      - id: recursion
-        name: Uses recursion
+    id: sort               # stable id; only when the test declares one
+    node: test_sort.py::test_sort   # the framework's own identifier
+    name: sort()
+    status: fail           # pass | fail | error | skip
+    score: 1               # sum of its items' scores
+    max: 4                 # sum of the maxes of its items that count (see extra-credit)
+    items:                 # every scored test (a single-item test has one)
+      - id: correct
+        name: correct
         score: 1
-        max: 1
-        clamp: [0, 1]
-        extra-credit: bonus        # adds to the score, never to the max
+        max: 4
+        clamp: [0, 4]      # score bounds (null = unbounded)
+        extra-credit: none # none | bonus | attempted-work
         attempted: true
-        feedback: ""
-      - id: late
-        name: Late-file penalty
-        score: -1
-        max: 0
-        clamp: [null, 0]           # deductions only
-        extra-credit: none
-        attempted: false
-        feedback: "-1 one file late"
+        steps:             # the feedback: one per check or award, in order
+          - { id: empty, result: pass, points: 1, worth: 1, reason: "empty list" }
+          - { id: large, result: fail, points: 0, worth: 3, reason: "1000 values",
+              message: "sort() lost an element" }   # the check's assert message
+          - { points: -1, reason: "one global" }    # an award: no result
+    stdout: "after sort(): [1, 2]\n"   # what the test printed
+    error: "test_sort.py:9: AssertionError ... assert 2 == 3"   # what went wrong
+    trace: "..."           # how the score was calculated; staff only
+    visibility: { score: visible, feedback: visible, stdout: visible, error: visible }
 artifacts:
-  - id: core_dump
-    label: Core dump
-    path: core.dump
   - id: valgrind_log
     label: Valgrind output
     path: valgrind.log
@@ -624,12 +610,10 @@ artifacts:
 
 Default per-test visibility is defined in the test suite source code. The `visibility` field is required on every test entry in the results file.
 
-- **Visibility levels:** `visible` (immediately), `hidden` (never to students), `after_end` (once the student can no longer submit: the late deadline if late submissions are allowed, otherwise the due date), `after_publish` (when the instructor publishes results). `feedback` follows the output visibility; `trace` is never shown to students.
-- **Rubric scoring:** a test is either a single rubric item (with `clamp`, `extra-credit`, `attempted`) or lists its `items`.
-  - Each item's score lies within its `clamp`.
-  - A multi-item test's score is the sum of its item scores. Its max sums the items that count: `none` items, plus `attempted-work` items once attempted. `bonus` items never count in the max.
-  - With unbounded clamps or extra credit, a score can fall below 0 or exceed its max; the summary is always the plain sum of the tests.
-- **Checks the platform runs:** unique `node`s, declared `id`s and item ids; scores within their bounds (tests with neither items nor a clamp must lie in 0..=max); tests and the summary that add up.
+- **Version 1** (pedagog-pytest 1) is still read: `output` as `error`; text `feedback` (on the test or its items) as written; two-part visibility with `output` standing for feedback, stdout and error; `<file>::<collection>` entries as a run error.
+- **Rubric scoring:** each item's score lies within its `clamp`. A test's score is the sum of its item scores; its max sums the items that count: `none` items, plus `attempted-work` items once attempted. `bonus` items never count in the max. With unbounded clamps or extra credit, a score can fall below 0 or exceed its max; the summary is always the plain sum of the tests.
+- **Checks the platform runs:** unique `node`s, declared `id`s and item ids; scores within their bounds (tests with neither items nor a clamp must lie in 0..=max); tests and the summary that add up. A run whose tests couldn't all run is an error (`load`), and so is a validation whose reference solution couldn't run its tests.
+- **Error kinds** (`grading_runs.error_kind`): `load`, `timeout` (the Job's deadline), `out_of_memory`, `crash`, `no_results`, `invalid` (results that don't parse or add up), `internal` (couldn't start).
 
 ---
 
