@@ -116,6 +116,115 @@ pub async fn builds_of(
     .collect()
 }
 
+/// The course's policy for an assignment, as stored: JSON text for the date
+/// edits and visibility overrides, and when results were released (RFC 3339).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CoursePolicy {
+    pub date_overrides: String,
+    pub visibility_overrides: String,
+    pub released_at: Option<String>,
+}
+
+pub async fn course_policy(pool: &PgPool, assignment_id: i64) -> sqlx::Result<CoursePolicy> {
+    sqlx::query_as!(
+        CoursePolicy,
+        r#"SELECT date_overrides::text AS "date_overrides!",
+                  visibility_overrides::text AS "visibility_overrides!",
+                  to_char(released_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS released_at
+             FROM assignments WHERE id = $1"#,
+        assignment_id
+    )
+    .fetch_one(pool)
+    .await
+}
+
+/// Which of the course's overrides to edit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Overrides {
+    Dates,
+    Visibility,
+}
+
+/// Read-modify-write one of the course's overrides, so concurrent edits don't
+/// lose each other: `edit` gets the stored JSON and returns the new JSON, or a
+/// refusal (which changes nothing).
+pub async fn edit_overrides<E>(
+    pool: &PgPool,
+    assignment_id: i64,
+    which: Overrides,
+    edit: impl FnOnce(&str) -> Result<String, E>,
+) -> sqlx::Result<Result<String, E>> {
+    let mut tx = pool.begin().await?;
+    let current = match which {
+        Overrides::Dates => sqlx::query_scalar!(
+            r#"SELECT date_overrides::text AS "j!" FROM assignments WHERE id = $1 FOR UPDATE"#,
+            assignment_id
+        )
+        .fetch_one(&mut *tx)
+        .await?,
+        Overrides::Visibility => sqlx::query_scalar!(
+            r#"SELECT visibility_overrides::text AS "j!" FROM assignments WHERE id = $1 FOR UPDATE"#,
+            assignment_id
+        )
+        .fetch_one(&mut *tx)
+        .await?,
+    };
+    let next = match edit(&current) {
+        Ok(next) => next,
+        Err(e) => return Ok(Err(e)),
+    };
+    match which {
+        Overrides::Dates => {
+            sqlx::query!(
+                "UPDATE assignments SET date_overrides = $2::text::jsonb WHERE id = $1",
+                assignment_id,
+                next
+            )
+            .execute(&mut *tx)
+            .await?
+        }
+        Overrides::Visibility => {
+            sqlx::query!(
+                "UPDATE assignments SET visibility_overrides = $2::text::jsonb WHERE id = $1",
+                assignment_id,
+                next
+            )
+            .execute(&mut *tx)
+            .await?
+        }
+    };
+    tx.commit().await?;
+    Ok(Ok(next))
+}
+
+/// Release results (or with `false`, take the release back). Returns whether
+/// they were released before.
+pub async fn set_released(pool: &PgPool, assignment_id: i64, released: bool) -> sqlx::Result<bool> {
+    let before = sqlx::query_scalar!(
+        r#"UPDATE assignments a SET released_at = CASE WHEN $2 THEN COALESCE(old.released_at, now()) END
+             FROM assignments old
+            WHERE a.id = $1 AND old.id = a.id
+        RETURNING old.released_at IS NOT NULL AS "was!""#,
+        assignment_id,
+        released
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(before)
+}
+
+/// Ask for the course's date edits to be cleared once this build becomes
+/// current. Returns false if the attempt is no longer in flight.
+pub async fn request_take_dates(pool: &PgPool, build: i64) -> sqlx::Result<bool> {
+    let done = sqlx::query!(
+        "UPDATE assignment_builds SET take_dates = true WHERE id = $1 AND finished_at IS NULL",
+        build
+    )
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected() == 1)
+}
+
 /// Record an uploaded tree (re-uploading the same tree refreshes `uploaded_at`).
 pub async fn record_upload(
     pool: &PgPool,
@@ -300,7 +409,7 @@ pub async fn finish_validation(
             SET validation_status = $2, results = $3::text::jsonb,
                 validation_problems = $4, finished_at = now()
           WHERE id = $1 AND finished_at IS NULL AND build_status = 'succeeded'
-          RETURNING assignment_id, regrade_notify",
+          RETURNING assignment_id, regrade_notify, take_dates",
         build,
         status.to_string(),
         results,
@@ -313,9 +422,13 @@ pub async fn finish_validation(
     };
     if status.is_usable() {
         sqlx::query!(
-            "UPDATE assignments SET current_build_id = $2, updated_at = now() WHERE id = $1",
+            "UPDATE assignments
+                SET current_build_id = $2, updated_at = now(),
+                    date_overrides = CASE WHEN $3 THEN '{}'::jsonb ELSE date_overrides END
+              WHERE id = $1",
             row.assignment_id,
-            build
+            build,
+            row.take_dates
         )
         .execute(&mut *tx)
         .await?;
@@ -600,6 +713,62 @@ mod tests {
             ),
             ("c", "ll", Some("{}"))
         );
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn the_course_policy_is_edited_released_and_taken_back(pool: PgPool) -> sqlx::Result<()> {
+        let up = uploaded(&pool, "ll", "tree-a").await?;
+        let a = up.assignment_id;
+        let fresh = course_policy(&pool, a).await?;
+        assert_eq!(
+            (
+                fresh.date_overrides.as_str(),
+                fresh.visibility_overrides.as_str(),
+                fresh.released_at
+            ),
+            ("{}", "{}", None)
+        );
+        let set = edit_overrides(&pool, a, Overrides::Dates, |old| {
+            assert_eq!(old, "{}");
+            Ok::<_, String>(r#"{"due": "2026-09-08T23:59:00-04:00"}"#.to_owned())
+        })
+        .await?;
+        assert!(set.is_ok());
+        let refused = edit_overrides(&pool, a, Overrides::Dates, |_| Err("nope")).await?;
+        assert_eq!(refused, Err("nope"));
+        assert!(
+            course_policy(&pool, a)
+                .await?
+                .date_overrides
+                .contains("2026-09-08"),
+            "kept"
+        );
+
+        assert!(!set_released(&pool, a, true).await?);
+        let at = course_policy(&pool, a).await?.released_at.unwrap();
+        assert!(set_released(&pool, a, true).await?, "already released");
+        assert_eq!(
+            course_policy(&pool, a).await?.released_at.unwrap(),
+            at,
+            "the first time stays"
+        );
+        assert!(set_released(&pool, a, false).await?);
+        assert_eq!(course_policy(&pool, a).await?.released_at, None);
+
+        // --take-dates: the edits go when the build becomes current.
+        let b = start_build(&pool, &crate::db::test_build(&up, "img-a", "reg/a:1")).await?;
+        assert!(request_take_dates(&pool, b).await?);
+        finish_build(&pool, b, true, None).await?;
+        assert!(
+            course_policy(&pool, a)
+                .await?
+                .date_overrides
+                .contains("due"),
+            "not yet"
+        );
+        finish_validation(&pool, b, ValidationStatus::Skipped, None, &[]).await?;
+        assert_eq!(course_policy(&pool, a).await?.date_overrides, "{}");
         Ok(())
     }
 
