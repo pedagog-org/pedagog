@@ -19,9 +19,9 @@ SSDs) this would take the cluster down mid-course.
 - **Mechanism:** jobs deletes unused manifests nightly through the registry API (it
   knows what's in use from Postgres, and its warnings reach GlitchTip), then runs
   `registry garbage-collect --delete-untagged` as a Job on the registry's volume.
-- **Alerts:** every 10 minutes jobs reads each node's kubelet stats (node disk,
-  image store, volumes) and logs a warning above 80% used, an error above 90%;
-  GlitchTip groups them and emails.
+- **Alerts:** a DaemonSet probe measures each node's disk and image store every 10
+  minutes; jobs checks the registry volume after GC and Postgres's size; each logs
+  a warning above 80% used, an error above 90%, and GlitchTip groups and emails.
 - **Limits:** ephemeral-storage on Kaniko pods (request 2Gi, limit 8Gi) and on
   validation and grading pods (request 256Mi, limit 1Gi), overridable by env var.
 
@@ -49,14 +49,21 @@ SSDs) this would take the cluster down mid-course.
 - `hammer`-free: an operator can run it now with `POST /internal/registry/cleanup`
   (port-forward), e.g. to test it.
 
-### Disk alerts (jobs)
+### Disk alerts (a DaemonSet probe, not kubelet stats)
 
-- Every 10 minutes, for each node: `GET /api/v1/nodes/<node>/proxy/stats/summary`;
-  node filesystem, image filesystem, and each PVC-backed volume (Longhorn reports
-  them; kind's local-path doesn't).
+- **Nodes:** a DaemonSet `pedagog-disk` in `pedagog-builds` runs the jobs binary
+  (`pedagog-jobs disk-report`) on every node. Every 10 minutes it measures, with
+  `statvfs` on read-only hostPath mounts, the node's root filesystem and its image
+  store (`/var/lib/rancher/k3s/agent/containerd` on k3s, `/var/lib/containerd` on
+  kind; set per overlay), and reports to GlitchTip itself (the jobs DSN Secret).
+  No new RBAC.
+- **Registry volume:** the nightly GC Job ends with `df` of its volume; jobs reads
+  the Job's log and checks it.
+- **Postgres:** jobs compares the databases' total size (`pg_database_size`) with
+  the PVC's capacity (a Role to read PVCs in `pedagog-data`); approximate (WAL and
+  bloat aren't counted), so its thresholds are the same but it's a hint.
 - Above `PEDAGOG_DISK_WARN` (80%): `warn!`; above `PEDAGOG_DISK_ERROR` (90%):
   `error!`, with node, what, used and capacity. GlitchTip groups repeats.
-- RBAC: a ClusterRole for jobs with `nodes` list and `nodes/proxy` get.
 
 ### Limits
 
@@ -87,12 +94,8 @@ SSDs) this would take the cluster down mid-course.
 
 ## Open questions
 
-- **`nodes/proxy` is a broad permission.** `get` on it also allows exec into any
-  pod through kubelet's API (a known escalation path). Given to jobs, a compromise of
-  jobs reaches every pod on the cluster. Alternatives: a small DaemonSet (the jobs
-  binary, `disk-report` subcommand) that measures its node's filesystems with
-  `statvfs` on hostPath mounts and reports to GlitchTip itself; PVC usage then needs
-  the registry and Postgres pods to report their own volume, or is dropped.
+- ~~kubelet stats need `nodes/proxy`~~ (decided 2026-10-20: it also allows exec into
+  any pod through kubelet, so a DaemonSet probe measures nodes instead).
 - The run error kind name for evictions (`out_of_disk`) and its student sentence.
 
 ## Rollback
@@ -110,8 +113,8 @@ SSDs) this would take the cluster down mid-course.
 3. `feat(jobs)`: the nightly schedule, the GC Job (k8s), and the internal endpoint.
 4. `feat(k8s)`: ephemeral-storage on Kaniko, validation and grading pods; eviction →
    `out_of_disk`.
-5. `feat(jobs)`: disk alerts from kubelet stats (or the DaemonSet, per the open
-   question).
+5. `feat(jobs)`: `disk-report` (the DaemonSet's loop), the registry volume check
+   after GC, and the Postgres size check.
 6. `feat(deploy)`: registry deletes, RBAC, LimitRange and quota, env.
 7. `docs`: SETUP and ARCHITECTURE; kind: run a cleanup and check space is freed,
    then kind-e2e.
