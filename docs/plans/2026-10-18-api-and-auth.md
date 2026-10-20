@@ -480,6 +480,25 @@ visibility, release, the upload date diff and `--take-dates`).
   [--wait]`, `hammer submissions ASSIGNMENT [--for EMAIL]`; operator mode keeps
   `--student` with `--jobs-url`.
 
+## 4c / 4d split (2026-10-19)
+
+- **4c** `feat/course-policy`: the course's policy on the assignment (`date_overrides`,
+  `visibility_overrides`, `released_at`): `hammer dates show|set|clear` (show for every
+  member, edits for instructors), `hammer visibility show|set|clear` (show for staff,
+  with each test's resolved values, whether students see them now and why;
+  `--verbose` for every layer), `hammer results release [--undo]`, the upload's date
+  diff, and `--take-dates` (stored on the build; clears the course's date edits when
+  it becomes current).
+- **4d** `feat/api-results`: results views (staff list and detail with the cumulative
+  columns, students' filtered results) and activating a submission: staff pick one
+  from `hammer submissions --for` with `hammer submissions activate ASSIGNMENT ID
+  [--clear]`; it counts until the student submits something newer (by arrival), after
+  which the latest by counted time counts again. Regrades take what counts.
+- **Disk safeguards** (a PR after 4d): ephemeral-storage requests and limits on
+  Kaniko and test-run pods, a nightly registry cleanup (unreferenced assignment images,
+  old Kaniko cache, then garbage-collect), and disk alerts plus SETUP guidance
+  (kubelet image GC thresholds, SSDs for image storage on Pis).
+
 ## Implementation steps
 
 1. **Schema and store** (`feat/accounts-store`): users, courses, staff, enrollments,
