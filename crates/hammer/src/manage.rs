@@ -442,6 +442,13 @@ pub fn submissions(list: &serde_json::Value) -> Vec<String> {
                 if let Some(by) = s["submitted_by"].as_str() {
                     line.push_str(&format!("  submitted by {by}"));
                 }
+                if s["counts"].as_bool() == Some(true) {
+                    line.push_str(if s["activated_by"].is_null() {
+                        " <- counts"
+                    } else {
+                        " <- counts (activated)"
+                    });
+                }
                 // As shown: a fraction of a second apart is the same time.
                 if s["created_at"].is_string() && when(&s["created_at"]) != when(&s["counted_at"]) {
                     line.push_str(&format!(" (arrived {})", when(&s["created_at"])));
@@ -528,6 +535,355 @@ pub fn visibility(v: &serde_json::Value, test: Option<&str>, verbose: bool) -> V
                     parts.join(" ").trim_end()
                 ));
             }
+        }
+    }
+    lines
+}
+
+/// A number as people write it: `2`, `2.5`.
+fn num(v: &serde_json::Value) -> String {
+    match v.as_f64() {
+        Some(x) => format!("{x}"),
+        None => "?".to_owned(),
+    }
+}
+
+/// `2/3`, with a star where it's what the student sees now.
+fn stage_cell(st: &serde_json::Value) -> String {
+    format!(
+        "{}/{}{}",
+        num(&st["score"]),
+        num(&st["total"]),
+        if st["student_sees"].as_bool() == Some(true) {
+            "*"
+        } else {
+            ""
+        }
+    )
+}
+
+/// Rows of cells as aligned columns.
+fn table(rows: &[Vec<String>]) -> Vec<String> {
+    let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let widths: Vec<usize> = (0..width)
+        .map(|i| {
+            rows.iter()
+                .filter_map(|r| r.get(i))
+                .map(|c| c.chars().count())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    rows.iter()
+        .map(|r| {
+            r.iter()
+                .enumerate()
+                .map(|(i, c)| format!("{c:<w$}", w = widths[i]))
+                .collect::<Vec<_>>()
+                .join("  ")
+                .trim_end()
+                .to_owned()
+        })
+        .collect()
+}
+
+const STAGES: [&str; 4] = ["visible", "after deadline", "after release", "hidden"];
+
+/// `results list`.
+pub fn results_list(v: &serde_json::Value) -> Vec<String> {
+    let mut rows = vec![
+        ["name", "email", "counts", "late"]
+            .iter()
+            .chain(STAGES.iter())
+            .chain(["passed"].iter())
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+    ];
+    for r in v["rows"].as_array().into_iter().flatten() {
+        let mut row = vec![
+            str_of(r, "name"),
+            str_of(r, "email"),
+            format!(
+                "#{}{}",
+                r["submission"],
+                if r["activated_by"].is_null() {
+                    ""
+                } else {
+                    " (activated)"
+                }
+            ),
+            r["late"].as_str().unwrap_or("-").to_owned(),
+        ];
+        match r["stages"].as_array() {
+            Some(stages) => {
+                row.extend(stages.iter().map(stage_cell));
+                let all = &stages[stages.len() - 1];
+                row.push(format!("{}/{}", all["passed"], all["tests"]));
+            }
+            None => row.push(match r["status"].as_str() {
+                Some("error") => format!("error ({})", str_of(r, "error_kind")),
+                Some(status) => status.to_owned(),
+                None => "no run".to_owned(),
+            }),
+        }
+        rows.push(row);
+    }
+    let mut lines = table(&rows);
+    lines.push(format!(
+        "{} of {} students submitted   * what each student sees now",
+        v["submitted"], v["students"]
+    ));
+    lines
+}
+
+fn steps_lines(steps: &serde_json::Value, indent: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    for st in steps.as_array().into_iter().flatten() {
+        let reason = st["reason"]
+            .as_str()
+            .map(|r| format!(" {r}"))
+            .unwrap_or_default();
+        lines.push(match st["result"].as_str() {
+            Some("pass") => format!("{indent}✓ +{}{reason}", num(&st["points"])),
+            Some(_) => format!("{indent}✗ +0{reason} (worth {})", num(&st["worth"])),
+            None => {
+                let p = st["points"].as_f64().unwrap_or(0.0);
+                format!(
+                    "{indent}{}{}{reason}",
+                    if p >= 0.0 { "+" } else { "" },
+                    num(&st["points"])
+                )
+            }
+        });
+        if let Some(m) = st["message"].as_str() {
+            lines.push(format!("{indent}    {m}"));
+        }
+    }
+    lines
+}
+
+fn indented(label: &str, text: &str) -> Vec<String> {
+    let mut lines = vec![format!("  {label}:")];
+    lines.extend(text.lines().map(|l| format!("    {l}")));
+    lines
+}
+
+/// `results show` for staff: everything, and what the student sees of it.
+pub fn results_staff(v: &serde_json::Value) -> Vec<String> {
+    if v.get("matches").is_some() {
+        return matches(v, |m| format!("{}: {}", person(m), str_of(m, "role")));
+    }
+    let counts = match (v["counts"].as_bool(), v["activated_by"].as_str()) {
+        (Some(true), Some(by)) => format!("counts (activated by {by})"),
+        (Some(true), None) => "counts".to_owned(),
+        _ => "doesn't count".to_owned(),
+    };
+    let mut lines = vec![format!(
+        "{}  #{} {counts}, {}",
+        person(v),
+        v["submission"],
+        v["late"]
+            .as_str()
+            .map(|l| format!("late by {l}"))
+            .unwrap_or_else(|| "on time".to_owned())
+    )];
+    if let Some(by) = v["submitted_by"].as_str() {
+        lines.push(format!(
+            "submitted by {by}, counted at {}",
+            when(&v["counted_at"])
+        ));
+    }
+    let run = &v["run"];
+    if run["status"] == "error" {
+        lines.push(format!(
+            "couldn't be graded ({})",
+            str_of(run, "error_kind")
+        ));
+        lines.extend(
+            run["problems"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|p| p.as_str())
+                .map(|p| format!("  {p}")),
+        );
+        if let Some(out) = v["run_output"].as_str().filter(|o| !o.is_empty()) {
+            lines.extend(indented("run output", out));
+        }
+        return lines;
+    }
+    if !run.is_object() || run["status"] != "graded" {
+        lines.push(format!(
+            "run: {}",
+            run["status"].as_str().unwrap_or("none yet")
+        ));
+        return lines;
+    }
+    let sees = |p: &serde_json::Value| -> String {
+        if p["shown"].as_bool() == Some(true) {
+            return "yes".to_owned();
+        }
+        match p["value"].as_str() {
+            Some("after_end") => "after deadline",
+            Some("after_publish") => "after release",
+            _ => "never",
+        }
+        .to_owned()
+    };
+    let mut rows = vec![
+        [
+            "test",
+            "result",
+            "score",
+            "student sees: score",
+            "feedback",
+            "stdout",
+            "error",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>(),
+    ];
+    let tests = v["tests"].as_array().cloned().unwrap_or_default();
+    for t in &tests {
+        let vis = &t["visibility"];
+        rows.push(vec![
+            str_of(t, "name"),
+            str_of(t, "status"),
+            format!("{}/{}", num(&t["score"]), num(&t["max"])),
+            sees(&vis["score"]),
+            sees(&vis["feedback"]),
+            sees(&vis["stdout"]),
+            sees(&vis["error"]),
+        ]);
+    }
+    lines.extend(table(&rows));
+    if let Some(stages) = v["stages"].as_array() {
+        let mut rows = vec![
+            std::iter::once(String::new())
+                .chain(STAGES.iter().map(|s| s.to_string()))
+                .collect::<Vec<_>>(),
+        ];
+        rows.push(
+            std::iter::once("score".to_owned())
+                .chain(stages.iter().map(stage_cell))
+                .collect(),
+        );
+        rows.push(
+            std::iter::once("passed".to_owned())
+                .chain(stages.iter().map(|st| {
+                    format!(
+                        "{}/{}{}",
+                        st["passed"],
+                        st["tests"],
+                        if st["student_sees"].as_bool() == Some(true) {
+                            "*"
+                        } else {
+                            ""
+                        }
+                    )
+                }))
+                .collect(),
+        );
+        lines.push(String::new());
+        lines.extend(table(&rows));
+    }
+    if let Some(told) = v["student_is_told"].as_array().filter(|t| !t.is_empty()) {
+        let when: Vec<&str> = told.iter().filter_map(|w| w.as_str()).collect();
+        lines.push(format!(
+            "student is told: some tests are hidden until {}",
+            when.join(", others until ")
+        ));
+    }
+    for t in &tests {
+        let mut detail = Vec::new();
+        for item in t["items"].as_array().into_iter().flatten() {
+            let steps = steps_lines(&item["steps"], "    ");
+            if !steps.is_empty() {
+                detail.push(format!("  feedback ({}):", str_of(item, "name")));
+                detail.extend(steps);
+            }
+        }
+        for (label, key) in [("stdout", "stdout"), ("error", "error"), ("trace", "trace")] {
+            if let Some(text) = t[key].as_str().filter(|x| !x.is_empty()) {
+                detail.extend(indented(label, text));
+            }
+        }
+        if !detail.is_empty() {
+            lines.push(format!("--- {} ---", str_of(t, "name")));
+            lines.extend(detail);
+        }
+    }
+    lines
+}
+
+/// `results show` for a student: what they may see now.
+pub fn results_mine(v: &serde_json::Value) -> Vec<String> {
+    let mut head = format!("#{}", v["submission"]);
+    if v["counts"].as_bool() == Some(true) {
+        head.push_str(" (counts)");
+    }
+    head.push_str(&match v["late"].as_str() {
+        Some(l) => format!(", late by {l}"),
+        None => ", on time".to_owned(),
+    });
+    if let Some(by) = v["submitted_by"].as_str() {
+        head.push_str(&format!(", submitted by {by} on your behalf"));
+    }
+    match v["status"].as_str() {
+        Some("error") => return vec![format!("{head}: couldn't be graded: {}", str_of(v, "why"))],
+        Some("graded") => {}
+        Some(other) => return vec![format!("{head}: {other}")],
+        None => return vec![head],
+    }
+    let r = &v["results"];
+    let mut lines = vec![format!(
+        "{head}: {}/{} on the tests shown",
+        num(&r["score"]),
+        num(&r["total"])
+    )];
+    let tests = r["tests"].as_array().cloned().unwrap_or_default();
+    let rows: Vec<Vec<String>> = tests
+        .iter()
+        .map(|t| {
+            vec![
+                str_of(t, "name"),
+                str_of(t, "status"),
+                format!("{}/{}", num(&t["score"]), num(&t["max"])),
+            ]
+        })
+        .collect();
+    lines.extend(table(&rows));
+    let hidden: Vec<&str> = r["hidden_until"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|w| w.as_str())
+        .collect();
+    if !hidden.is_empty() {
+        lines.push(format!(
+            "some tests are hidden until {}",
+            hidden.join(", others until ")
+        ));
+    } else if r["hidden_never"].as_bool() == Some(true) {
+        lines.push("some tests aren't shown".to_owned());
+    }
+    for t in &tests {
+        let mut detail = Vec::new();
+        for item in t["feedback"].as_array().into_iter().flatten() {
+            detail.extend(steps_lines(&item["steps"], "  "));
+            if let Some(text) = item["text"].as_str().filter(|x| !x.is_empty()) {
+                detail.extend(text.lines().map(|l| format!("  {l}")));
+            }
+        }
+        for key in ["stdout", "error"] {
+            if let Some(text) = t[key].as_str().filter(|x| !x.is_empty()) {
+                detail.extend(indented(key, text));
+            }
+        }
+        if !detail.is_empty() {
+            lines.push(format!("--- {} ---", str_of(t, "name")));
+            lines.extend(detail);
         }
     }
     lines
@@ -776,6 +1132,65 @@ mod tests {
             "    course, this test    score -              feedback -              stdout -              error hidden"
         );
         assert_eq!(visibility(&v, Some("nope"), false)[1], "no test \"nope\"");
+    }
+
+    #[test]
+    fn results_read_well() {
+        let st = |score: f64, total: f64, passed: u32, tests: u32, sees: bool| json!({"score": score, "total": total, "passed": passed, "tests": tests, "student_sees": sees});
+        let list = json!({"rows": [
+            {"name": "Albert Gator", "email": "albert@ufl.edu", "submission": 133, "activated_by": null,
+             "late": null, "status": "graded",
+             "stages": [st(5.0, 5.0, 2, 2, false), st(5.0, 5.0, 2, 2, true), st(7.0, 8.0, 2, 3, false), st(7.0, 9.0, 2, 4, false)]},
+            {"name": "Zed", "email": "zz@ufl.edu", "submission": 120, "activated_by": "ta@ufl.edu",
+             "late": "2 hours", "status": "error", "error_kind": "load", "stages": null}
+        ], "submitted": 2, "students": 143});
+        let lines = results_list(&list);
+        assert!(
+            lines[0].starts_with("name          email           counts"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].contains("5/5*") && lines[1].ends_with("2/4"),
+            "{}",
+            lines[1]
+        );
+        assert!(
+            lines[2].contains("#120 (activated)") && lines[2].contains("error (load)"),
+            "{}",
+            lines[2]
+        );
+        assert_eq!(
+            lines[3],
+            "2 of 143 students submitted   * what each student sees now"
+        );
+
+        let mine = json!({"submission": 133, "counts": true, "late": "2 hours", "status": "graded",
+            "results": {"score": 2.0, "total": 2.0, "hidden_until": ["release"], "hidden_never": false,
+              "tests": [{"name": "push", "status": "pass", "score": 2.0, "max": 2.0,
+                         "feedback": [{"name": "push", "steps": [
+                             {"result": "pass", "points": 2.0, "worth": 2.0, "reason": "pushes"},
+                             {"result": "fail", "points": 0.0, "worth": 1.0, "reason": "pops", "message": "pop() lost it"}]}],
+                         "stdout": "pushed 3\n"}]}});
+        assert_eq!(
+            results_mine(&mine),
+            [
+                "#133 (counts), late by 2 hours: 2/2 on the tests shown",
+                "push  pass  2/2",
+                "some tests are hidden until release",
+                "--- push ---",
+                "  ✓ +2 pushes",
+                "  ✗ +0 pops (worth 1)",
+                "      pop() lost it",
+                "  stdout:",
+                "    pushed 3",
+            ]
+        );
+        let err = json!({"submission": 140, "counts": true, "late": null, "status": "error",
+                         "why": "the tests couldn't run with your code"});
+        assert_eq!(
+            results_mine(&err),
+            ["#140 (counts), on time: couldn't be graded: the tests couldn't run with your code"]
+        );
     }
 
     #[test]

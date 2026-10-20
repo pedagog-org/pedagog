@@ -280,12 +280,31 @@ fn course_here(flag: Option<String>) -> Result<(manage::Api, String)> {
 }
 
 fn run_submissions(args: SubmissionsArgs) -> Result<()> {
+    if let Some(cli::SubmissionsCmd::Activate { id, clear, course }) = args.action {
+        let (api, c) = course_here(course)?;
+        let path = format!("/courses/{c}/submissions/{id}/activate");
+        let reply = if clear {
+            api.delete(&path)
+        } else {
+            api.post(&path, &serde_json::json!({}))
+        }
+        .map_err(|e| miette!("{e}"))?;
+        let owner = reply["for"].as_str().unwrap_or("the student");
+        return print_lines(vec![match (clear, reply["cleared"].as_bool()) {
+            (false, _) => format!("#{id} now counts for {owner} (until they submit again)"),
+            (true, Some(true)) => format!("{owner}'s latest submission counts again"),
+            (true, _) => format!("nothing was activated for {owner}"),
+        }]);
+    }
+    let Some(assignment) = args.assignment else {
+        return Err(miette!("which assignment? hammer submissions ASSIGNMENT"));
+    };
     let (api, c) = course_here(args.course)?;
     let q = manage::query(&[("for", args.for_)]);
     print_lines(manage::submissions(
         &api.get(&format!(
             "/courses/{c}/assignments/{}/submissions{q}",
-            segment(&args.assignment)
+            segment(&assignment)
         ))
         .map_err(|e| miette!("{e}"))?,
     ))
@@ -411,6 +430,43 @@ fn run_visibility(cmd: VisibilityCmd) -> Result<()> {
 
 fn run_results(cmd: ResultsCmd) -> Result<()> {
     let lines = match cmd {
+        ResultsCmd::List {
+            assignment,
+            course,
+            search,
+            dropped,
+            staff,
+        } => {
+            let (api, a) = assignment_path(course, &assignment)?;
+            let q = manage::query(&[
+                ("search", search),
+                ("dropped", dropped.then(|| "true".to_owned())),
+                ("staff", staff.then(|| "true".to_owned())),
+            ]);
+            manage::results_list(
+                &api.get(&format!("{a}/results{q}"))
+                    .map_err(|e| miette!("{e}"))?,
+            )
+        }
+        ResultsCmd::Show {
+            assignment,
+            student,
+            course,
+            submission,
+        } => {
+            let (api, a) = assignment_path(course, &assignment)?;
+            let q = manage::query(&[("submission", submission.map(|s| s.to_string()))]);
+            match student {
+                Some(who) => manage::results_staff(
+                    &api.get(&format!("{a}/results/{}{q}", segment(&who)))
+                        .map_err(|e| miette!("{e}"))?,
+                ),
+                None => manage::results_mine(
+                    &api.get(&format!("{a}/my-results{q}"))
+                        .map_err(|e| miette!("{e}"))?,
+                ),
+            }
+        }
         ResultsCmd::Release {
             assignment,
             course,
@@ -760,6 +816,17 @@ fn run_submit(args: SubmitArgs) -> Result<()> {
     )
     .map_err(|e| miette!("{e}"))?;
     let (graded, lines) = submit::outcome(&run);
+    if graded && run.score.is_none() && matches!(to, upload::Endpoint::Api { .. }) {
+        // A student: show what they may see now.
+        let mine = api()?
+            .get(&format!(
+                "/courses/{course_id}/assignments/{}/my-results?submission={}",
+                segment(&args.assignment),
+                submitted.submission_id
+            ))
+            .map_err(|e| miette!("{e}"))?;
+        return print_lines(manage::results_mine(&mine));
+    }
     if graded {
         for line in lines {
             println!("{line}");
