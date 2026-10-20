@@ -21,7 +21,12 @@ use crate::state::AppState;
 use crate::users::UserView;
 use crate::{assignments, courses, members, notices, policy, results, submissions, users};
 
+/// The service: the REST api under `/api`.
 pub fn router(state: AppState) -> Router {
+    Router::new().nest("/api", api(state))
+}
+
+fn api(state: AppState) -> Router {
     let max_upload = state.config.max_upload_bytes;
     Router::new()
         .route("/healthz", get(|| async { "ok" }))

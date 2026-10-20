@@ -90,7 +90,7 @@ pub async fn serve_full(pool: PgPool) -> (String, Arc<Mutex<Vec<Mail>>>, JobsSee
         jobs: reqwest::Client::new(),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
+    let url = format!("http://{}/api", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, crate::http::router(state)).await });
     (url, outbox, seen)
 }

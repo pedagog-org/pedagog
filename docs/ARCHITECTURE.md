@@ -643,6 +643,10 @@ Default per-test visibility is defined in the test suite source code. The `visib
 
 ## Auth
 
+The api's routes are all under `/api` (e.g. `POST /api/auth/start`); paths below are
+written without it. `/` belongs to the web UI. hammer keeps the host (`--api
+https://host`) and adds `/api` itself.
+
 Students and instructors authenticate via email: the platform sends a short word-phrase to the user's email address. The auth layer is abstracted behind an interface to allow the mechanism to be swapped later (e.g. SSO, OAuth).
 
 - **The api** (`crates/api`, `pedagog-system`, behind Traefik) is the only public entry point; a NetworkPolicy lets only it reach `jobs`, which stays internal.
