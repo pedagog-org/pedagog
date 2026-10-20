@@ -452,6 +452,9 @@ hammer members list
 hammer members show gator                               # part of an email or name
 hammer upload ./linked-list --wait                      # build and validate
 hammer assignments list
+hammer submit linked-list ./my-solution --wait          # a staff submission
+hammer submit linked-list ./fixed --for albert.gator@ufl.edu --at last
+hammer submissions linked-list --for albert.gator@ufl.edu
 ```
 
 A course repo can carry a `course.yml` at its root (`course: cop3502-f26`, optionally
