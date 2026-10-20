@@ -23,7 +23,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     services:
-      # For #[sqlx::test] and the .sqlx cache check; matches `just db-up`.
+      # For #[sqlx::test] and the .sqlx cache check; matches `cargo xtask db-up`.
       postgres:
         image: postgres:16-alpine
         env:
@@ -77,7 +77,7 @@ jobs:
       # The web UI as browsers run it (the workspace build above is native).
       - run: cargo clippy --locked -p pedagog-web --target wasm32-unknown-unknown -- -D warnings
 
-      # Fails if a query changed without regenerating .sqlx/ (`just db-prepare`).
+      # Fails if a query changed without regenerating .sqlx/ (`cargo xtask db-prepare`).
       - name: Check sqlx offline cache
         env:
           SQLX_OFFLINE: "false"

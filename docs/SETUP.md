@@ -37,10 +37,10 @@ Working on the Rust crates doesn't need the cluster. For the crates that touch
 Postgres (`store`, `jobs`), bring up a local dev database in podman:
 
 ```sh
-just db-up       # start postgres:16-alpine (db/user 'pedagog', localhost:5432)
-just db-prepare  # apply migrations + refresh the committed .sqlx/ offline cache
-just db-shell    # psql into it
-just db-down     # stop it (keeps the named volume)
+cargo xtask db-up       # start postgres:16-alpine (db/user 'pedagog', localhost:5432)
+cargo xtask db-prepare  # apply migrations + refresh the committed .sqlx/ offline cache
+cargo xtask db-shell    # psql into it
+cargo xtask db-down     # stop it (keeps the named volume)
 ```
 
 `DATABASE_URL` defaults to `postgres://pedagog:pedagog@localhost:5432/pedagog`.
@@ -54,9 +54,9 @@ The web UI (`crates/web`) is a Leptos app compiled to WebAssembly and built with
 
 ```sh
 brew install trunk   # or: cargo install trunk --locked
-just kind-api        # in one terminal: the api (and Mailpit, GlitchTip) from kind
-just web-dev         # in another: http://localhost:3000, /api/ proxied to the api
-just web-build       # the static files, into target/web
+cargo xtask kind-api        # in one terminal: the api (and Mailpit, GlitchTip) from kind
+cargo xtask web-dev         # in another: http://localhost:3000, /api/ proxied to the api
+cargo xtask web-build       # the static files, into target/web
 ```
 
 ### Local cluster (kind)
@@ -76,17 +76,16 @@ Rootful mode switches podman to a separate container store; containers created b
 the switch are still reachable with `podman --connection podman-machine-default …`.
 
 ```sh
-just kind-up           # (re)create the cluster, recipes/ mounted into the node
-just kind-load-jobs    # build the jobs image with podman, load it into the node
-just kind-load-api     # the same for the api
-just kind-deploy       # apply deploy/overlays/kind (local-path storage, dev-mode jobs, Mailpit)
-just kind-rebuild      # POST /internal/recipes/rebuild; `just kind-rebuild force=true`
-just kind-add-admin <email>   # the first admin
-just kind-login <email> [name] # log a persona in with the code from Mailpit (target/kind/<name>)
-just kind-as <name> <hammer args>  # hammer as that persona
-just kind-api          # port-forward the api (:18082) and Mailpit (:18025) until interrupted
-just kind-e2e          # end-to-end check through the api
-just kind-down         # delete the cluster
+cargo xtask kind-up                     # (re)create the cluster, recipes/ mounted into the node
+cargo xtask kind-load all               # build the jobs and api images, load them into the node
+cargo xtask kind-deploy                 # apply deploy/overlays/kind; let the node pull from the registry
+cargo xtask kind-rebuild --wait         # build the OS images (`force=true` to rebuild them)
+cargo xtask kind-add-admin <email>      # the first admin
+cargo xtask kind-login <email> [name]   # log a persona in with the code from Mailpit (target/kind/<name>)
+cargo xtask kind-as <name> <hammer args>  # hammer as that persona
+cargo xtask kind-api                    # forward the api (:18082), Mailpit (:18025), GlitchTip (:18000)
+cargo xtask e2e [filter…]               # the end-to-end tests through the api
+cargo xtask kind-down                   # delete the cluster
 ```
 
 The kind overlay generates dev-only secrets (password `pedagog`) and runs `jobs` in dev
@@ -94,14 +93,14 @@ mode: no build at startup, Kaniko reads the recipes mounted into the node, and
 `kind-rebuild` is the trigger. Results land in the in-cluster registry
 (`registry-service.pedagog-data.svc:5000`) and in the `os_builds` / `build_runs` tables.
 
-Assignments: build the OS image first (`just kind-rebuild`), make yourself admin and
-staff and create a course (`just kind-add-admin you@kind.local`, `just kind-login
-you@kind.local me`, `just kind-as me users role you@kind.local staff`, `just kind-as me
-courses create demo "Demo"`), then `just kind-as me upload
+Assignments: build the OS image first (`cargo xtask kind-rebuild`), make yourself admin and
+staff and create a course (`cargo xtask kind-add-admin you@kind.local`, `cargo xtask kind-login
+you@kind.local me`, `cargo xtask kind-as me users role you@kind.local staff`, `cargo xtask kind-as me
+courses create demo "Demo"`), then `cargo xtask kind-as me upload
 recipes/examples/linked-list-python -c demo --wait` checks, packs and uploads the
 example; `jobs` stores it in Garage, builds it with Kaniko, validates the reference
-solution, and `--wait` prints the verdict. `kind-deploy` also runs `just kind-registry`,
-which lets the node pull images from the in-cluster registry (validation pods run the
+solution, and `--wait` prints the verdict. `kind-deploy` also configures containerd so
+the node pulls images from the in-cluster registry (validation pods run the
 built image); clusters created by `kind-up` already have containerd's per-registry config
 enabled, and older ones get it (with a containerd restart) on the first run.
 
@@ -527,8 +526,8 @@ database with migrations it doesn't know. Deploy them together (the same tag in 
 `kubectl apply -k`); rolling back across a migration means reverting it first
 (`sqlx migrate revert`, or the migration's `.down.sql`).
 
-On kind: `just kind-load-api`, `just kind-deploy`, `just kind-add-admin <email>`, then
-`just kind-api` port-forwards the api (http://localhost:18082) and Mailpit's inbox
+On kind: `cargo xtask kind-load api`, `cargo xtask kind-deploy`, `cargo xtask kind-add-admin <email>`, then
+`cargo xtask kind-api` port-forwards the api (http://localhost:18082) and Mailpit's inbox
 (http://localhost:18025), where the login code arrives.
 
 ---
@@ -566,7 +565,7 @@ in our Postgres; nothing leaves the cluster.
 Events are kept 90 days (`GLITCHTIP_RETENTION_DAYS`). It needs about 256–512 MiB.
 
 On kind: the overlay sets dev secrets (superuser `admin@pedagog.dev` / `pedagog-dev`) and
-mails Mailpit; `just kind-api` also forwards GlitchTip (http://localhost:18000).
+mails Mailpit; `cargo xtask kind-api` also forwards GlitchTip (http://localhost:18000).
 
 ---
 

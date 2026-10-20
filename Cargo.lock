@@ -2938,6 +2938,18 @@ name = "pedagog-daemon"
 version = "0.0.0"
 
 [[package]]
+name = "pedagog-e2e"
+version = "0.0.0"
+dependencies = [
+ "flate2",
+ "reqwest",
+ "serde_json",
+ "time",
+ "url",
+ "zip",
+]
+
+[[package]]
 name = "pedagog-jobs"
 version = "0.0.0"
 dependencies = [
@@ -5326,6 +5338,15 @@ checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
  "rustix",
+]
+
+[[package]]
+name = "xtask"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "pedagog-e2e",
+ "reqwest",
 ]
 
 [[package]]

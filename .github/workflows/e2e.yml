@@ -1,0 +1,56 @@
+# End-to-end tests on a kind cluster: nightly on main, on demand, and on pull
+# requests labelled `e2e` (too slow, ~30-60 min with Kaniko builds, for every PR).
+name: e2e
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+  pull_request:
+    types: [labeled, synchronize, opened, reopened]
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kind:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      # The runners have docker; xtask uses podman unless told otherwise.
+      PEDAGOG_ENGINE: docker
+      KIND_VERSION: v0.27.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install kind
+        run: |
+          curl -fsSLo kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          sudo install kind /usr/local/bin/kind
+
+      - name: Cluster, images, deployment
+        run: |
+          cargo xtask kind-up
+          cargo xtask kind-load all
+          cargo xtask kind-deploy
+          kubectl --context kind-pedagog -n pedagog-builds rollout status deploy/pedagog-jobs --timeout=300s
+          kubectl --context kind-pedagog -n pedagog-system rollout status deploy/pedagog-api --timeout=300s
+
+      - name: OS base images
+        run: cargo xtask kind-rebuild --wait
+
+      - run: cargo xtask e2e
+
+      - name: Logs on failure
+        if: failure()
+        run: |
+          kubectl --context kind-pedagog get pods -A
+          kubectl --context kind-pedagog -n pedagog-builds logs deploy/pedagog-jobs --tail=300
+          kubectl --context kind-pedagog -n pedagog-system logs deploy/pedagog-api --tail=300
