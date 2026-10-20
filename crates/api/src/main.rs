@@ -14,6 +14,7 @@ mod mail;
 mod members;
 mod roster;
 mod state;
+mod submissions;
 #[cfg(test)]
 mod testing;
 mod users;

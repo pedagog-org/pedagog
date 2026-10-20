@@ -102,7 +102,11 @@ impl BuildSummary {
     }
 }
 
-async fn find(state: &AppState, course: &str, slug: &str) -> Result<Assignment, ApiError> {
+pub(crate) async fn find(
+    state: &AppState,
+    course: &str,
+    slug: &str,
+) -> Result<Assignment, ApiError> {
     db::assignment(&state.pool, course, slug)
         .await
         .map_err(|e| internal("reading the assignment", e))?
