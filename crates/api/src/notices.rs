@@ -42,7 +42,7 @@ struct To {
 
 impl To {
     fn about(&self) -> String {
-        format!("{} ({})", self.a.name, self.course_name)
+        format!("{} in {}", self.a.name, self.course_name)
     }
 
     fn see_them(&self) -> String {
