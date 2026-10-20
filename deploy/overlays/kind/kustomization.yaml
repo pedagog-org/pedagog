@@ -43,7 +43,8 @@ secretGenerator:
     literals:
       - secret-key=pedagog-dev-glitchtip-secret-key
       - email-url=smtp://mailpit.pedagog-data.svc:1025
-      - admin-email=admin@kind.local
+      # GlitchTip refuses reserved domains such as .local in emails.
+      - admin-email=admin@pedagog.dev
       - admin-password=pedagog-dev
   - name: pedagog-api-db
     namespace: pedagog-system

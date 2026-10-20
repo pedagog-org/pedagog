@@ -14,7 +14,7 @@ spec:
             - name: GLITCHTIP_DOMAIN
               value: http://localhost:18000
             - name: DEFAULT_FROM_EMAIL
-              value: glitchtip@kind.local
+              value: glitchtip@pedagog.dev
 ---
 $patch: delete
 apiVersion: networking.k8s.io/v1

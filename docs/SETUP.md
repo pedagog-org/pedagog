@@ -531,7 +531,7 @@ in our Postgres; nothing leaves the cluster.
 
 Events are kept 90 days (`GLITCHTIP_RETENTION_DAYS`). It needs about 256–512 MiB.
 
-On kind: the overlay sets dev secrets (superuser `admin@kind.local` / `pedagog-dev`) and
+On kind: the overlay sets dev secrets (superuser `admin@pedagog.dev` / `pedagog-dev`) and
 mails Mailpit; `just kind-api` also forwards GlitchTip (http://localhost:18000).
 
 ---
