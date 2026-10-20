@@ -938,11 +938,58 @@ pub fn imported(r: &serde_json::Value) -> Vec<String> {
     lines
 }
 
+/// What `results release` did.
+pub fn released(assignment: &str, reply: &serde_json::Value) -> String {
+    if reply["already"].as_bool() == Some(true) {
+        return format!("results of {assignment} were already released");
+    }
+    match reply["told"].as_u64().unwrap_or(0) {
+        0 => format!("results of {assignment} are released"),
+        n => format!(
+            "results of {assignment} are released; emailing {}",
+            students(n)
+        ),
+    }
+}
+
+/// What `results notify` queued.
+pub fn queued(reply: &serde_json::Value) -> String {
+    format!(
+        "emailing {}",
+        students(reply["queued"].as_u64().unwrap_or(0))
+    )
+}
+
+fn students(n: u64) -> String {
+    if n == 1 {
+        "1 student".into()
+    } else {
+        format!("{n} students")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use serde_json::json;
+
+    #[test]
+    fn release_and_notify_say_who_is_emailed() {
+        assert_eq!(
+            released("ll", &json!({"already": true, "told": 0})),
+            "results of ll were already released"
+        );
+        assert_eq!(
+            released("ll", &json!({"already": false, "told": 0})),
+            "results of ll are released"
+        );
+        assert_eq!(
+            released("ll", &json!({"already": false, "told": 1})),
+            "results of ll are released; emailing 1 student"
+        );
+        assert_eq!(queued(&json!({"queued": 600})), "emailing 600 students");
+    }
 
     #[test]
     fn queries_encode_what_they_carry() {

@@ -81,25 +81,7 @@ pub async fn serve(pool: PgPool) -> (String, Arc<Mutex<Vec<Mail>>>) {
 pub async fn serve_full(pool: PgPool) -> (String, Arc<Mutex<Vec<Mail>>>, JobsSeen) {
     let (jobs_url, seen) = stub_jobs().await;
     let (mailer, outbox) = Mailer::memory();
-    let config = Config {
-        database_url: String::new(),
-        listen_addr: String::new(),
-        public_url: "https://pedagog.example".into(),
-        cookie_secure: true,
-        smtp: Smtp {
-            host: "unused".into(),
-            port: 25,
-            tls: TlsMode::None,
-            login: None,
-            from_name: "Pedagog".into(),
-            from_address: "pedagog@ufl.edu".into(),
-            reply_to: None,
-        },
-        limits: AuthLimits::default(),
-        login_domain: "ufl.edu".into(),
-        jobs_url,
-        max_upload_bytes: 1 << 20,
-    };
+    let config = config(jobs_url);
     let state = AppState {
         pool,
         config: Arc::new(config),
@@ -191,4 +173,41 @@ pub async fn post_csv(url: &str, token: &str, csv: &str) -> reqwest::Response {
 
 pub async fn json(r: reqwest::Response) -> serde_json::Value {
     serde_json::from_str(&r.text().await.unwrap()).unwrap()
+}
+
+/// An app state over `pool` and its outbox, for calling handlers' helpers
+/// directly.
+pub fn state(pool: PgPool) -> (AppState, Arc<Mutex<Vec<Mail>>>) {
+    let (mailer, outbox) = Mailer::memory();
+    let state = AppState {
+        pool,
+        config: Arc::new(config(String::new())),
+        mailer,
+        auth: Authenticator::EmailCode,
+        jobs: reqwest::Client::new(),
+    };
+    (state, outbox)
+}
+
+fn config(jobs_url: String) -> Config {
+    Config {
+        database_url: String::new(),
+        listen_addr: String::new(),
+        public_url: "https://pedagog.example".into(),
+        cookie_secure: true,
+        smtp: Smtp {
+            host: "unused".into(),
+            port: 25,
+            tls: TlsMode::None,
+            login: None,
+            from_name: "Pedagog".into(),
+            from_address: "pedagog@ufl.edu".into(),
+            reply_to: None,
+        },
+        limits: AuthLimits::default(),
+        login_domain: "ufl.edu".into(),
+        jobs_url,
+        max_upload_bytes: 1 << 20,
+        mail_per_second: 1000,
+    }
 }

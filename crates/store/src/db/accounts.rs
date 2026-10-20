@@ -74,6 +74,12 @@ pub async fn user_by_email(pool: &PgPool, email: &str) -> sqlx::Result<Option<Us
     .transpose()
 }
 
+pub async fn user_name(pool: &PgPool, id: i64) -> sqlx::Result<String> {
+    sqlx::query_scalar!("SELECT name FROM users WHERE id = $1", id)
+        .fetch_one(pool)
+        .await
+}
+
 /// What setting a global role did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RoleSet {

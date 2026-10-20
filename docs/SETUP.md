@@ -428,6 +428,7 @@ The api is the public entry point: people log in with a code sent to their email
    | `PEDAGOG_SMTP_USER` / `_PASSWORD` | (none) | From the `pedagog-api-smtp` Secret (Phase 1), only if the relay wants a login |
    | `PEDAGOG_MAIL_FROM_NAME` / `_ADDRESS` | `Pedagog` / (required) | The sender |
    | `PEDAGOG_MAIL_REPLY_TO` | (none) | Optional |
+   | `PEDAGOG_MAIL_PER_SECOND` | 5 | Notices sent per second per replica (keep under the relay's limit) |
    | `PEDAGOG_JOBS_URL` | `http://pedagog-jobs.pedagog-builds.svc:8080` | Where uploads and submissions go |
    | `PEDAGOG_MAX_UPLOAD_BYTES` | 50 MiB | The largest assignment archive passed on (match `jobs`') |
 

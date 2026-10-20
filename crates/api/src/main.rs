@@ -12,6 +12,7 @@ mod error;
 mod http;
 mod mail;
 mod members;
+mod notices;
 mod policy;
 mod results;
 mod roster;
@@ -94,6 +95,7 @@ async fn serve() -> anyhow::Result<()> {
     // Background work owned here: if it stops, the service exits and is restarted.
     let mut background = JoinSet::new();
     background.spawn(cleanup(state.clone()));
+    background.spawn(notices::run(state.clone()));
 
     let listener = TcpListener::bind(&state.config.listen_addr).await?;
     tracing::info!(addr = %state.config.listen_addr, "listening");

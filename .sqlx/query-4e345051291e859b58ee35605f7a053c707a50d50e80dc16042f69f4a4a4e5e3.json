@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE notices\n            SET attempts = attempts + 1, last_error = $2,\n                send_after = now() + make_interval(secs => $3),\n                gave_up_at = CASE WHEN $4 THEN now() END\n          WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Float8",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4e345051291e859b58ee35605f7a053c707a50d50e80dc16042f69f4a4a4e5e3"
+}

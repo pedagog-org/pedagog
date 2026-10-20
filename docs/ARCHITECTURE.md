@@ -213,6 +213,21 @@ Each test's result has four parts, each with its own visibility: `visible`, `hid
   list`, `hammer results show <assignment> <student>`).
 - **What counts:** a student's latest submission by counted time, unless staff activate
   an earlier one (`hammer submissions activate <id>`), until the student submits again.
+- **Notices:** students are emailed what they see now, from an outbox in Postgres
+  (`notices`):
+  - **Regrade:** a finished regrade run marked to tell (above) mails its student (active
+    students only, not staff): the score on the tests shown, before and after, and how
+    many shown tests' feedback, printed output or errors changed; or the plain sentence
+    if it couldn't be graded. Under `changed`, a regrade whose changes the student can't
+    see sends nothing.
+  - **Release:** releasing mails every active student with a submission that counts,
+    without numbers (not when already released).
+  - **By hand:** `hammer results notify <assignment> [--for <email>]` (instructors) mails
+    the current shown score.
+  - **Sending:** the api queues regrade notices every 15 s and sends due ones at most
+    `PEDAGOG_MAIL_PER_SECOND` per replica, leasing each for 5 minutes so replicas don't
+    double-send; a failed send retries after 1, 5 and 30 minutes, then gives up. Every
+    retry is logged as a warning, giving up as an error.
 
 ---
 
@@ -546,7 +561,7 @@ Students submit with `hammer submit <assignment> <files>` through the api (`POST
 - **Admission:** validation and grading runs wait in a Postgres queue (`run_queue`), submissions and validations ahead of regrades. One `jobs` replica at a time (under an advisory lock) releases the next run, but only while one more run fits `pedagog-grading`'s ResourceQuota and no test run is waiting for a node (a Job without its pod, or a pod not yet scheduled). It wakes when a run is queued or a test run ends (Postgres `NOTIFY` on `pedagog_run_queue`, sent in the queueing transaction, so every replica hears it on commit), 250 ms after a release, and otherwise every two seconds, so the pace follows the cluster's real capacity; `PEDAGOG_MAX_RUNNING_TESTS` adds an optional ceiling. A run's Job is created in the transaction that releases it, so its deadline starts then. Kueue can replace this gate for multi-course fair sharing.
 - **Grading run:** a Job in `pedagog-grading` from the pinned build's image: `await-egress`, then `fetch-context` puts the submission at `/pedagog/submission` (read-only), then `/pedagog/bin/run-tests --code /pedagog/submission`, with validation's pod security, network policies and limits (`PEDAGOG_GRADING_DEADLINE`, `_CPU`, `_MEMORY`). The code under test is exactly the submission.
 - **Outcome:** `graded` when results parse and pass the format checks (failing tests included), with score, total and full results; otherwise `error`, with the problems and the pod's log tail. Tests that couldn't all run (the helper reports `run.status: error`, e.g. the submission has a syntax error) mean the run is an `error` with the load error, not a 0 out of 0. Each error records its kind (see Results YAML Format). `in-process` isolation is allowed, but uploads warn that student code can then read the tests and alter its results; each run records its isolation.
-- **Regrades:** `hammer upload --regrade [--notify never|changed|always]` asks for one. When that build validates and becomes current, every student's latest submission (by counted time) gets a new run against it, queued behind new submissions (a build that fails validation or is superseded never regrades; identical content that's already built has nothing to regrade). Earlier runs stay as history; the latest is the one shown. Each regrade run stores a change summary against the submission's previous graded run (score before and after, tests added, removed or changed, matched by id, else node) and whether to tell the student: `never` (the default: the instructor may be testing), `changed` (only if the summary isn't empty), or `always`. Delivering notifications comes with the api.
+- **Regrades:** `hammer upload --regrade [--notify never|changed|always]` asks for one. When that build validates and becomes current, every student's latest submission (by counted time) gets a new run against it, queued behind new submissions (a build that fails validation or is superseded never regrades; identical content that's already built has nothing to regrade). Earlier runs stay as history; the latest is the one shown. Each regrade run stores a change summary against the submission's previous graded run (score before and after, tests added, removed or changed, matched by id, else node) and whether to tell the student: `never` (the default: the instructor may be testing), `changed` (only if the summary isn't empty), or `always`. The api mails those (see Notices).
 - **Status:** `GET /internal/submissions/<id>` (the submission, its receipt, and its runs latest first: status, queue position, score, problems, log tail, change summary, results) and `GET /internal/courses/<course>/assignments/<slug>/submissions?student=<id>`. Internal callers see everything; what students see is filtered by the api later. `hammer submit --wait` follows a run and prints the score and the tests that didn't pass.
 - **Settling runs:** one watch on `pedagog-grading`'s test-run pods (labeled with their build or run id) judges a validation or records a grading run as soon as its main container ends, from the results it uploaded (results land about a second after the tests finish). A sweep every 30 s settles what the watch can't see: a Job that failed before it had a pod, or one whose pods are gone. Settling is idempotent, so the two can overlap. Admission, the watch and the sweep are owned by the service's main task: if one stops, the service exits and Kubernetes restarts it.
 - **Run settings:** a build's platform, isolation, egress and submission rules are saved on its row at dispatch, so admission and intake read one row instead of the stored archive (builds from before that are backfilled once).
