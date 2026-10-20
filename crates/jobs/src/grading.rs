@@ -138,9 +138,11 @@ async fn regrade_changes(
     let previous = db::previous_graded_run(&state.pool, ctx.submission_id, ctx.run_id).await?;
     let before = parse(previous.as_ref().and_then(|r| r.results.as_deref()));
     let changes = compare(before.as_ref(), parse(results).as_ref());
-    let notify = db::batch_notify(&state.pool, batch)
-        .await?
-        .is_some_and(|n| n.tells(&changes));
+    // Staff's own submissions are never notified.
+    let notify = !ctx.staff
+        && db::batch_notify(&state.pool, batch)
+            .await?
+            .is_some_and(|n| n.tells(&changes));
     Ok((serde_json::to_string(&changes).ok(), notify))
 }
 
