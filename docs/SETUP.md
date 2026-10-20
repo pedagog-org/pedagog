@@ -202,6 +202,19 @@ kubectl create secret generic pedagog-api-db \
   --from-literal=user="$SMTP_USER" --from-literal=password="$SMTP_PASSWORD" \
   --namespace=pedagog-system
 
+# GlitchTip (error tracking): its database role's password and URL, Django's
+# secret key, the mail relay, and its superuser (the bootstrap Job creates both)
+kubectl create secret generic glitchtip-db \
+  --from-literal=password="$GLITCHTIP_DB_PW" \
+  --from-literal=url="postgres://glitchtip:${GLITCHTIP_DB_PW}@postgres-service.pedagog-data.svc:5432/glitchtip" \
+  --namespace=pedagog-data
+kubectl create secret generic glitchtip-secrets \
+  --from-literal=secret-key="$(openssl rand -hex 32)" \
+  --from-literal=email-url="$GLITCHTIP_EMAIL_URL" \
+  --from-literal=admin-email="$GLITCHTIP_ADMIN_EMAIL" \
+  --from-literal=admin-password="$GLITCHTIP_ADMIN_PW" \
+  --namespace=pedagog-data
+
 # Garage object store: cluster RPC secret (64 hex chars) and admin API token
 kubectl create secret generic garage-secrets \
   --from-literal=rpc-secret="$(openssl rand -hex 32)" \
@@ -483,6 +496,43 @@ database with migrations it doesn't know. Deploy them together (the same tag in 
 On kind: `just kind-load-api`, `just kind-deploy`, `just kind-add-admin <email>`, then
 `just kind-api` port-forwards the api (http://localhost:18082) and Mailpit's inbox
 (http://localhost:18025), where the login code arrives.
+
+---
+
+## Phase 7 — Error Tracking (GlitchTip)
+
+`api` and `jobs` report every warning and error (and panic) to GlitchTip, which groups
+repeats and emails alerts. It runs in `pedagog-data` as one process, with its database
+in our Postgres; nothing leaves the cluster.
+
+1. **Hostname:** in `deploy/base/glitchtip/` (or an overlay patch), replace
+   `REPLACE-WITH-GLITCHTIP-HOSTNAME` (ingress and `GLITCHTIP_DOMAIN`, e.g.
+   `glitchtip.<domain>`) and `REPLACE-WITH-SENDER-ADDRESS`. Apply; the
+   `glitchtip-bootstrap` Job creates its role, database and superuser (from Phase 1's
+   Secrets; re-runnable: `kubectl -n pedagog-data delete job glitchtip-bootstrap`, then
+   apply again).
+2. **Projects:** sign in at `https://<glitchtip host>` as the superuser, create an
+   organization and a project per service (`api`, `jobs`; platform Rust), and copy each
+   project's DSN (Settings → Client Keys). Under Alerts, add an email alert.
+3. **DSNs:** give each service its DSN with the host swapped for the internal Service,
+   so events stay in the cluster:
+
+   ```sh
+   # https://<key>@<glitchtip host>/1  ->  http://<key>@glitchtip.pedagog-data.svc:8000/1
+   kubectl -n pedagog-system create secret generic pedagog-api-sentry --from-literal=dsn=<api DSN>
+   kubectl -n pedagog-builds create secret generic pedagog-jobs-sentry --from-literal=dsn=<jobs DSN>
+   kubectl -n pedagog-system rollout restart deploy/pedagog-api
+   kubectl -n pedagog-builds rollout restart deploy/pedagog-jobs
+   ```
+
+   Each logs `reporting warnings and errors to PEDAGOG_SENTRY_DSN's host` at start.
+   Without the Secret (`PEDAGOG_SENTRY_DSN` unset), nothing is reported; a malformed DSN
+   stops the service from starting.
+
+Events are kept 90 days (`GLITCHTIP_RETENTION_DAYS`). It needs about 256–512 MiB.
+
+On kind: the overlay sets dev secrets (superuser `admin@kind.local` / `pedagog-dev`) and
+mails Mailpit; `just kind-api` also forwards GlitchTip (http://localhost:18000).
 
 ---
 

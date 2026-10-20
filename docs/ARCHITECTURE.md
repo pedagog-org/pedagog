@@ -749,7 +749,15 @@ The frontend and API are independently deployable. The API is callable by any HT
 
 ## Observability
 
-All services emit structured logs via the `tracing` crate, serialized as JSON.
+All services emit structured logs via the `tracing` crate (`pedagog-telemetry` sets
+them up for `api` and `jobs`, filtered by `RUST_LOG`, default `info`).
+
+**Errors and warnings:** with `PEDAGOG_SENTRY_DSN` set, `api` and `jobs` report every
+warning and error, and panics, to GlitchTip (Sentry-compatible, self-hosted in
+`pedagog-data`, its database in our Postgres, no Valkey), with the info lines before
+each as breadcrumbs. GlitchTip groups repeats and emails alerts; admins reach its UI at
+its own hostname, and the portal will link to it. Services send to its internal Service,
+so student data stays in the cluster.
 
 **Local development:** `stern` streams logs from multiple k8s pods simultaneously with per-pod color coding and label-based filtering. Usage is documented in the dev setup guide.
 
