@@ -369,6 +369,17 @@ pub fn judge(uploaded: Option<&[u8]>) -> Verdict {
         return invalid(problems);
     }
     let json = serde_json::to_string(&results).ok();
+    // The reference solution must load: a run that couldn't run its tests
+    // would otherwise validate with whatever ran.
+    if let Some(output) = results.run_error() {
+        return Verdict {
+            status: ValidationStatus::Failed,
+            results: json,
+            problems: vec![format!(
+                "the tests couldn't all run with the reference solution:\n{output}"
+            )],
+        };
+    }
     let mismatches: Vec<String> = results
         .solution_mismatches()
         .iter()
@@ -553,6 +564,18 @@ mod tests {
             v.problems,
             ["reverse: expected the solution to fail, but it passed"]
         );
+    }
+
+    #[test]
+    fn a_solution_whose_tests_cant_run_fails() {
+        let text = std::str::from_utf8(FIXTURE).unwrap().replacen(
+            "{",
+            r#"{"run": {"status": "error", "output": "solution.py: SyntaxError"},"#,
+            1,
+        );
+        let v = judge(Some(text.as_bytes()));
+        assert_eq!(v.status, ValidationStatus::Failed);
+        assert!(v.problems[0].contains("SyntaxError"), "{:?}", v.problems);
     }
 
     #[test]

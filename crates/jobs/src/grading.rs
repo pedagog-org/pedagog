@@ -6,13 +6,14 @@
 use std::time::Duration;
 
 use pedagog_core::changes::compare;
-use pedagog_core::results::{COLLECTION_SUFFIX, Results};
+use pedagog_core::results::Results;
 use pedagog_k8s::build::JobKey;
 use pedagog_k8s::grade::GradingRequest;
-use pedagog_store::RunStatus;
+use pedagog_k8s::runs::Stopped;
 use pedagog_store::db::assignments as builds_db;
 use pedagog_store::db::submissions::{self as db, RunOutcome};
 use pedagog_store::objects::grading_results_key;
+use pedagog_store::{ErrorKind, RunStatus};
 use sqlx::PgConnection;
 
 use crate::admission::Launch;
@@ -84,7 +85,12 @@ pub async fn launch(state: &AppState, conn: &mut PgConnection, run: i64) -> Resu
 /// Record the outcome of a grading run whose pod ended (or whose Job is
 /// gone), from the results it uploaded. Does nothing if the run isn't grading
 /// (already settled), so reports of the same pod can repeat.
-pub async fn settle(state: &AppState, run: i64, succeeded: bool) -> anyhow::Result<()> {
+pub async fn settle(
+    state: &AppState,
+    run: i64,
+    succeeded: bool,
+    stopped: Option<Stopped>,
+) -> anyhow::Result<()> {
     let Some(current) = db::get_run(&state.pool, run).await? else {
         return Ok(());
     };
@@ -103,7 +109,13 @@ pub async fn settle(state: &AppState, run: i64, succeeded: bool) -> anyhow::Resu
             .logs(&JobKey::grading(&job_id(&ctx.course_id, &ctx.slug), run))
             .await;
         log_tail = Some(logs[logs.len().saturating_sub(LOG_TAIL)..].to_owned());
-        verdict.error = Some("the run crashed or timed out".to_owned());
+        let (kind, error) = match stopped {
+            Some(Stopped::Deadline) => (ErrorKind::Timeout, "the run passed its time limit"),
+            Some(Stopped::OutOfMemory) => (ErrorKind::OutOfMemory, "the run ran out of memory"),
+            None => (ErrorKind::Crash, "the run stopped unexpectedly"),
+        };
+        verdict.kind = Some(kind);
+        verdict.error = Some(error.to_owned());
     }
     let (changes, notify) = match ctx.regrade_batch_id {
         Some(batch) => regrade_changes(state, &ctx, batch, verdict.results.as_deref()).await?,
@@ -114,6 +126,7 @@ pub async fn settle(state: &AppState, run: i64, succeeded: bool) -> anyhow::Resu
         results: verdict.results.as_deref(),
         problems: &verdict.problems,
         error: verdict.error.as_deref(),
+        error_kind: verdict.kind,
         log_tail: log_tail.as_deref(),
         changes: changes.as_deref(),
         notify,
@@ -161,43 +174,48 @@ pub struct Verdict {
     pub score: Option<(f64, f64)>,
     pub problems: Vec<String>,
     pub error: Option<String>,
+    /// Why it's an error.
+    pub kind: Option<ErrorKind>,
 }
 
 /// Results that parse and pass the format checks are graded (failing tests
 /// included); anything else is an error, and nothing from it is kept.
 pub fn judge(uploaded: Option<&[u8]>) -> Verdict {
-    let error = |problems: Vec<String>| Verdict {
+    let error = |kind: ErrorKind, problems: Vec<String>| Verdict {
         results: None,
         score: None,
         problems,
         error: None,
+        kind: Some(kind),
     };
     let Some(bytes) = uploaded else {
-        return error(vec!["no results.yaml was uploaded".into()]);
+        return error(
+            ErrorKind::NoResults,
+            vec!["no results.yaml was uploaded".into()],
+        );
     };
     let results: Results = match serde_yaml::from_slice(bytes) {
         Ok(r) => r,
-        Err(e) => return error(vec![format!("results.yaml didn't parse: {e}")]),
+        Err(e) => {
+            return error(
+                ErrorKind::Invalid,
+                vec![format!("results.yaml didn't parse: {e}")],
+            );
+        }
     };
     let problems = results.problems();
     if !problems.is_empty() {
-        return error(problems);
+        return error(ErrorKind::Invalid, problems);
     }
-    // Tests that couldn't even load (e.g. a syntax error in the submission)
-    // never ran: the run is an error, not a 0 out of 0.
-    let unloaded = results.collection_errors();
-    if !unloaded.is_empty() {
+    // Tests that couldn't even run (e.g. a syntax error in the submission):
+    // the run is an error, not a 0 out of 0.
+    if let Some(output) = results.run_error() {
         return error(
-            unloaded
-                .iter()
-                .map(|t| {
-                    let file = t.node.trim_end_matches(COLLECTION_SUFFIX);
-                    format!(
-                        "{file} couldn't be loaded, so its tests didn't run:\n{}",
-                        tail_lines(&t.output, ERROR_LINES)
-                    )
-                })
-                .collect(),
+            ErrorKind::Load,
+            vec![format!(
+                "the tests couldn't all run:\n{}",
+                tail_lines(&output, ERROR_LINES)
+            )],
         );
     }
     Verdict {
@@ -205,6 +223,7 @@ pub fn judge(uploaded: Option<&[u8]>) -> Verdict {
         results: serde_json::to_string(&results).ok(),
         problems: Vec::new(),
         error: None,
+        kind: None,
     }
 }
 
@@ -254,13 +273,23 @@ mod tests {
             }]
         }"#;
         let v = judge(Some(broken.as_bytes()));
-        assert_eq!((v.results, v.score), (None, None));
+        assert_eq!(
+            (v.results, v.score, v.kind),
+            (None, None, Some(ErrorKind::Load))
+        );
         assert!(
-            v.problems[0].starts_with("test_linked_list.py couldn't be loaded"),
+            v.problems[0].starts_with("the tests couldn't all run:\ntest_linked_list.py:"),
             "{:?}",
             v.problems
         );
         assert!(v.problems[0].contains("invalid syntax"), "{:?}", v.problems);
+
+        // What pedagog-pytest 2 reports instead.
+        let v2 = r#"{"run": {"status": "error", "output": "linked_list.py: invalid syntax"},
+                     "summary": {"score": 0.0, "total": 0.0}, "tests": []}"#;
+        let v = judge(Some(v2.as_bytes()));
+        assert_eq!(v.kind, Some(ErrorKind::Load));
+        assert!(v.problems[0].contains("invalid syntax"));
     }
 
     #[test]
@@ -272,6 +301,10 @@ mod tests {
             let v = judge(bytes);
             assert_eq!((v.results, v.score), (None, None));
             assert!(v.problems[0].contains(needle), "{:?}", v.problems);
+            assert!(matches!(
+                v.kind,
+                Some(ErrorKind::NoResults | ErrorKind::Invalid)
+            ));
         }
         let text =
             std::str::from_utf8(FIXTURE)

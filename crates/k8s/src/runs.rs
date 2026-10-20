@@ -23,6 +23,36 @@ pub struct RunEnded {
     pub kind: RunKind,
     pub id: i64,
     pub succeeded: bool,
+    /// Why Kubernetes stopped it, when it did.
+    pub stopped: Option<Stopped>,
+}
+
+/// Kubernetes ended a run itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stopped {
+    /// Its Job's deadline passed.
+    Deadline,
+    /// A container went over its memory limit.
+    OutOfMemory,
+}
+
+/// Why a pod's run was stopped, from its status.
+pub(crate) fn stopped_pod(pod: &Pod) -> Option<Stopped> {
+    let status = pod.status.as_ref()?;
+    let oom = status
+        .container_statuses
+        .iter()
+        .chain(status.init_container_statuses.iter())
+        .flatten()
+        .filter_map(|c| c.state.as_ref()?.terminated.as_ref())
+        .any(|t| t.reason.as_deref() == Some("OOMKilled"));
+    if oom {
+        Some(Stopped::OutOfMemory)
+    } else if status.reason.as_deref() == Some("DeadlineExceeded") {
+        Some(Stopped::Deadline)
+    } else {
+        None
+    }
 }
 
 impl Builder {
@@ -82,6 +112,7 @@ fn ended(pod: &Pod) -> Option<RunEnded> {
         kind,
         id,
         succeeded,
+        stopped: if succeeded { None } else { stopped_pod(pod) },
     })
 }
 
@@ -131,12 +162,36 @@ mod tests {
     }
 
     #[test]
+    fn running_out_of_memory_says_so() {
+        let oom = Some(ContainerState {
+            terminated: Some(ContainerStateTerminated {
+                exit_code: 137,
+                reason: Some("OOMKilled".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let ended = ended(&pod("grade", "Running", oom)).unwrap();
+        assert_eq!(
+            (ended.succeeded, ended.stopped),
+            (false, Some(Stopped::OutOfMemory))
+        );
+        let mut late = pod("grade", "Failed", None);
+        late.status.as_mut().unwrap().reason = Some("DeadlineExceeded".into());
+        assert_eq!(
+            super::ended(&late).unwrap().stopped,
+            Some(Stopped::Deadline)
+        );
+    }
+
+    #[test]
     fn a_run_ends_when_its_main_container_does() {
         let done = |kind, succeeded| {
             Some(RunEnded {
                 kind,
                 id: 42,
                 succeeded,
+                stopped: None,
             })
         };
         assert_eq!(
