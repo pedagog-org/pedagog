@@ -771,8 +771,7 @@ fn confirm(drops: &[String]) -> Result<bool> {
 /// at or above `dir`, or `hammer use`.
 fn endpoint(flag: Option<String>, dir: &Path) -> Result<(upload::Endpoint, course::Chosen)> {
     let session = account::load().ok_or_else(|| miette!("not logged in: run `hammer login`"))?;
-    let chosen =
-        course::choose(flag, dir, session.course.clone()).map_err(|e| miette!("{e}"))?;
+    let chosen = course::choose(flag, dir, session.course.clone()).map_err(|e| miette!("{e}"))?;
     course::check_api(&chosen, &session.api).map_err(|e| miette!("{e}"))?;
     Ok((
         upload::Endpoint {

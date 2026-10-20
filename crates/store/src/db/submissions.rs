@@ -574,7 +574,8 @@ pub(crate) mod tests {
     /// A submission by `student` (a user named `<student>@ufl.edu`) against
     /// `build` (of its assignment).
     pub(crate) async fn submit(pool: &PgPool, student: &str, build: i64) -> sqlx::Result<Accepted> {
-        let user = crate::db::accounts::upsert_user(pool, &format!("{student}@ufl.edu"), "").await?;
+        let user =
+            crate::db::accounts::upsert_user(pool, &format!("{student}@ufl.edu"), "").await?;
         let assignment = sqlx::query_scalar!(
             "SELECT assignment_id FROM assignment_builds WHERE id = $1",
             build
@@ -617,8 +618,13 @@ pub(crate) mod tests {
             (runs[0].id, runs[0].status, runs[0].reason),
             (acc.run_id, RunStatus::Queued, RunReason::Submission)
         );
-        let s1 = crate::db::accounts::user_by_email(&pool, "s1@ufl.edu").await?.unwrap();
-        assert_eq!(submissions_for_user(&pool, sub.assignment_id, s1.id).await?, [sub]);
+        let s1 = crate::db::accounts::user_by_email(&pool, "s1@ufl.edu")
+            .await?
+            .unwrap();
+        assert_eq!(
+            submissions_for_user(&pool, sub.assignment_id, s1.id).await?,
+            [sub]
+        );
 
         let mut conn = pool.acquire().await?;
         assert_eq!(
