@@ -26,6 +26,9 @@ pub struct UploadQuery {
     #[serde(default)]
     force: bool,
     regrade: Option<String>,
+    /// Adopt the file's dates (clearing the course's edits) once the build is current.
+    #[serde(default)]
+    take_dates: bool,
 }
 
 /// The body is the assignment archive; jobs checks, stores and builds it, and
@@ -50,6 +53,9 @@ pub async fn upload(
             ));
         }
         params.push(format!("regrade={r}"));
+    }
+    if q.take_dates {
+        params.push("take_dates=true".to_owned());
     }
     let url = format!(
         "{}/internal/courses/{}/assignments{}",
@@ -78,7 +84,36 @@ pub async fn upload(
         .await
         .map_err(|e| internal("reading the build service's reply", e))?;
     tracing::info!(by = current.user.id, %course, %status, "assignment uploaded");
-    Ok((status, [(header::CONTENT_TYPE, "application/json")], text).into_response())
+    if !status.is_success() {
+        return Ok((status, [(header::CONTENT_TYPE, "application/json")], text).into_response());
+    }
+    let mut reply: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| internal("reading the build service's reply", e))?;
+    // The course's date edits against the file's, right away (the build comes later).
+    // (An upload that went through but can't be read back just goes without it.)
+    let slug = reply["assignment"].as_str().map(str::to_owned);
+    if let Some(slug) = slug
+        && let Ok(a) = find(&state, &access.course.id, &slug).await
+    {
+        let file: pedagog_core::recipe::policy::Dates =
+            serde_json::from_value(reply["policy"]["dates"].clone()).unwrap_or_default();
+        let course_dates = crate::policy::policy_of(&state, &a).await?.course_dates;
+        let diff = crate::policy::date_diff(&file, &course_dates);
+        if !diff.is_empty() {
+            reply["date_diff"] = serde_json::json!(diff);
+            reply["dates_note"] = serde_json::json!(if q.take_dates {
+                match reply["build"]["build_id"].as_i64() {
+                    Some(b) if reply["build"]["status"] == "dispatched" => {
+                        format!("the file's dates apply once build {b} is current")
+                    }
+                    _ => "the file's dates apply now".to_owned(),
+                }
+            } else {
+                "the course's dates stay; --take-dates adopts the file's".to_owned()
+            });
+        }
+    }
+    Ok((status, Json(reply)).into_response())
 }
 
 #[derive(Serialize)]

@@ -9,7 +9,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use pedagog_core::recipe::policy::{Acceptance, AssignmentPolicy, Dates, Instant, spoken};
+use pedagog_core::recipe::policy::{Acceptance, Dates, Instant, spoken};
 use pedagog_store::db::{accounts, assignments as builds_db, queue, submissions as db};
 use pedagog_store::{Assignment, CourseRole, QueuedRun, Submission, User};
 use serde::Deserialize;
@@ -27,20 +27,9 @@ fn is_staff(access: &Access) -> bool {
     access.role != Some(CourseRole::Student)
 }
 
-/// The dates in effect: the current build's file dates (course edits come later).
+/// The dates in effect: the course's edits over the current build's file dates.
 async fn dates_of(state: &AppState, a: &Assignment) -> Result<Dates, ApiError> {
-    let Some(build) = a.current_build_id else {
-        return Ok(Dates::default());
-    };
-    let policy = builds_db::build_by_id(&state.pool, build)
-        .await
-        .map_err(|e| internal("reading the build", e))?
-        .and_then(|b| b.policy)
-        .map(|p| serde_json::from_str::<AssignmentPolicy>(&p))
-        .transpose()
-        .map_err(|e| internal("reading the assignment's policy", e))?
-        .unwrap_or_default();
-    Ok(policy.dates)
+    Ok(crate::policy::policy_of(state, a).await?.dates())
 }
 
 fn parse_time(s: &str) -> Option<OffsetDateTime> {

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE assignment_builds SET take_dates = true WHERE id = $1 AND finished_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1b2d9f91e34319c01d36902e89efbc7abf44375e5ab42d07cf337194bccb165d"
+}

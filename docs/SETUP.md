@@ -452,6 +452,9 @@ hammer members list
 hammer members show gator                               # part of an email or name
 hammer upload ./linked-list --wait                      # build and validate
 hammer assignments list
+hammer dates set linked-list --open always --due 2026-09-08T23:59:00-04:00
+hammer visibility show linked-list                      # what students see of each test
+hammer results release linked-list
 hammer submit linked-list ./my-solution --wait          # a staff submission
 hammer submit linked-list ./fixed --for albert.gator@ufl.edu --at last
 hammer submissions linked-list --for albert.gator@ufl.edu

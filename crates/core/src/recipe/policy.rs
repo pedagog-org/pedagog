@@ -34,6 +34,20 @@ pub struct Dates {
     pub late_due: Option<Instant>,
 }
 
+/// A course's edits to an assignment's dates, field by field. Unlike
+/// [`Dates`], they needn't make sense alone (a `late_due` over the file's
+/// `due`); the merged dates are checked.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DateEdits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<Open>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due: Option<Instant>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub late_due: Option<Instant>,
+}
+
 /// When submissions open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "String", into = "String")]
@@ -137,8 +151,9 @@ impl Dates {
         Ok(self)
     }
 
-    /// The course's edits over the file's defaults, field by field.
-    pub fn merged(file: &Dates, course: &Dates) -> Dates {
+    /// The course's edits over the file's defaults, field by field (unchecked:
+    /// call [`checked`](Self::checked) before saving edits).
+    pub fn merged(file: &Dates, course: &DateEdits) -> Dates {
         Dates {
             open: course.open.or(file.open),
             due: course.due.or(file.due),
@@ -483,7 +498,7 @@ mod tests {
     #[test]
     fn course_edits_override_field_by_field() {
         let file = policy(DATES).unwrap().dates;
-        let course = Dates {
+        let course = DateEdits {
             due: Some(Instant(at("2026-09-15T23:59:00-04:00"))),
             ..Default::default()
         };
@@ -491,6 +506,11 @@ mod tests {
         assert_eq!(merged.open, file.open);
         assert_eq!(merged.due, course.due);
         assert_eq!(merged.late_due, file.late_due);
+
+        // An edit that needs the file's due date reads back fine on its own.
+        let late_only: DateEdits =
+            serde_json::from_str(r#"{"late_due": "2026-09-20T23:59:00-04:00"}"#).unwrap();
+        assert!(Dates::merged(&file, &late_only).checked().is_ok());
     }
 
     #[test]

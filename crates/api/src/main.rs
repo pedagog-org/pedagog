@@ -12,6 +12,7 @@ mod error;
 mod http;
 mod mail;
 mod members;
+mod policy;
 mod roster;
 mod state;
 mod submissions;

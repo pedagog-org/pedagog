@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE assignments a SET released_at = CASE WHEN $2 THEN COALESCE(old.released_at, now()) END\n             FROM assignments old\n            WHERE a.id = $1 AND old.id = a.id\n        RETURNING old.released_at IS NOT NULL AS \"was!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "was!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "42cb1a05aa25f1d71e57b81d6817fc66f7fcd0fa7a67d4554001823a2c03ebbf"
+}
