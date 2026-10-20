@@ -83,11 +83,27 @@ db-down:
 db-shell:
     podman exec -it pedagog-db psql -U pedagog -d pedagog
 
-# Apply migrations to the dev DB and refresh the committed .sqlx/ offline query cache.
-# --all-features so the feature-gated store::db queries are reached.
-db-prepare:
+# A freshly migrated, empty database for the .sqlx/ cache: column nullability is
+# inferred from query plans, which change with table statistics, so a populated
+# dev DB can give a different cache than CI's.
+PREPARE_URL := "postgres://pedagog:pedagog@localhost:5432/pedagog_prepare"
+
+[private]
+db-empty:
+    podman exec pedagog-db psql -U pedagog -q -c "DROP DATABASE IF EXISTS pedagog_prepare" -c "CREATE DATABASE pedagog_prepare"
+    DATABASE_URL={{PREPARE_URL}} cargo sqlx migrate run --source crates/store/migrations
+
+# Apply migrations to the dev DB and refresh the committed .sqlx/ offline query cache
+# (against an empty DB, as CI). --all-features so the feature-gated store::db
+# queries are reached, --all-targets for the tests'.
+db-prepare: db-empty
     cargo sqlx migrate run --source crates/store/migrations
-    cargo sqlx prepare --workspace -- --all-features
+    DATABASE_URL={{PREPARE_URL}} cargo sqlx prepare --workspace -- --all-targets --all-features
+
+# Check the committed .sqlx/ cache against an empty DB (the pre-commit hook runs this
+# when a query or migration is staged).
+db-prepare-check: db-empty
+    DATABASE_URL={{PREPARE_URL}} cargo sqlx prepare --workspace --check -- --all-targets --all-features
 
 # ---- Local kind cluster (podman) for end-to-end tests -----------------------
 KIND := "KIND_EXPERIMENTAL_PROVIDER=podman kind"
@@ -155,29 +171,35 @@ kind-registry:
     podman exec pedagog-control-plane sh -c "mkdir -p '$dir' && printf 'server = \"http://$ip:5000\"\n\n[host.\"http://$ip:5000\"]\n  capabilities = [\"pull\", \"resolve\"]\n' > '$dir/hosts.toml'"
     echo "kind node pulls registry-service.pedagog-data.svc:5000 from http://$ip:5000"
 
-# Upload an assignment directory to jobs (port-forwarded), e.g.
-# `just kind-upload recipes/examples/linked-list-python -c default --wait`
-# (straight to jobs, no login; the course must exist).
-kind-upload DIR *ARGS:
+# Log a persona in on kind with the code from Mailpit (they must be registered,
+# e.g. by `just kind-add-admin`); the session is kept in target/kind/<NAME>,
+# NAME being the email's local part unless given.
+kind-login EMAIL NAME="":
     #!/usr/bin/env bash
     set -euo pipefail
-    kubectl --context {{KIND_CTX}} -n pedagog-builds port-forward svc/pedagog-jobs 18081:8080 >/dev/null &
-    trap 'kill $!' EXIT
-    sleep 2
-    HAMMER_RECIPES="{{justfile_directory()}}/recipes" cargo run -q -p hammer -- upload "{{DIR}}" --jobs-url http://localhost:18081 {{ARGS}}
+    cargo build -q -p hammer
+    source scripts/kind-lib.sh
+    kind_forwards
+    trap kind_unforward EXIT
+    name="{{NAME}}"
+    name=${name:-$(echo "{{EMAIL}}" | cut -d@ -f1)}
+    kind_login "{{EMAIL}}" "$name"
+    kind_as "$name" whoami
 
-# Submit files to an assignment on the kind cluster as a student:
-# `just kind-submit default linked-list-python-upload alice recipes/examples/linked-list-python-upload/solution`.
-kind-submit COURSE ASSIGNMENT STUDENT +PATHS:
+# Run hammer on kind as a persona from `just kind-login`, e.g.
+# `just kind-as prof upload recipes/examples/linked-list-python --wait`.
+kind-as NAME *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
-    kubectl --context {{KIND_CTX}} -n pedagog-builds port-forward svc/pedagog-jobs 18081:8080 >/dev/null &
-    trap 'kill $!' EXIT
-    sleep 2
-    cargo run -q -p hammer -- submit "{{ASSIGNMENT}}" {{PATHS}} -c "{{COURSE}}" --student "{{STUDENT}}" --jobs-url http://localhost:18081
+    cargo build -q -p hammer
+    source scripts/kind-lib.sh
+    kind_forwards
+    trap kind_unforward EXIT
+    HAMMER_RECIPES="{{justfile_directory()}}/recipes" kind_as "{{NAME}}" {{ARGS}}
 
-# End-to-end check of the assignment pipeline on kind (upload, build, validate,
-# supersede, restart, egress). Run after kind-load-jobs and kind-deploy.
+# End-to-end check through the api on kind: logins, roles, builds, validation,
+# egress, submissions, dates, visibility, release, activation, regrades and
+# notices. Run after kind-load-jobs, kind-load-api and kind-deploy.
 kind-e2e:
     scripts/kind-e2e.sh
 

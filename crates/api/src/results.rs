@@ -430,7 +430,7 @@ pub async fn deactivate(
 mod tests {
     use pedagog_store::db::accounts::{self, Actor};
     use pedagog_store::db::assignments::*;
-    use pedagog_store::db::submissions::{self as db, NewSubmission, Owner, RunOutcome};
+    use pedagog_store::db::submissions::{self as db, NewSubmission, RunOutcome};
     use pedagog_store::{
         BuildSettings, CourseRole, ErrorKind, Isolation, JoinSource, PlatformKind,
         SubmissionSource, ValidationStatus,
@@ -512,7 +512,7 @@ mod tests {
             pool,
             &NewSubmission {
                 assignment_id: a,
-                owner: Owner::User(u.id),
+                user_id: u.id,
                 submitted_by: None,
                 staff: false,
                 counted_at: None,

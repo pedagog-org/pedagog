@@ -66,10 +66,14 @@ the switch are still reachable with `podman --connection podman-machine-default 
 ```sh
 just kind-up           # (re)create the cluster, recipes/ mounted into the node
 just kind-load-jobs    # build the jobs image with podman, load it into the node
-just kind-deploy       # apply deploy/overlays/kind (local-path storage, dev-mode jobs)
+just kind-load-api     # the same for the api
+just kind-deploy       # apply deploy/overlays/kind (local-path storage, dev-mode jobs, Mailpit)
 just kind-rebuild      # POST /internal/recipes/rebuild; `just kind-rebuild force=true`
-just kind-upload <dir> # upload an assignment (add --wait to follow build and validation)
-just kind-e2e          # end-to-end check of the assignment pipeline
+just kind-add-admin <email>   # the first admin
+just kind-login <email> [name] # log a persona in with the code from Mailpit (target/kind/<name>)
+just kind-as <name> <hammer args>  # hammer as that persona
+just kind-api          # port-forward the api (:18082) and Mailpit (:18025) until interrupted
+just kind-e2e          # end-to-end check through the api
 just kind-down         # delete the cluster
 ```
 
@@ -78,9 +82,12 @@ mode: no build at startup, Kaniko reads the recipes mounted into the node, and
 `kind-rebuild` is the trigger. Results land in the in-cluster registry
 (`registry-service.pedagog-data.svc:5000`) and in the `os_builds` / `build_runs` tables.
 
-Assignments: build the OS image first (`just kind-rebuild`), then
-`just kind-upload recipes/examples/linked-list-python --wait` checks, packs and uploads
-the example; `jobs` stores it in Garage, builds it with Kaniko, validates the reference
+Assignments: build the OS image first (`just kind-rebuild`), make yourself admin and
+staff and create a course (`just kind-add-admin you@kind.local`, `just kind-login
+you@kind.local me`, `just kind-as me users role you@kind.local staff`, `just kind-as me
+courses create demo "Demo"`), then `just kind-as me upload
+recipes/examples/linked-list-python -c demo --wait` checks, packs and uploads the
+example; `jobs` stores it in Garage, builds it with Kaniko, validates the reference
 solution, and `--wait` prints the verdict. `kind-deploy` also runs `just kind-registry`,
 which lets the node pull images from the in-cluster registry (validation pods run the
 built image); clusters created by `kind-up` already have containerd's per-registry config
@@ -396,14 +403,12 @@ submissions and grades them; the defaults suit a small cluster. Set these on the
       endpoint:
         - "http://<registry-ip>:5000"
   ```
-- **Uploading:** until the web UI exists, upload from your machine through a
-  port-forward: `kubectl -n pedagog-builds port-forward svc/pedagog-jobs 18081:8080`, then
-  `hammer upload <dir> --wait` (with `HAMMER_RECIPES` set for the local check). Add
-  `--regrade [--notify changed]` to regrade every student's latest submission once the
-  new build is current.
-- **Submitting:** through the same port-forward, `hammer submit <files|dir|archive>
-  --assignment <id> --student <id> --wait` prints the receipt, then the score. Only
-  assignments on the `upload` platform take submissions for now.
+- **Uploading:** through the api (Phase 6): `hammer upload <dir> -c <course> --wait`
+  (with `HAMMER_RECIPES` set for the local check). Add `--regrade [--notify changed]` to
+  regrade every student's latest submission once the new build is current.
+- **Submitting:** `hammer submit <assignment> <files|dir|archive> --wait` prints the
+  receipt, then the results. Only assignments on the `upload` platform take submissions
+  for now.
 - **Capacity:** test runs wait in jobs' queue until there's room; if submissions sit
   queued, look at `pedagog-grading`'s quota (`kubectl -n pedagog-grading describe
   resourcequota`) and pending pods before raising anything.

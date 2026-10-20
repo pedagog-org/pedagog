@@ -393,7 +393,7 @@ pub async fn show(
 mod tests {
     use pedagog_store::db::accounts::{self, Actor};
     use pedagog_store::db::assignments::*;
-    use pedagog_store::db::submissions::{NewSubmission, Owner, record_submission};
+    use pedagog_store::db::submissions::{NewSubmission, record_submission};
     use pedagog_store::{
         BuildSettings, CourseRole, Isolation, JoinSource, PlatformKind, ValidationStatus,
     };
@@ -543,7 +543,7 @@ mod tests {
             &pool,
             &NewSubmission {
                 assignment_id: a,
-                owner: Owner::User(alice.id),
+                user_id: alice.id,
                 submitted_by: None,
                 staff: false,
                 counted_at: Some("2020-01-31T23:00:00Z"),
@@ -612,7 +612,7 @@ mod tests {
             &pool,
             &NewSubmission {
                 assignment_id: a,
-                owner: Owner::User(alice.id),
+                user_id: alice.id,
                 submitted_by: Some(prof.id),
                 staff: false,
                 counted_at: Some("2020-02-01T02:14:00Z"),

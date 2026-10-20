@@ -152,7 +152,7 @@ pub fn send(
         .map_err(|e| format!("unexpected reply from {}: {e}: {body}", to.name()))
 }
 
-/// A grading run's status (`GET /internal/submissions/<id>`, one of its runs).
+/// A grading run's status (`GET /courses/<course>/submissions/<id>`, one of its runs).
 #[derive(Debug, Deserialize)]
 pub struct Run {
     pub id: i64,
@@ -182,10 +182,7 @@ pub fn wait(
     run: i64,
     mut progress: impl FnMut(&Run),
 ) -> Result<Run, String> {
-    let url = match to {
-        Endpoint::Api { .. } => to.url(&format!("/courses/{course}/submissions/{submission}")),
-        Endpoint::Jobs(_) => to.url(&format!("/submissions/{submission}")),
-    };
+    let url = to.url(&format!("/courses/{course}/submissions/{submission}"));
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()

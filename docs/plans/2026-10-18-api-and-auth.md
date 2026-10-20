@@ -593,6 +593,17 @@ Step 5 ships as three PRs: **5a** `feat/notices`, **5b** `test/api-e2e`, **5c**
   (student data would leave UF); a logs stack (VictoriaLogs/Loki + Grafana) may come
   later for searching every pod's logs.
 
+### 5b decisions (2026-10-20)
+
+- **Direct mode:** hammer loses `--jobs-url` and `--student`; jobs' intake takes a
+  user id only, and the store no longer writes opaque student ids. The `student_id`
+  column stays (nullable, read-only) for rows already there; a later migration drops it.
+- **Recipes:** `just kind-upload` / `kind-submit` give way to `just kind-login EMAIL`
+  (logs a persona in with the code from Mailpit; config under `target/kind/<name>`) and
+  `just kind-as NAME <hammer args>`; the e2e uses the same helpers.
+- **E2E course:** a fresh course per run (`e2e-<unix time>`), created through the api by
+  the admin persona, so no dates, releases, activations or roster leak between runs.
+
 ## Implementation steps
 
 1. **Schema and store** (`feat/accounts-store`): users, courses, staff, enrollments,

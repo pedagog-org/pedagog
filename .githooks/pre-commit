@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Reject commits that aren't rustfmt-clean or don't pass clippy cleanly
-# (warnings are errors). CI runs the same checks.
+# Reject commits that aren't rustfmt-clean, don't pass clippy cleanly
+# (warnings are errors), or (when a query or migration is staged) leave the
+# sqlx offline cache stale. CI runs the same checks.
 # Bypass with `git commit --no-verify` when you know what you're doing.
 set -euo pipefail
 
@@ -9,3 +10,14 @@ cargo fmt --check
 
 echo "pre-commit: cargo clippy --workspace --all-targets --all-features -D warnings"
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# Staged migrations or cache files, or staged Rust files with sqlx query macros.
+if git diff --cached --name-only | grep -qE '^(crates/store/migrations/|\.sqlx/)' ||
+    git diff --cached --name-only --diff-filter=d -- '*.rs' |
+    xargs grep -lE 'query(_as|_scalar)?!' 2>/dev/null | grep -q .; then
+    echo "pre-commit: sqlx offline cache (just db-prepare-check)"
+    if ! just db-prepare-check >/dev/null 2>&1; then
+        echo "the .sqlx/ cache is stale, or the dev DB is down: \`just db-up\`, then \`just db-prepare\` and stage .sqlx/" >&2
+        exit 1
+    fi
+fi

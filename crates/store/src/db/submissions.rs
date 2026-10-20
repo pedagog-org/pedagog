@@ -34,19 +34,11 @@ pub const SUBMISSION_PRIORITY: i16 = 0;
 /// Queue priority of regrade runs: behind new submissions.
 pub const REGRADE_PRIORITY: i16 = 1;
 
-/// Whose a submission is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Owner<'a> {
-    User(i64),
-    /// Operator submissions: an opaque id.
-    Student(&'a str),
-}
-
 /// A submission intake accepted, pinned to `build_id`.
 #[derive(Clone, Debug)]
 pub struct NewSubmission<'a> {
     pub assignment_id: i64,
-    pub owner: Owner<'a>,
+    pub user_id: i64,
     /// Who sent it, if not the owner.
     pub submitted_by: Option<i64>,
     pub staff: bool,
@@ -71,20 +63,15 @@ pub struct Accepted {
 /// Record a submission and queue its first grading run.
 pub async fn record_submission(pool: &PgPool, s: &NewSubmission<'_>) -> sqlx::Result<Accepted> {
     let mut tx = pool.begin().await?;
-    let (user_id, student_id) = match s.owner {
-        Owner::User(u) => (Some(u), None),
-        Owner::Student(id) => (None, Some(id)),
-    };
     let submission_id = sqlx::query!(
         "INSERT INTO submissions
-           (assignment_id, user_id, student_id, submitted_by, staff, counted_at,
+           (assignment_id, user_id, submitted_by, staff, counted_at,
             build_id, source, tree_hash, object_key, size_bytes, receipt)
-         VALUES ($1, $2, $3, $4, $5, COALESCE($6::text::timestamptz, now()),
-                 $7, $8, $9, $10, $11, $12::text::jsonb)
+         VALUES ($1, $2, $3, $4, COALESCE($5::text::timestamptz, now()),
+                 $6, $7, $8, $9, $10, $11::text::jsonb)
          RETURNING id",
         s.assignment_id,
-        user_id,
-        student_id,
+        s.user_id,
         s.submitted_by,
         s.staff,
         s.counted_at,
@@ -243,24 +230,6 @@ pub async fn get_submission(pool: &PgPool, id: i64) -> sqlx::Result<Option<Submi
         .await?
         .map(Submission::try_from)
         .transpose()
-}
-
-/// An operator student's submissions to an assignment, latest first.
-pub async fn submissions_for_student(
-    pool: &PgPool,
-    assignment_id: i64,
-    student_id: &str,
-) -> sqlx::Result<Vec<Submission>> {
-    select_submissions!(
-        "WHERE s.assignment_id = $1 AND s.student_id = $2 ORDER BY s.counted_at DESC, s.id DESC",
-        assignment_id,
-        student_id
-    )
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(Submission::try_from)
-    .collect()
 }
 
 /// A user's submissions to an assignment, latest (by counted time) first.
@@ -602,8 +571,11 @@ pub(crate) mod tests {
         Ok(build)
     }
 
-    /// A submission by `student` against `build` (of its assignment).
+    /// A submission by `student` (a user named `<student>@ufl.edu`) against
+    /// `build` (of its assignment).
     pub(crate) async fn submit(pool: &PgPool, student: &str, build: i64) -> sqlx::Result<Accepted> {
+        let user =
+            crate::db::accounts::upsert_user(pool, &format!("{student}@ufl.edu"), "").await?;
         let assignment = sqlx::query_scalar!(
             "SELECT assignment_id FROM assignment_builds WHERE id = $1",
             build
@@ -614,7 +586,7 @@ pub(crate) mod tests {
             pool,
             &NewSubmission {
                 assignment_id: assignment,
-                owner: Owner::Student(student),
+                user_id: user.id,
                 submitted_by: None,
                 staff: false,
                 counted_at: None,
@@ -646,9 +618,13 @@ pub(crate) mod tests {
             (runs[0].id, runs[0].status, runs[0].reason),
             (acc.run_id, RunStatus::Queued, RunReason::Submission)
         );
-        let a = sub.assignment_id;
-        assert_eq!(submissions_for_student(&pool, a, "s1").await?, [sub]);
-        assert!(submissions_for_student(&pool, a, "s2").await?.is_empty());
+        let s1 = crate::db::accounts::user_by_email(&pool, "s1@ufl.edu")
+            .await?
+            .unwrap();
+        assert_eq!(
+            submissions_for_user(&pool, sub.assignment_id, s1.id).await?,
+            [sub]
+        );
 
         let mut conn = pool.acquire().await?;
         assert_eq!(
@@ -672,7 +648,7 @@ pub(crate) mod tests {
         let prof = upsert_user(&pool, "prof@ufl.edu", "").await?;
         let new = |by: Option<i64>, at: Option<&'static str>| NewSubmission {
             assignment_id: a,
-            owner: Owner::User(alice.id),
+            user_id: alice.id,
             submitted_by: by,
             staff: false,
             counted_at: at,
@@ -755,7 +731,7 @@ pub(crate) mod tests {
         let ta = upsert_user(&pool, "ta@ufl.edu", "").await?;
         let new = || NewSubmission {
             assignment_id: a,
-            owner: Owner::User(alice.id),
+            user_id: alice.id,
             submitted_by: None,
             staff: false,
             counted_at: None,

@@ -1,13 +1,10 @@
-//! `POST /internal/courses/{course}/assignments/{slug}/submissions?student=<id>`
-//! (operators) or `?user=<id>[&by=<id>][&staff=true][&at=<RFC 3339>]` (the api,
-//! which decides who may submit what): accept a
+//! `POST /internal/courses/{course}/assignments/{slug}/submissions?user=<id>[&by=<id>][&staff=true][&at=<RFC 3339>]`
+//! (from the api, which decides who may submit what): accept a
 //! submission (several files, or one archive), normalize it with the
 //! assignment's `submission:` rules, store it, and queue its grading run
 //! against the current build.
 //!
-//! `GET /internal/submissions/{id}` and
-//! `GET /internal/courses/{course}/assignments/{slug}/submissions?student=<id>`
-//! report them.
+//! `GET /internal/submissions/{id}` reports one.
 //!
 //! Normalization, in order: unpack a single archive (unless `archives: keep`),
 //! drop OS clutter, strip one wrapping folder (`strip: auto`), apply
@@ -304,10 +301,8 @@ fn archive_refused(e: ArchiveError) -> Refused {
 
 #[derive(Deserialize)]
 pub struct SubmitQuery {
-    /// Operator submissions: an opaque student id.
-    student: Option<String>,
-    /// The api's: the owner's user id,
-    user: Option<i64>,
+    /// The owner's user id,
+    user: i64,
     /// who sent it when someone else did,
     by: Option<i64>,
     /// whether it's an instructor's or grader's own,
@@ -329,35 +324,12 @@ pub struct Submitted {
     pub receipt: Receipt,
 }
 
-const MAX_STUDENT_ID: usize = 128;
-
 pub async fn submit(
     State(state): State<AppState>,
     UrlPath((course, slug)): UrlPath<(String, String)>,
     Query(query): Query<SubmitQuery>,
     multipart: Multipart,
 ) -> Result<Response, Refused> {
-    let student = query.student.as_deref().map(str::trim);
-    let owner = match (student, query.user) {
-        (Some(s), None)
-            if !s.is_empty() && s.len() <= MAX_STUDENT_ID && !s.chars().any(char::is_control) =>
-        {
-            db::Owner::Student(s)
-        }
-        (Some(_), None) => {
-            return Err(refused(
-                StatusCode::BAD_REQUEST,
-                format!("student must be 1–{MAX_STUDENT_ID} printable characters"),
-            ));
-        }
-        (None, Some(user)) => db::Owner::User(user),
-        _ => {
-            return Err(refused(
-                StatusCode::BAD_REQUEST,
-                "give either student or user",
-            ));
-        }
-    };
     if let Some(at) = &query.at {
         pedagog_core::recipe::policy::Instant::try_from(at.clone())
             .map_err(|e| refused(StatusCode::BAD_REQUEST, e))?;
@@ -400,7 +372,7 @@ pub async fn submit(
         &state.pool,
         &db::NewSubmission {
             assignment_id: assignment.id,
-            owner,
+            user_id: query.user,
             submitted_by: query.by,
             staff: query.staff,
             counted_at: query.at.as_deref(),
@@ -418,7 +390,7 @@ pub async fn submit(
         .await
         .map_err(|e| internal("reading the queue", e))?;
     tracing::info!(
-        %course, assignment = %slug, ?owner, submission = accepted.submission_id,
+        %course, assignment = %slug, user = query.user, submission = accepted.submission_id,
         run = accepted.run_id, build = build_id, files = normalized.receipt.files.len(),
         "submission accepted"
     );
@@ -486,29 +458,6 @@ pub async fn submission_status(
         .map_err(|e| internal("reading the submission", e))?
         .ok_or_else(|| refused(StatusCode::NOT_FOUND, format!("no submission {id}")))?;
     Ok(Json(status_of(&state, submission).await?).into_response())
-}
-
-#[derive(Deserialize)]
-pub struct StudentQuery {
-    student: String,
-}
-
-/// `GET /internal/courses/{course}/assignments/{slug}/submissions?student=<id>`:
-/// a student's submissions to an assignment, latest first, each with its runs.
-pub async fn student_submissions(
-    State(state): State<AppState>,
-    UrlPath((course, slug)): UrlPath<(String, String)>,
-    Query(query): Query<StudentQuery>,
-) -> Result<Response, Refused> {
-    let assignment = find_assignment(&state, &course, &slug).await?;
-    let submissions = db::submissions_for_student(&state.pool, assignment.id, &query.student)
-        .await
-        .map_err(|e| internal("reading the submissions", e))?;
-    let mut out = Vec::with_capacity(submissions.len());
-    for submission in submissions {
-        out.push(status_of(&state, submission).await?);
-    }
-    Ok(Json(out).into_response())
 }
 
 async fn status_of(
