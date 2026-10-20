@@ -367,8 +367,20 @@ pub async fn release(
     let was = db::set_released(&state.pool, a.id, true)
         .await
         .map_err(|e| internal("releasing results", e))?;
-    tracing::info!(by = current.user.id, %course, assignment = %slug, "results released");
-    Ok(Json(serde_json::json!({ "released": true, "already": was })).into_response())
+    let told = if was {
+        0
+    } else {
+        match crate::notices::queue_release(&state, &a).await {
+            Ok(told) => told,
+            // Undo, so that releasing again tells them.
+            Err(e) => {
+                let _ = db::set_released(&state.pool, a.id, false).await;
+                return Err(internal("queueing release notices", e));
+            }
+        }
+    };
+    tracing::info!(by = current.user.id, %course, assignment = %slug, told, "results released");
+    Ok(Json(serde_json::json!({ "released": true, "already": was, "told": told })).into_response())
 }
 
 /// Take a release back (students may already have seen the results).

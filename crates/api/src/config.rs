@@ -17,6 +17,7 @@ pub const MAIL_REPLY_TO: &str = "PEDAGOG_MAIL_REPLY_TO";
 pub const LOGIN_DOMAIN: &str = "PEDAGOG_LOGIN_DOMAIN";
 pub const JOBS_URL: &str = "PEDAGOG_JOBS_URL";
 pub const MAX_UPLOAD_BYTES: &str = "PEDAGOG_MAX_UPLOAD_BYTES";
+pub const MAIL_PER_SECOND: &str = "PEDAGOG_MAIL_PER_SECOND";
 
 const DEFAULT_LISTEN: &str = "0.0.0.0:8080";
 const DEFAULT_JOBS_URL: &str = "http://pedagog-jobs.pedagog-builds.svc:8080";
@@ -38,6 +39,8 @@ pub struct Config {
     pub jobs_url: String,
     /// The largest assignment archive passed on to jobs.
     pub max_upload_bytes: usize,
+    /// How many notices are sent per second, at most.
+    pub mail_per_second: u32,
 }
 
 /// How mail leaves: a relay that may or may not want a login, with or
@@ -152,6 +155,12 @@ impl Config {
                 })?,
                 None => DEFAULT_MAX_UPLOAD,
             },
+            mail_per_second: match var(MAIL_PER_SECOND) {
+                Some(n) => n.parse().ok().filter(|&n: &u32| n > 0).ok_or_else(|| {
+                    anyhow::anyhow!("{MAIL_PER_SECOND} must be a positive number, got {n:?}")
+                })?,
+                None => 5,
+            },
         })
     }
 }
@@ -189,6 +198,8 @@ mod tests {
         assert_eq!(c.jobs_url, DEFAULT_JOBS_URL);
         assert_eq!(c.max_upload_bytes, 50 << 20);
         assert!(config(&[(MAX_UPLOAD_BYTES, "lots")]).is_err());
+        assert_eq!(c.mail_per_second, 5);
+        assert!(config(&[(MAIL_PER_SECOND, "0")]).is_err());
     }
 
     #[test]

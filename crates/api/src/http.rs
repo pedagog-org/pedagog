@@ -19,7 +19,7 @@ use crate::auth::{COOKIE_NAME, CurrentUser, Login, open_session};
 use crate::error::{ApiError, internal, refused, unauthorized};
 use crate::state::AppState;
 use crate::users::UserView;
-use crate::{assignments, courses, members, policy, results, submissions, users};
+use crate::{assignments, courses, members, notices, policy, results, submissions, users};
 
 pub fn router(state: AppState) -> Router {
     let max_upload = state.config.max_upload_bytes;
@@ -74,6 +74,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/courses/{course}/assignments/{slug}/my-results",
             get(results::mine),
+        )
+        .route(
+            "/courses/{course}/assignments/{slug}/notify",
+            post(notices::notify),
         )
         .route(
             "/courses/{course}/assignments/{slug}/dates",
