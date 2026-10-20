@@ -107,8 +107,8 @@ db-prepare-check: db-empty
 
 # ---- Web UI (crates/web: Leptos in the browser, built with trunk) -----------
 
-# Serve the web UI on http://localhost:3000, rebuilding on change; /api/ goes to
-# the kind api (run `just kind-api` alongside). Needs trunk (`brew install trunk`).
+# /api/ goes to the kind api (run `just kind-api` alongside); needs trunk.
+# Serve the web UI on http://localhost:3000, rebuilding on change.
 web-dev:
     cd crates/web && trunk serve
 
