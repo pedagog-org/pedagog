@@ -242,7 +242,7 @@ All builds run in-cluster via **Kaniko** — no Docker daemon required. `core` r
 
 ### Assignment Uploads
 
-Assignments belong to a course: a numeric id keys them, and the `id` in `assignment.yml` is their slug, unique within the course, so courses can reuse an assignment. Instructors upload with `hammer upload <dir>` through the api (`POST /courses/<course>/assignments`), which passes the archive to `jobs`' internal `POST /internal/courses/<course>/assignments`; operators can go straight to `jobs` with `--jobs-url` (`just kind-upload <dir> -c <course>` port-forwards to it on kind). The archive is the assignment directory itself, `assignment.yml` at its root.
+Assignments belong to a course: a numeric id keys them, and the `id` in `assignment.yml` is their slug, unique within the course, so courses can reuse an assignment. Instructors upload with `hammer upload <dir>` through the api (`POST /courses/<course>/assignments`), which passes the archive to `jobs`' internal `POST /internal/courses/<course>/assignments`; hammer talks only to the api. The archive is the assignment directory itself, `assignment.yml` at its root.
 
 - **`hammer upload`** checks the directory locally (parses, files present, resolves when `HAMMER_RECIPES`/`--recipes` is set), then packs every regular file except VCS metadata (`.git`, `.hg`, `.svn`). Symlinks and special files are refused.
 - **`jobs` is authoritative.** It opens every upload and refuses it when:
@@ -551,9 +551,9 @@ On submission (from a `workspace` session or an `upload`):
 
 ### Submissions and Grading (current)
 
-Students submit with `hammer submit <assignment> <files>` through the api (`POST /courses/<course>/assignments/<slug>/submissions`), which decides who may submit what and passes the files to `jobs`' internal endpoint; operators can go straight to `jobs` with `--jobs-url` and `--student` (`just kind-submit` on kind). Only `upload` assignments take them; `workspace` assignments will submit from sessions.
+Students submit with `hammer submit <assignment> <files>` through the api (`POST /courses/<course>/assignments/<slug>/submissions`), which decides who may submit what and passes the files to `jobs`' internal endpoint. Only `upload` assignments take them; `workspace` assignments will submit from sessions.
 
-- **Who and when:** a submission belongs to a user (`user_id`; operator submissions keep an opaque `student_id` instead), records who sent it when someone else did (`submitted_by`), and counts at `counted_at` (lateness, and which is latest), apart from when it really arrived (`created_at`).
+- **Who and when:** a submission belongs to a user (`user_id`; a few early rows keep an opaque `student_id` from before the api, read-only), records who sent it when someone else did (`submitted_by`), and counts at `counted_at` (lateness, and which is latest), apart from when it really arrived (`created_at`).
 - **Acceptance:** a student's own submission is accepted from the assignment's `open` until its `late_due` (or `due`), by the dates of its current build; refusals say why (not open yet, deadline passed, no dates set). Instructors', graders' and admins' own submissions are marked `staff` and accepted whatever the dates (graded and regraded, never notified). Staff may also submit for a student (`--for`), accepted whatever the dates, counted `--at now`, `last` (the student's latest counted time) or a given time; the student sees who submitted it.
 - **Late** isn't stored: it's computed when shown, from the counted time and the dates in effect then ("late by 2 hours 14 minutes"), so moving a deadline changes it.
 - **What students see:** their submissions, receipts, statuses, lateness and who submitted them (`hammer submissions <assignment>`), and their results as visibility allows (`hammer results show <assignment>`; see Result Visibility). Staff see everything, including both times (`--for <email>`).
