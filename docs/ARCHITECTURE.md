@@ -198,7 +198,7 @@ Each test's result has four parts, each with its own visibility: `visible`, `hid
 | `stdout` | what the test printed (the instructor's channel for e.g. intermediate values) |
 | `error` | what went wrong: failures, exceptions, and the values the framework compared |
 
-- **Layers:** the test's own (from its code; everything `visible` by default), then the
+- **Layers:** the test's own (from its code; `visible` by default, but `error` waits for the deadline, `after_end`, since it can show what a test expects), then the
   file's `assignment.results.visibility` (all tests) and `tests` (one test), then the
   course's overrides, which apply at once (`hammer visibility set|clear`; `hammer
   visibility show [--verbose]` explains each test).
@@ -601,7 +601,7 @@ tests:
     stdout: "after sort(): [1, 2]\n"   # what the test printed
     error: "test_sort.py:9: AssertionError ... assert 2 == 3"   # what went wrong
     trace: "..."           # how the score was calculated; staff only
-    visibility: { score: visible, feedback: visible, stdout: visible, error: visible }
+    visibility: { score: visible, feedback: visible, stdout: visible, error: after_end }
 artifacts:
   - id: valgrind_log
     label: Valgrind output

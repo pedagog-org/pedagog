@@ -521,7 +521,9 @@ visibility, release, the upload date diff and `--take-dates`).
   override): `score` (points, pass/fail), `feedback` (the checks: each item's steps),
   `stdout` (what the instructor prints for the student), `error` (uncaught exceptions:
   failures outside a `check()`, exceptions from the student's code, tracebacks and
-  pytest's values). Everything defaults to `visible`; hide `error` (or more) for exams.
+  pytest's values). Everything defaults to `visible` except `error`, which defaults to
+  `after_end` (pytest's report can show the test's source and expected values); hide it
+  (or more) for exams. (Changed from all-visible after the kind demo, 2026-10-20.)
   `trace` (how the score was computed) and the run's output are staff-only.
 - **Results format (pedagog-pytest 2.0.0):**
 
@@ -544,7 +546,7 @@ visibility, release, the upload date diff and `--take-dates`).
       stdout: "..."
       error: "..."
       trace: "..."
-      visibility: { score: visible, feedback: visible, stdout: visible, error: visible }
+      visibility: { score: visible, feedback: visible, stdout: visible, error: after_end }
   ```
 
   Steps take an optional `id=` (unique within the item). `set`/`nil` stay in the
