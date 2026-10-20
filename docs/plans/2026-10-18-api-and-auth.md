@@ -519,9 +519,9 @@ visibility, release, the upload date diff and `--take-dates`).
   visibility allows; one line for hidden tests; totals over what's shown.
 - **Four parts per test, each with its own visibility** (file default, course
   override): `score` (points, pass/fail), `feedback` (the checks: each item's steps),
-  `stdout` (what the instructor prints for the student), `debug` (uncaught exceptions:
+  `stdout` (what the instructor prints for the student), `error` (uncaught exceptions:
   failures outside a `check()`, exceptions from the student's code, tracebacks and
-  pytest's values). Everything defaults to `visible`; hide `debug` (or more) for exams.
+  pytest's values). Everything defaults to `visible`; hide `error` (or more) for exams.
   `trace` (how the score was computed) and the run's output are staff-only.
 - **Results format (pedagog-pytest 2.0.0):**
 
@@ -542,15 +542,15 @@ visibility, release, the upload date diff and `--take-dates`).
                 message: "sort() lost an element" }   # the check's assert message
             - { points: -1, reason: "one global" }    # an award: no result
       stdout: "..."
-      debug: "..."
+      error: "..."
       trace: "..."
-      visibility: { score: visible, feedback: visible, stdout: visible, debug: visible }
+      visibility: { score: visible, feedback: visible, stdout: visible, error: visible }
   ```
 
   Steps take an optional `id=` (unique within the item). `set`/`nil` stay in the
-  trace. Older results are still read: `output` as `debug`, text feedback as one
+  trace. Older results are still read: `output` as `error`, text feedback as one
   step, `<collection>` entries as a run error; stored course overrides with `output`
-  read as `debug`. `hammer visibility set` takes `--score --feedback --stdout --debug`.
+  read as `error`. `hammer visibility set` takes `--score --feedback --stdout --error`.
 - **Run status:** `run: {status: complete | error, output}`: the helper writes it when
   tests can't all run (load or compile errors); jobs writes it when the run dies
   outside the framework (timeout, out of memory, crash, no results). Students get a
