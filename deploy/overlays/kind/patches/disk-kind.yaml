@@ -1,0 +1,18 @@
+# kind: the node's image store is containerd's own, and the jobs image is
+# loaded into the node, never pulled.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: pedagog-disk
+  namespace: pedagog-builds
+spec:
+  template:
+    spec:
+      containers:
+        - name: disk
+          imagePullPolicy: Never
+      volumes:
+        - name: images
+          hostPath:
+            path: /var/lib/containerd
+            type: Directory

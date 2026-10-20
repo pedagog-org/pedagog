@@ -13,3 +13,6 @@ spec:
     requests.memory: 4Gi
     limits.cpu: "3500m"
     limits.memory: 4Gi
+    # Test runs request 256Mi of local disk each (limit 1Gi): room for the
+    # runs the CPU allows, with margin.
+    requests.ephemeral-storage: 4Gi

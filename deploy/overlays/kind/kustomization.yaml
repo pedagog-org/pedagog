@@ -13,6 +13,7 @@ patches:
   - path: patches/api-kind.yaml
   - path: patches/no-api-ingress.yaml
   - path: patches/glitchtip-kind.yaml
+  - path: patches/disk-kind.yaml
 
 images:
   - name: pedagog-jobs
