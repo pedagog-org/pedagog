@@ -767,35 +767,28 @@ fn confirm(drops: &[String]) -> Result<bool> {
     Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
 }
 
+/// The logged-in api and the course chosen from `-c`, the nearest course.yml
+/// at or above `dir`, or `hammer use`.
+fn endpoint(flag: Option<String>, dir: &Path) -> Result<(upload::Endpoint, course::Chosen)> {
+    let session = account::load().ok_or_else(|| miette!("not logged in: run `hammer login`"))?;
+    let chosen =
+        course::choose(flag, dir, session.course.clone()).map_err(|e| miette!("{e}"))?;
+    course::check_api(&chosen, &session.api).map_err(|e| miette!("{e}"))?;
+    Ok((
+        upload::Endpoint {
+            base: session.api,
+            token: session.token,
+        },
+        chosen,
+    ))
+}
+
 fn run_submit(args: SubmitArgs) -> Result<()> {
     let paths: Vec<PathBuf> = args.paths.into_iter().map(expand_tilde).collect();
     let files = submit::collect(&paths).map_err(|e| miette!("{e}"))?;
     let here = std::env::current_dir().map_err(|e| miette!("{e}"))?;
-    let session = account::load();
-    let (to, course) = match args.jobs_url {
-        Some(url) => {
-            let saved = session.and_then(|s| s.course);
-            let chosen = course::choose(args.course, &here, saved).map_err(|e| miette!("{e}"))?;
-            (upload::Endpoint::Jobs(url), chosen)
-        }
-        None => {
-            let session = session.ok_or_else(|| miette!("not logged in: run `hammer login`"))?;
-            let chosen = course::choose(args.course, &here, session.course.clone())
-                .map_err(|e| miette!("{e}"))?;
-            course::check_api(&chosen, &session.api).map_err(|e| miette!("{e}"))?;
-            (
-                upload::Endpoint::Api {
-                    base: session.api,
-                    token: session.token,
-                },
-                chosen,
-            )
-        }
-    };
+    let (to, course) = endpoint(args.course, &here)?;
     let mut params: Vec<(&str, &str)> = Vec::new();
-    if let Some(student) = &args.student {
-        params.push(("student", student));
-    }
     if let Some(email) = &args.for_ {
         params.push(("for", email));
     }
@@ -826,7 +819,7 @@ fn run_submit(args: SubmitArgs) -> Result<()> {
     let (graded, lines) = submit::outcome(&run);
     // The api gives students no scores or problems: show them what they may see now.
     let student = run.score.is_none() && run.problems.is_empty() && run.error.is_none();
-    if student && matches!(to, upload::Endpoint::Api { .. }) {
+    if student {
         let mine = api()?
             .get(&format!(
                 "/courses/{course_id}/assignments/{}/my-results?submission={}",
@@ -875,27 +868,7 @@ fn run_upload(args: UploadArgs) -> Result<()> {
         );
     }
 
-    let (to, course) = match args.jobs_url {
-        Some(url) => {
-            let saved = account::load().and_then(|s| s.course);
-            let chosen = course::choose(args.course, &dir, saved).map_err(|e| miette!("{e}"))?;
-            (upload::Endpoint::Jobs(url), chosen)
-        }
-        None => {
-            let session =
-                account::load().ok_or_else(|| miette!("not logged in: run `hammer login`"))?;
-            let chosen = course::choose(args.course, &dir, session.course.clone())
-                .map_err(|e| miette!("{e}"))?;
-            course::check_api(&chosen, &session.api).map_err(|e| miette!("{e}"))?;
-            (
-                upload::Endpoint::Api {
-                    base: session.api,
-                    token: session.token,
-                },
-                chosen,
-            )
-        }
-    };
+    let (to, course) = endpoint(args.course, &dir)?;
     let archive = upload::pack(&dir).map_err(|e| miette!("{e}"))?;
     let regrade = args.regrade.then_some(args.notify);
     let uploaded = upload::send(

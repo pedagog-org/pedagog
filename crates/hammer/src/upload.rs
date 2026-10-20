@@ -11,39 +11,28 @@ use serde::Deserialize;
 use tar::{Builder, EntryType, Header};
 use walkdir::WalkDir;
 
-/// Where uploads and build statuses go.
+/// The api, with the session's token: where uploads and build statuses go.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Endpoint {
-    /// The api, with the session's token.
-    Api { base: String, token: String },
-    /// jobs' internal endpoints (no login; operators and e2e).
-    Jobs(String),
+pub struct Endpoint {
+    pub base: String,
+    pub token: String,
 }
 
 impl Endpoint {
-    /// `path` (e.g. `/courses/c/assignments`) on this endpoint.
+    /// `path` (e.g. `/courses/c/assignments`) on the api.
     pub fn url(&self, path: &str) -> String {
-        match self {
-            Endpoint::Api { base, .. } => format!("{}{path}", base.trim_end_matches('/')),
-            Endpoint::Jobs(base) => format!("{}/internal{path}", base.trim_end_matches('/')),
-        }
+        format!("{}{path}", self.base.trim_end_matches('/'))
     }
 
     pub(crate) fn authorized(
         &self,
         req: reqwest::blocking::RequestBuilder,
     ) -> reqwest::blocking::RequestBuilder {
-        match self {
-            Endpoint::Api { token, .. } => req.bearer_auth(token),
-            Endpoint::Jobs(_) => req,
-        }
+        req.bearer_auth(&self.token)
     }
 
     pub(crate) fn name(&self) -> &'static str {
-        match self {
-            Endpoint::Api { .. } => "the api",
-            Endpoint::Jobs(_) => "jobs",
-        }
+        "the api"
     }
 }
 

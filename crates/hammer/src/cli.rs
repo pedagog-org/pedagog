@@ -149,7 +149,7 @@ pub struct VendArgs {
 
 #[derive(clap::Args)]
 #[command(
-    long_about = "Check, pack and upload an assignment directory to the jobs service.
+    long_about = "Check, pack and upload an assignment directory, through the api, to jobs.
 
 The directory (the one containing assignment.yml) is checked locally first:
 assignment.yml parses, its files are present, and it resolves against your
@@ -164,10 +164,7 @@ files (its configured defaults), and identifies uploads by their files' paths,
 executable bits and contents: uploading identical files again is recognized,
 however they were packed. An upload whose image (its rendered Containerfile and
 files) was already built and validated isn't rebuilt unless --force is given; a
-newer upload supersedes a build still in progress.
-
-jobs isn't exposed outside the cluster; `just kind-upload <dir>` port-forwards
-to it and runs this command."
+newer upload supersedes a build still in progress."
 )]
 pub struct UploadArgs {
     /// Assignment directory (contains assignment.yml).
@@ -176,10 +173,6 @@ pub struct UploadArgs {
     /// The course [default: the nearest course.yml at or above DIR, else `hammer use`].
     #[arg(short = 'c', long)]
     pub course: Option<String>,
-
-    /// Upload straight to jobs at this URL, without logging in (operators).
-    #[arg(long, value_name = "URL")]
-    pub jobs_url: Option<String>,
 
     /// Rebuild even if this exact image was already built and validated.
     #[arg(long)]
@@ -235,10 +228,7 @@ it's refused if there's none yet.
 Students submit while the assignment is open (late after its due date, until
 its late_due). Course staff submit their own work whenever, and with --for
 submit a student's on their behalf (e.g. to fix a broken submission), counted
---at now, at their last submission's time, or at a given time.
-
-Operators can send straight to jobs with --jobs-url and --student (`just
-kind-submit` port-forwards to jobs on kind).")]
+--at now, at their last submission's time, or at a given time.")]
 pub struct SubmitArgs {
     /// The assignment's id (from its assignment.yml).
     pub assignment: String,
@@ -263,20 +253,6 @@ pub struct SubmitArgs {
     /// Wait for grading and print the outcome; fail if the run couldn't be graded.
     #[arg(short = 'w', long)]
     pub wait: bool,
-
-    /// Submit straight to jobs at this URL, without logging in (operators).
-    #[arg(long, value_name = "URL", requires = "student")]
-    pub jobs_url: Option<String>,
-
-    /// With --jobs-url: the student id to record.
-    #[arg(
-        short = 's',
-        long,
-        value_name = "ID",
-        requires = "jobs_url",
-        conflicts_with = "for_"
-    )]
-    pub student: Option<String>,
 }
 
 #[derive(clap::Args)]
