@@ -20,7 +20,7 @@ pub enum Command {
     Plan(PlanArgs),
     /// Download and cache recipe assets into each recipe directory's ingredients/ folder.
     Vend(VendArgs),
-    /// Check, pack and upload an assignment directory to the jobs service.
+    /// Check, pack and upload an assignment directory (through the api, to jobs).
     Upload(UploadArgs),
     Submit(SubmitArgs),
     /// Log in to the api with a code sent to your email.
