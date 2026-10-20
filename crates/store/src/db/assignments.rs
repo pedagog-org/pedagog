@@ -898,6 +898,29 @@ mod tests {
     }
 
     #[sqlx::test]
+    async fn a_failure_seen_during_a_supersede_waits_for_it(pool: PgPool) -> sqlx::Result<()> {
+        let up = uploaded(&pool, "ll", "tree-a").await?;
+        let build = start_build(&pool, &crate::db::test_build(&up, "img-a", "reg/a:1")).await?;
+        let mut tx = pool.begin().await?;
+        assert!(supersede(&mut tx, build).await?);
+        // As when its Job is deleted before the superseding upload commits.
+        let failed = tokio::spawn({
+            let pool = pool.clone();
+            async move { finish_build(&pool, build, false, Some("job vanished")).await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            !failed.is_finished(),
+            "the row is held until the supersede commits"
+        );
+        tx.commit().await?;
+        assert!(!failed.await.unwrap()?);
+        let row = get_build(&pool, up.assignment_id, build).await?.unwrap();
+        assert_eq!(row.build_status, AssignmentBuildStatus::Superseded);
+        Ok(())
+    }
+
+    #[sqlx::test]
     async fn a_usable_regrade_build_queues_each_students_latest(pool: PgPool) -> sqlx::Result<()> {
         use crate::db::queue::{claim_next, enqueue_validation};
         use crate::db::submissions::runs_for_submission;

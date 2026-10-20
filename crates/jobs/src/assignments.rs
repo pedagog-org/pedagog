@@ -119,12 +119,15 @@ pub async fn dispatch(state: &AppState, plan: Plan) -> anyhow::Result<Decision> 
     Ok(Decision::Dispatched { build_id })
 }
 
-/// Latest upload wins: stop the older attempt's Jobs and mark it superseded.
+/// Latest upload wins: mark the older attempt superseded, then stop its Jobs.
+/// In that order: the caller's transaction holds the build's row until it
+/// commits, so whoever sees a Job vanish can't mark the attempt failed first.
 async fn supersede(
     state: &AppState,
     conn: &mut PgConnection,
     running: &AssignmentBuild,
 ) -> anyhow::Result<()> {
+    db::supersede(conn, running.id).await?;
     let id = job_id(&running.course_id, &running.slug);
     for key in [
         JobKey::assignment(&id, &running.image_hash),
@@ -134,7 +137,6 @@ async fn supersede(
             tracing::warn!(build = running.id, error = %e, "deleting a superseded Job failed");
         }
     }
-    db::supersede(conn, running.id).await?;
     tracing::info!(course = %running.course_id, assignment = %running.slug, build = running.id, "superseded");
     Ok(())
 }
@@ -212,8 +214,9 @@ async fn run(state: &AppState, build_id: i64, plan: &Plan, from: Resume) -> anyh
                 tracing::info!(build = build_id, "image built");
             }
             Waited::Failed { logs } => {
-                db::finish_build(&state.pool, build_id, false, Some(&logs)).await?;
-                tracing::warn!(build = build_id, "image build failed");
+                if db::finish_build(&state.pool, build_id, false, Some(&logs)).await? {
+                    tracing::warn!(build = build_id, "image build failed");
+                }
                 return Ok(());
             }
         }
@@ -262,15 +265,17 @@ pub async fn settle_validation(
             .problems
             .push(format!("validation pod log (tail):\n{tail}"));
     }
-    db::finish_validation(
+    if db::finish_validation(
         &state.pool,
         build_id,
         verdict.status,
         verdict.results.as_deref(),
         &verdict.problems,
     )
-    .await?;
-    tracing::info!(build = build_id, status = %verdict.status, "validated");
+    .await?
+    {
+        tracing::info!(build = build_id, status = %verdict.status, "validated");
+    }
     Ok(())
 }
 
