@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO maintenance_runs (task, day) VALUES ($1, $2::text::date) ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a03d2320262925625082c7b09f1dc282373b0fbb84be978707b63c0ce6efb0e5"
+}
