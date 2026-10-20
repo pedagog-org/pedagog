@@ -94,7 +94,7 @@ fn dates_view(p: &Policy) -> serde_json::Value {
     let status = match p.dates().acceptance(OffsetDateTime::now_utc()) {
         Acceptance::OnTime => "open".to_owned(),
         Acceptance::Late => "open, late".to_owned(),
-        Acceptance::Closed(why) => format!("closed: {why}"),
+        Acceptance::Closed(why) => why,
     };
     serde_json::json!({
         "open": field(open_text(c.open), open_text(f.open)),
@@ -470,7 +470,7 @@ mod tests {
         let shown = json(get(&format!("{url}{BASE}/dates"), &alice).await).await;
         assert_eq!(shown["due"]["from"], "file");
         assert!(
-            shown["status"].as_str().unwrap().starts_with("closed"),
+            shown["status"].as_str().unwrap().contains("closed"),
             "{shown}"
         );
         assert_eq!(shown["late_due"], serde_json::Value::Null);
