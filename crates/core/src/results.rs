@@ -6,7 +6,8 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// How helpers mark a test file that failed to load: `<file>::<collection>`.
+/// How version 1 helpers marked a test file that failed to load:
+/// `<file>::<collection>` (version 2 reports it in `run`).
 pub const COLLECTION_SUFFIX: &str = "::<collection>";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -16,10 +17,29 @@ pub struct Results {
     pub submission_id: Option<String>,
     #[serde(default)]
     pub run_id: Option<String>,
+    /// Whether every test could run (absent from version 1 helpers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<Run>,
     pub summary: Summary,
     pub tests: Vec<TestResult>,
     #[serde(default)]
     pub artifacts: Vec<Artifact>,
+}
+
+/// Whether the tests could all run, and what stopped them if not (for staff).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Run {
+    pub status: RunStatus,
+    #[serde(default)]
+    pub output: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunStatus {
+    Complete,
+    /// Tests couldn't all run (e.g. the student's code doesn't load).
+    Error,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,11 +66,15 @@ pub struct TestResult {
     pub status: Status,
     pub score: f64,
     pub max: f64,
-    /// The framework's failure text.
+    /// What went wrong: failures, exceptions, and the framework's values
+    /// (version 1 helpers called it `output`).
+    #[serde(default, alias = "output")]
+    pub error: String,
+    /// What the test printed.
     #[serde(default)]
-    pub output: String,
-    /// What the student is told about the score (subject to output visibility).
-    #[serde(default)]
+    pub stdout: String,
+    /// Version 1 helpers' feedback text (version 2 puts it in items' steps).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub feedback: String,
     /// How the score was calculated; for instructors only.
     #[serde(default)]
@@ -59,14 +83,15 @@ pub struct TestResult {
     /// What the reference solution is expected to do on this test (default: pass).
     #[serde(default)]
     pub solution_expect: Option<Expect>,
-    /// Bounds on the score of a test that is a single rubric item.
+    /// Bounds on the score of a test that is a single rubric item (version 1;
+    /// version 2 lists the item).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clamp: Option<Clamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_credit: Option<ExtraCredit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempted: Option<bool>,
-    /// Rubric items the test was scored by, for multi-item rubrics.
+    /// Rubric items the test was scored by.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<RubricItem>,
 }
@@ -84,8 +109,39 @@ pub struct RubricItem {
     pub extra_credit: ExtraCredit,
     #[serde(default)]
     pub attempted: bool,
-    #[serde(default)]
+    /// The item's feedback: its checks and awards, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<Step>,
+    /// Version 1 helpers' feedback text.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub feedback: String,
+}
+
+/// One check or award of a rubric item.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Step {
+    /// Stable within its item, when declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Checks pass or fail; awards have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<StepResult>,
+    pub points: f64,
+    /// What a check was worth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worth: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// A failed check's assert message (written by the instructor).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StepResult {
+    Pass,
+    Fail,
 }
 
 /// How a rubric item counts toward its test's max.
@@ -135,10 +191,41 @@ pub enum Expect {
     Fail,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// When students see each part of a test's result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "RawVisibility")]
 pub struct TestVisibility {
+    /// Points, and pass/fail.
     pub score: Visibility,
-    pub output: Visibility,
+    /// The checks (items' steps).
+    pub feedback: Visibility,
+    /// What the test printed.
+    pub stdout: Visibility,
+    /// What went wrong.
+    pub error: Visibility,
+}
+
+/// Version 2's four parts, or version 1's `score` and `output` (which then
+/// covered feedback, and stands for stdout too).
+#[derive(Deserialize)]
+struct RawVisibility {
+    score: Option<Visibility>,
+    feedback: Option<Visibility>,
+    stdout: Option<Visibility>,
+    error: Option<Visibility>,
+    output: Option<Visibility>,
+}
+
+impl From<RawVisibility> for TestVisibility {
+    fn from(r: RawVisibility) -> Self {
+        let rest = |v: Option<Visibility>| v.or(r.output).unwrap_or(Visibility::Visible);
+        TestVisibility {
+            score: r.score.unwrap_or(Visibility::Visible),
+            feedback: rest(r.feedback),
+            stdout: rest(r.stdout),
+            error: rest(r.error),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,13 +316,35 @@ impl Results {
         problems
     }
 
-    /// Entries the helper reports for test files that couldn't be loaded at
-    /// all (e.g. the submission doesn't import), so their tests never ran.
+    /// Entries version 1 helpers report for test files that couldn't be
+    /// loaded at all (e.g. the submission doesn't import).
     pub fn collection_errors(&self) -> Vec<&TestResult> {
         self.tests
             .iter()
             .filter(|t| t.node.ends_with(COLLECTION_SUFFIX))
             .collect()
+    }
+
+    /// What stopped the tests from all running, if anything: the run's own
+    /// report (version 2), or version 1's collection entries.
+    pub fn run_error(&self) -> Option<String> {
+        if let Some(run) = &self.run {
+            return (run.status == RunStatus::Error).then(|| run.output.clone());
+        }
+        let unloaded = self.collection_errors();
+        (!unloaded.is_empty()).then(|| {
+            unloaded
+                .iter()
+                .map(|t| {
+                    format!(
+                        "{}:\n{}",
+                        t.node.trim_end_matches(COLLECTION_SUFFIX),
+                        t.error
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        })
     }
 
     /// Tests whose outcome with the reference solution contradicts their
@@ -327,6 +436,82 @@ fn number_or_string<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D
 mod tests {
     use super::*;
 
+    /// What pedagog-pytest 2 writes.
+    const V2: &str = r#"{
+        "submission-id": null, "run-id": null,
+        "run": {"status": "complete", "output": ""},
+        "summary": {"score": 1.0, "total": 4.0},
+        "tests": [{
+            "id": "sort", "node": "t.py::test_sort", "name": "sort()", "status": "fail",
+            "score": 1.0, "max": 4.0,
+            "items": [{"id": "correct", "name": "correct", "score": 1.0, "max": 4.0,
+                       "clamp": [0.0, 4.0], "extra-credit": "none", "attempted": true,
+                       "steps": [
+                         {"id": "empty", "result": "pass", "points": 1.0, "worth": 1.0, "reason": "empty list"},
+                         {"result": "fail", "points": 0.0, "worth": 3.0, "reason": "1000 values",
+                          "message": "sort() lost an element"},
+                         {"points": -1.0, "reason": "one global"}]}],
+            "stdout": "after sort(): [1, 2]\n",
+            "error": "t.py:9: AssertionError: sort() lost an element\nassert 2 == 3",
+            "trace": "...",
+            "visibility": {"score": "visible", "feedback": "visible", "stdout": "after_end", "error": "hidden"}
+        }],
+        "artifacts": []
+    }"#;
+
+    #[test]
+    fn version_2_results_parse_with_steps_and_four_visibilities() {
+        let r: Results = serde_json::from_str(V2).unwrap();
+        assert!(r.problems().is_empty(), "{:?}", r.problems());
+        assert_eq!(r.run_error(), None);
+        let t = &r.tests[0];
+        assert_eq!(
+            t.visibility,
+            TestVisibility {
+                score: Visibility::Visible,
+                feedback: Visibility::Visible,
+                stdout: Visibility::AfterEnd,
+                error: Visibility::Hidden
+            }
+        );
+        let steps = &t.items[0].steps;
+        assert_eq!(
+            (steps[0].id.as_deref(), steps[0].result),
+            (Some("empty"), Some(StepResult::Pass))
+        );
+        assert_eq!(steps[1].message.as_deref(), Some("sort() lost an element"));
+        assert_eq!(steps[2].result, None, "an award");
+        assert!(t.stdout.starts_with("after sort()") && t.error.contains("assert 2 == 3"));
+        let again: Results = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(again, r, "round trips");
+    }
+
+    #[test]
+    fn run_errors_come_from_run_or_version_1_collection_entries() {
+        let mut r: Results = serde_json::from_str(V2).unwrap();
+        r.run = Some(Run {
+            status: RunStatus::Error,
+            output: "SyntaxError".into(),
+        });
+        assert_eq!(r.run_error().as_deref(), Some("SyntaxError"));
+
+        let v1: Results = serde_json::from_value(serde_json::json!({
+            "summary": {"score": 0.0, "total": 0.0},
+            "tests": [{"node": "t.py::<collection>", "name": "Collecting t.py", "status": "error",
+                       "score": 0.0, "max": 0.0, "output": "ImportError: no linked_list",
+                       "visibility": {"score": "visible", "output": "after_end"}}]
+        }))
+        .unwrap();
+        assert_eq!(
+            v1.run_error().as_deref(),
+            Some("t.py:\nImportError: no linked_list")
+        );
+        assert_eq!(
+            v1.tests[0].error, "ImportError: no linked_list",
+            "output reads as error"
+        );
+    }
+
     const EXAMPLE: &str = "\
 submission-id: ~
 run-id: ~
@@ -373,7 +558,7 @@ artifacts:
         assert_eq!(r.tests[1].number.as_deref(), Some("2.1"));
         assert_eq!(r.tests[0].key(), "null-ptr");
         assert_eq!(r.tests[1].key(), "test_leak", "no id: the node");
-        assert_eq!(r.tests[0].visibility.output, Visibility::AfterEnd);
+        assert_eq!(r.tests[0].visibility.error, Visibility::AfterEnd);
         assert_eq!(r.tests[1].solution_expect, Some(Expect::Fail));
         assert_eq!(r.artifacts[0].path, "valgrind.log");
         assert!(r.problems().is_empty(), "{:?}", r.problems());
@@ -568,7 +753,7 @@ visibility:
         let keys: Vec<&str> = r.tests.iter().map(TestResult::key).collect();
         assert_eq!(keys, ["append", "len", "pop-front", "reverse", "many"]);
         let pop_front = &r.tests[2];
-        assert_eq!(pop_front.visibility.output, Visibility::Hidden);
+        assert_eq!(pop_front.visibility.error, Visibility::Hidden);
         assert_eq!((pop_front.score, pop_front.max), (4.0, 4.0));
         assert_eq!(pop_front.items.len(), 3);
         assert!(pop_front.trace.contains("test: 2 + 1 + 1 = 4"));
