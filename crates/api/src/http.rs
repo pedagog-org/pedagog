@@ -82,6 +82,10 @@ fn api(state: AppState) -> Router {
         )
         .route("/courses/{course}/submissions/{id}", get(submissions::show))
         .route(
+            "/courses/{course}/submissions/{id}/download",
+            get(submissions::download),
+        )
+        .route(
             "/courses/{course}/submissions/{id}/activate",
             post(results::activate).delete(results::deactivate),
         )

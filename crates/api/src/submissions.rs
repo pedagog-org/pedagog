@@ -316,13 +316,15 @@ pub async fn list(
     Ok(Json(out).into_response())
 }
 
-/// One submission and its runs: yours, or any in the course for staff.
-pub async fn show(
-    State(state): State<AppState>,
-    current: CurrentUser,
-    Path((course, id)): Path<(String, i64)>,
-) -> Result<Response, ApiError> {
-    let access = require(&state, &course, &current, Need::Member).await?;
+/// A submission `current` may see (theirs, or any in the course for staff),
+/// and its assignment; others are "not found".
+async fn visible(
+    state: &AppState,
+    current: &CurrentUser,
+    course: &str,
+    id: i64,
+) -> Result<(Access, Submission, Assignment), ApiError> {
+    let access = require(state, course, current, Need::Member).await?;
     let missing = || {
         refused(
             StatusCode::NOT_FOUND,
@@ -338,10 +340,20 @@ pub async fn show(
         .map_err(|e| internal("reading the assignment", e))?
         .filter(|a| a.course_id == access.course.id)
         .ok_or_else(missing)?;
-    let staff = is_staff(&access);
-    if !staff && s.user_id != Some(current.user.id) {
+    if !is_staff(&access) && s.user_id != Some(current.user.id) {
         return Err(missing());
     }
+    Ok((access, s, a))
+}
+
+/// One submission and its runs: yours, or any in the course for staff.
+pub async fn show(
+    State(state): State<AppState>,
+    current: CurrentUser,
+    Path((course, id)): Path<(String, i64)>,
+) -> Result<Response, ApiError> {
+    let (access, s, a) = visible(&state, &current, &course, id).await?;
+    let staff = is_staff(&access);
     let json = |text: &Option<String>| {
         text.as_deref()
             .and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok())
@@ -394,6 +406,64 @@ pub async fn show(
         out["build_id"] = serde_json::json!(s.build_id);
     }
     Ok(Json(out).into_response())
+}
+
+/// `linked-list-2026-10-21-0322.tgz`: the assignment and when it counts (UTC).
+fn archive_name(slug: &str, counted_at: &str) -> String {
+    let when: String = counted_at
+        .chars()
+        .take(16)
+        .filter(|c| *c != ':')
+        .map(|c| if c == 'T' { '-' } else { c })
+        .collect();
+    format!("{slug}-{when}.tgz")
+}
+
+/// A submission's files as graded (yours, or any in the course for staff).
+pub async fn download(
+    State(state): State<AppState>,
+    current: CurrentUser,
+    Path((course, id)): Path<(String, i64)>,
+) -> Result<Response, ApiError> {
+    let (_, s, a) = visible(&state, &current, &course, id).await?;
+    let reply = state
+        .jobs
+        .get(format!(
+            "{}/internal/submissions/{}/archive",
+            state.config.jobs_url, s.id
+        ))
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "jobs is unreachable");
+            refused(
+                StatusCode::BAD_GATEWAY,
+                "the grading service is unreachable",
+            )
+        })?;
+    if !reply.status().is_success() {
+        tracing::error!(status = %reply.status(), submission = s.id, "couldn't read a submission's files");
+        return Err(refused(
+            StatusCode::BAD_GATEWAY,
+            "the submission's files couldn't be read; try again",
+        ));
+    }
+    let bytes = reply
+        .bytes()
+        .await
+        .map_err(|e| internal("reading the submission's files", e))?;
+    let name = archive_name(&a.slug, &s.counted_at);
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/gzip".to_owned()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{name}\""),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 #[cfg(test)]
@@ -669,6 +739,26 @@ mod tests {
         assert_eq!(one["runs"][0]["status"], "queued");
         assert!(one["runs"][0].get("results").is_none());
         assert_eq!(one["receipt"]["files"][0], "a.py");
+
+        // Its files, as stored, for the owner and staff only.
+        let download = |token: String| {
+            let url = format!(
+                "{url}/courses/cop3502-f26/submissions/{}/download",
+                sub.submission_id
+            );
+            async move { get(&url, &token).await }
+        };
+        let got = download(alice_token.clone()).await;
+        assert_eq!(got.status(), 200);
+        assert_eq!(
+            got.headers()["content-disposition"],
+            r#"attachment; filename="linked-list-2020-02-01-0214.tgz""#
+        );
+        assert_eq!(got.bytes().await.unwrap().as_ref(), b"tgz");
+        let ta = login(&url, &outbox, "ta@ufl.edu").await;
+        assert_eq!(download(ta).await.status(), 200);
+        let bob = login(&url, &outbox, "bob@ufl.edu").await;
+        assert_eq!(download(bob).await.status(), 404, "someone else's");
 
         let bob = login(&url, &outbox, "bob@ufl.edu").await;
         assert_eq!(

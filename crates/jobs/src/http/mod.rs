@@ -43,6 +43,10 @@ pub fn router(state: AppState) -> Router {
             "/internal/submissions/{id}",
             get(submissions::submission_status),
         )
+        .route(
+            "/internal/submissions/{id}/archive",
+            get(submissions::submission_archive),
+        )
         .with_state(state)
 }
 

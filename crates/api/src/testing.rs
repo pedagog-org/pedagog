@@ -72,6 +72,10 @@ async fn stub_jobs() -> (String, JobsSeen) {
                     }
                 },
             ),
+        )
+        .route(
+            "/internal/submissions/{id}/archive",
+            axum::routing::get(|| async { b"tgz".to_vec() }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());

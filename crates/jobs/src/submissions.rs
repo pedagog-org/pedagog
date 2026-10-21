@@ -433,6 +433,27 @@ pub async fn submission_status(
     Ok(Json(status_of(&state, submission).await?).into_response())
 }
 
+/// A submission's files as stored and graded: a gzipped tar.
+pub async fn submission_archive(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<i64>,
+) -> Result<Response, Refused> {
+    let submission = db::get_submission(&state.pool, id)
+        .await
+        .map_err(|e| internal("reading the submission", e))?
+        .ok_or_else(|| refused(StatusCode::NOT_FOUND, format!("no submission {id}")))?;
+    let bytes = state
+        .objects
+        .get(&submission.object_key)
+        .await
+        .map_err(|e| internal("reading the submission's files", e))?;
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/gzip")],
+        bytes,
+    )
+        .into_response())
+}
+
 async fn status_of(
     state: &AppState,
     submission: pedagog_store::Submission,
