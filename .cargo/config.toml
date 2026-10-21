@@ -5,3 +5,5 @@ xtask = "run -q -p xtask --"
 # `cargo test --target wasm32-unknown-unknown` runs in a headless browser.
 [target.wasm32-unknown-unknown]
 runner = "wasm-bindgen-test-runner"
+# Leptos renders through type-erased views: a smaller web UI (~11%).
+rustflags = ["--cfg", "erase_components"]
