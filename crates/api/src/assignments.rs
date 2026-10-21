@@ -7,6 +7,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use pedagog_core::results::Results;
 use pedagog_store::db::assignments as db;
 use pedagog_store::{Assignment, AssignmentBuild};
 use serde::{Deserialize, Serialize};
@@ -242,6 +243,10 @@ pub async fn build(
                 format!("{course}/{slug} has no build {build}"),
             )
         })?;
+    let results: Option<Results> = b
+        .results
+        .as_deref()
+        .and_then(|r| serde_json::from_str(r).ok());
     Ok(Json(serde_json::json!({
         "id": b.id,
         "course": a.course_id,
@@ -253,6 +258,7 @@ pub async fn build(
         "current": a.current_build_id == Some(b.id),
         "error": b.error.map(|e| e[e.len().saturating_sub(ERROR_TAIL)..].to_owned()),
         "validation_problems": b.validation_problems,
+        "validation_warnings": results.as_ref().map(Results::warnings).unwrap_or_default(),
         "results": b.results.and_then(|r| serde_json::from_str::<serde_json::Value>(&r).ok()),
     }))
     .into_response())

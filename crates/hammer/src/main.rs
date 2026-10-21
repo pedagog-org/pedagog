@@ -942,6 +942,9 @@ fn run_upload(args: UploadArgs) -> Result<()> {
     if ok {
         println!("{line}");
         println!("image: {}", status.image_ref);
+        for warning in &status.validation_warnings {
+            emit_warning(warning, "", args.quiet);
+        }
         return Ok(());
     }
     let mut details: Vec<String> = status.validation_problems.clone();

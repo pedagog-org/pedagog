@@ -97,6 +97,10 @@ pub struct ShownTest {
     pub stdout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// `error` is the helper's sanitized report (a summary, a blank line, then
+    /// the call chain), not the framework's raw one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub error_sanitized: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -191,7 +195,9 @@ pub fn student_view(
             extra_credit: t.extra_credit_worth(),
             feedback: shown(v.feedback).then(|| feedback_of(t)),
             stdout: (shown(v.stdout) && !t.stdout.is_empty()).then(|| t.stdout.clone()),
-            error: (shown(v.error) && !t.error.is_empty()).then(|| t.error.clone()),
+            error: (shown(v.error) && !t.error_for_students().is_empty())
+                .then(|| t.error_for_students().to_owned()),
+            error_sanitized: !t.error_sanitized.is_empty(),
         });
     }
     if until_deadline {

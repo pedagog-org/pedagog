@@ -148,10 +148,11 @@ pub struct RunOutcome<'a> {
     pub notify: bool,
 }
 
-/// End a grading run as graded (`results` present) or error. Returns false if
-/// the run isn't grading (e.g. reconcile already ended it).
+/// End a grading run as graded (`results` present, no error kind) or error
+/// (which may keep its results: a run that couldn't load the code). Returns
+/// false if the run isn't grading (e.g. reconcile already ended it).
 pub async fn finish_run(pool: &PgPool, run: i64, outcome: &RunOutcome<'_>) -> sqlx::Result<bool> {
-    let status = if outcome.results.is_some() {
+    let status = if outcome.results.is_some() && outcome.error_kind.is_none() {
         RunStatus::Graded
     } else {
         RunStatus::Error
@@ -858,6 +859,28 @@ pub(crate) mod tests {
         assert_eq!(run.problems, problems);
         assert_eq!(run.log_tail.as_deref(), Some("Killed"));
         assert_eq!(run.error_kind, Some(ErrorKind::Timeout));
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn a_run_that_couldnt_load_is_an_error_that_keeps_its_results(
+        pool: PgPool,
+    ) -> sqlx::Result<()> {
+        let build = current_build(&pool, "ll", "img-a").await?;
+        let acc = submit(&pool, "s1", build).await?;
+        let mut conn = pool.acquire().await?;
+        start_grading(&mut conn, acc.run_id, "grade-1", Isolation::InProcess).await?;
+        let results =
+            r#"{"run": {"status": "error", "output-sanitized": "a.py, line 2: SyntaxError"}}"#;
+        let outcome = RunOutcome {
+            results: Some(results),
+            error_kind: Some(ErrorKind::Load),
+            ..Default::default()
+        };
+        finish_run(&pool, acc.run_id, &outcome).await?;
+        let run = get_run(&pool, acc.run_id).await?.unwrap();
+        assert_eq!(run.status, RunStatus::Error);
+        assert!(run.results.is_some_and(|r| r.contains("SyntaxError")));
         Ok(())
     }
 
