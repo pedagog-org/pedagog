@@ -22,7 +22,7 @@ const EXAMPLE: &str = "recipes/examples/linked-list-python";
 const EXAMPLE_ID: &str = "linked-list-python";
 const UPLOAD_EXAMPLE: &str = "recipes/examples/linked-list-python-upload";
 const UPLOAD_ID: &str = "linked-list-python-upload";
-const STUDENTS: [&str; 5] = ["good", "buggy", "zipped", "broken", "late"];
+const STUDENTS: [&str; 6] = ["good", "buggy", "zipped", "broken", "late", "browser"];
 
 struct Env {
     course: String,
@@ -193,7 +193,10 @@ fn personas(e: &mut Env) -> Result<String> {
     for s in STUDENTS {
         student(s).session()?;
     }
-    Ok("admin, instructor, grader and 5 students logged in; course created".into())
+    Ok(format!(
+        "admin, instructor, grader and {} students logged in; course created",
+        STUDENTS.len()
+    ))
 }
 
 fn example_validates(e: &mut Env) -> Result<String> {
@@ -781,7 +784,12 @@ fn activation(e: &mut Env) -> Result<String> {
 /// Log in through the web UI in headless Chrome: the email, the code from
 /// Mailpit, then your courses. Exercises the page boot under its CSP, the
 /// session cookie and the X-Pedagog header together.
-fn web_login(e: &mut Env) -> Result<String> {
+/// Run `check` against a fresh headless Chrome (chromedriver on port 9515);
+/// the page's source is saved to `target/<name>-failure.html` if it fails.
+fn in_browser<F>(name: &str, check: impl FnOnce(fantoccini::Client) -> F) -> Result<String>
+where
+    F: std::future::Future<Output = Result<String>>,
+{
     let driver = std::env::var("CHROMEDRIVER")
         .map_err(|_| "CHROMEDRIVER isn't set (run through `cargo xtask e2e`)")?;
     let mut chromedriver = std::process::Command::new(driver)
@@ -790,11 +798,22 @@ fn web_login(e: &mut Env) -> Result<String> {
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|x| format!("couldn't start chromedriver: {x}"))?;
+    let failure = root().join(format!("target/{name}-failure.html"));
     let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|x| x.to_string())?
-        .block_on(browse_login(e));
+        .block_on(async {
+            let c = browser().await?;
+            let outcome = check(c.clone()).await;
+            if outcome.is_err()
+                && let Ok(page) = c.source().await
+            {
+                let _ = std::fs::write(&failure, page);
+            }
+            let _ = c.close().await;
+            outcome
+        });
     let _ = chromedriver.kill();
     result
 }
@@ -807,103 +826,158 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
         .map_err(|x| x.to_string())?
 }
 
-async fn browse_login(e: &Env) -> Result<String> {
-    use fantoccini::{ClientBuilder, Locator};
-    let who = student("good");
+async fn browser() -> Result<fantoccini::Client> {
     let mut caps = serde_json::Map::new();
     caps.insert(
         "goog:chromeOptions".into(),
         serde_json::json!({"args": ["--headless=new", "--disable-gpu", "--window-size=1280,900"]}),
     );
-    let mut client = None;
     for _ in 0..20 {
-        match ClientBuilder::rustls()
+        match fantoccini::ClientBuilder::rustls()
             .map_err(|x| x.to_string())?
             .capabilities(caps.clone())
             .connect("http://localhost:9515")
             .await
         {
-            Ok(c) => {
-                client = Some(c);
-                break;
-            }
+            Ok(c) => return Ok(c),
             Err(_) => tokio::time::sleep(Duration::from_millis(250)).await,
         }
     }
-    let c = client.ok_or("couldn't reach chromedriver")?;
-    let w = |x: fantoccini::error::CmdError| x.to_string();
-    let base = format!("http://localhost:{}", pedagog_e2e::API_PORT);
-    let outcome = async {
-        c.goto(&format!("{base}/login")).await.map_err(w)?;
-        let email = c
-            .wait()
-            .for_element(Locator::Css("#login-email"))
-            .await
-            .map_err(|x| format!("waiting for #login-email: {x}"))?;
-        email.send_keys(&who.email).await.map_err(w)?;
-        let to = who.email.clone();
-        let before = blocking(move || latest_mail(&to, "login code")).await?;
-        c.find(Locator::Css("button[type=submit]"))
-            .await
-            .map_err(w)?
-            .click()
-            .await
-            .map_err(w)?;
-        let code_box = c
-            .wait()
-            .for_element(Locator::Css("#login-code"))
-            .await
-            .map_err(|x| format!("waiting for #login-code: {x}"))?;
-        let to = who.email.clone();
-        let mail = blocking(move || {
-            mail_after(&to, "login code", before.as_ref(), Duration::from_secs(30))
-        })
-        .await?;
-        let code = mail
-            .subject
-            .rsplit(' ')
-            .next()
-            .unwrap_or_default()
-            .to_owned();
-        code_box.send_keys(&code).await.map_err(w)?;
-        c.find(Locator::Css("button[type=submit]"))
-            .await
-            .map_err(w)?
-            .click()
-            .await
-            .map_err(w)?;
-        let heading = c
-            .wait()
-            .for_element(Locator::XPath("//h1[text()='Your courses']"))
-            .await
-            .map_err(|x| format!("waiting for //h1[text()='Your courses']: {x}"))?;
-        let _ = heading;
-        let page = c.source().await.map_err(w)?;
-        require(page.contains(&e.course), || {
-            format!("the course {} isn't listed", e.course)
+    Err("couldn't reach chromedriver".into())
+}
+
+fn base() -> String {
+    format!("http://localhost:{}", pedagog_e2e::API_PORT)
+}
+
+fn cmd(x: fantoccini::error::CmdError) -> String {
+    x.to_string()
+}
+
+/// Wait for an element, saying which one in the error.
+async fn element(
+    c: &fantoccini::Client,
+    within: Duration,
+    css: &str,
+) -> Result<fantoccini::elements::Element> {
+    c.wait()
+        .at_most(within)
+        .for_element(fantoccini::Locator::Css(css))
+        .await
+        .map_err(|x| format!("waiting for {css}: {x}"))
+}
+
+/// Log `who` in through the login page, with the code from Mailpit.
+async fn log_in(c: &fantoccini::Client, who: &Persona) -> Result<()> {
+    use fantoccini::Locator;
+    c.goto(&format!("{}/login", base())).await.map_err(cmd)?;
+    let email = element(c, Duration::from_secs(30), "#login-email").await?;
+    email.send_keys(&who.email).await.map_err(cmd)?;
+    let to = who.email.clone();
+    let before = blocking(move || latest_mail(&to, "login code")).await?;
+    c.find(Locator::Css("button[type=submit]"))
+        .await
+        .map_err(cmd)?
+        .click()
+        .await
+        .map_err(cmd)?;
+    let code_box = element(c, Duration::from_secs(30), "#login-code").await?;
+    let to = who.email.clone();
+    let mail =
+        blocking(move || mail_after(&to, "login code", before.as_ref(), Duration::from_secs(30)))
+            .await?;
+    let code = mail
+        .subject
+        .rsplit(' ')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    code_box.send_keys(&code).await.map_err(cmd)?;
+    c.find(Locator::Css("button[type=submit]"))
+        .await
+        .map_err(cmd)?
+        .click()
+        .await
+        .map_err(cmd)?;
+    c.wait()
+        .for_element(Locator::XPath("//h1[text()='Home']"))
+        .await
+        .map_err(|x| format!("waiting for Home after logging in: {x}"))?;
+    Ok(())
+}
+
+fn web_login(e: &mut Env) -> Result<String> {
+    let course = e.course.clone();
+    in_browser("web-login", |c| async move {
+        log_in(&c, &student("good")).await?;
+        let page = c.source().await.map_err(cmd)?;
+        require(page.contains(&course), || {
+            format!("the course {course} isn't on Home")
         })?;
-        c.goto(&format!("{base}/courses/{}", e.course))
+        c.goto(&format!("{}/courses/{course}", base()))
             .await
-            .map_err(w)?;
+            .map_err(cmd)?;
         c.wait()
-            .for_element(Locator::XPath("//h1[text()='Assignments']"))
+            .for_element(fantoccini::Locator::XPath("//h1[text()='Assignments']"))
             .await
-            .map_err(|x| format!("waiting for //h1[text()='Assignments']: {x}"))?;
-        let page = c.source().await.map_err(w)?;
-        require(page.contains("Linked List"), || {
-            "the course's assignments aren't listed".into()
+            .map_err(|x| format!("waiting for the assignments: {x}"))?;
+        element(&c, Duration::from_secs(10), "ul[aria-label=Assignments] li").await?;
+        Ok(
+            "logged in through the browser (code from Mailpit); courses and assignments shown"
+                .into(),
+        )
+    })
+}
+
+fn web_submit(e: &mut Env) -> Result<String> {
+    let course = e.course.clone();
+    let file = root()
+        .join(UPLOAD_EXAMPLE)
+        .join("solution/linked_list.py")
+        .display()
+        .to_string();
+    in_browser("web-submit", |c| async move {
+        log_in(&c, &student("browser")).await?;
+        c.goto(&format!(
+            "{}/courses/{course}/assignments/{UPLOAD_ID}",
+            base()
+        ))
+        .await
+        .map_err(cmd)?;
+        let input = element(
+            &c,
+            Duration::from_secs(30),
+            "input[type=file]:not([webkitdirectory])",
+        )
+        .await?;
+        input.send_keys(&file).await.map_err(cmd)?;
+        element(&c, Duration::from_secs(10), "ul.filelist li").await?;
+        element(
+            &c,
+            Duration::from_secs(10),
+            "button.btn-primary:not([disabled])",
+        )
+        .await?
+        .click()
+        .await
+        .map_err(cmd)?;
+        let receipt = element(&c, Duration::from_secs(60), ".alert-pass .strong").await?;
+        let said = receipt.text().await.map_err(cmd)?;
+        require(said.starts_with("Submitted at"), || {
+            format!("the receipt says {said:?}")
         })?;
-        Ok::<_, String>(())
-    }
-    .await;
-    if outcome.is_err()
-        && let Ok(page) = c.source().await
-    {
-        let _ = std::fs::write(root().join("target/web-login-failure.html"), page);
-    }
-    let _ = c.close().await;
-    outcome?;
-    Ok("logged in through the browser (code from Mailpit); courses and assignments shown".into())
+        // Graded while the page is open: the results come in without a reload.
+        let score = element(&c, Duration::from_secs(300), ".score .big").await?;
+        let got = score.text().await.map_err(cmd)?;
+        require(got == "10", || format!("the score shown is {got:?}"))?;
+        let history = element(&c, Duration::from_secs(30), "#hist-h + ul li").await?;
+        let row = history.text().await.map_err(cmd)?;
+        require(
+            row.contains("10/10 shown") && row.contains("Counts"),
+            || format!("the history row says {row:?}"),
+        )?;
+        Ok("a student submits in the browser, watches it grade live, and sees 10/10 in results and history".into())
+    })
 }
 
 type Check = fn(&mut Env) -> Result<String>;
@@ -972,6 +1046,7 @@ const CHECKS: &[(&str, Check, &[&str])] = &[
     ),
     ("activation", activation, &["submissions_are_graded"]),
     ("web_login", web_login, &["upload_example_validates"]),
+    ("web_submit", web_submit, &["upload_example_validates"]),
 ];
 
 /// The checks to run: those matching a filter (all without one), and what
