@@ -154,7 +154,7 @@ pub fn Assignment() -> impl IntoView {
                             None => view! { <Loading/> }.into_any(),
                             Some(Err(p)) => view! { <Failed problem=p/> }.into_any(),
                             Some(Ok(None)) => ().into_any(),
-                            Some(Ok(Some(r))) => view! { <Outcome mine=r tracked=tracked deadline=deadline/> }.into_any(),
+                            Some(Ok(Some(r))) => view! { <Outcome mine=r tracked=tracked deadline=deadline course=course.get_untracked()/> }.into_any(),
                         }
                     }}
                     <History history=history course=course slug=slug picked=picked/>
@@ -206,7 +206,12 @@ fn Header(page: StudentAssignmentPage) -> impl IntoView {
 
 /// The shown submission: grading (live), couldn't be graded, or results.
 #[component]
-fn Outcome(mine: MyResults, tracked: RwSignal<Tracked>, deadline: Option<String>) -> impl IntoView {
+fn Outcome(
+    mine: MyResults,
+    tracked: RwSignal<Tracked>,
+    deadline: Option<String>,
+    course: String,
+) -> impl IntoView {
     let at = crate::time::clock(&mine.counted_at);
     let counts = mine.counts;
     move || {
@@ -250,6 +255,7 @@ fn Outcome(mine: MyResults, tracked: RwSignal<Tracked>, deadline: Option<String>
                             <h2 class="h2" id="res-h2">"Your results"</h2>
                             <span class="small muted">"from your submission at "<When rfc3339=mine.counted_at.clone()/>
                                 {counts.then(|| view! { <span class="badge b-accent" style="margin-left: 6px"><span class="gl" aria-hidden="true">"★"</span>"Counts"</span> })}
+                                <DownloadLink href=download_url(&course, mine.submission) label="Download the files of this submission".into() text="Download"/>
                             </span>
                         </div>
                         <Results view=view deadline=deadline.as_deref().and_then(crate::time::moment).map(|m| m.text)/>
@@ -268,6 +274,28 @@ fn capitalized(s: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The rows shown at once (the latest, and the one that counts if older),
+/// and the rest, latest first.
+fn split_history(rows: Vec<SubmissionRow>) -> (Vec<SubmissionRow>, Vec<SubmissionRow>) {
+    let mut shown = Vec::new();
+    let mut rest = Vec::new();
+    for (i, r) in rows.into_iter().enumerate() {
+        if i == 0 || r.counts {
+            shown.push(r);
+        } else {
+            rest.push(r);
+        }
+    }
+    (shown, rest)
+}
+
+/// Where a submission's files download from (owner and staff).
+fn download_url(course: &str, submission: i64) -> String {
+    crate::api::url(&format!(
+        "/courses/{course}/submissions/{submission}/download"
+    ))
+}
+
 #[component]
 fn History(
     history: ReadSignal<Option<Result<Vec<SubmissionRow>, Problem>>, LocalStorage>,
@@ -275,45 +303,88 @@ fn History(
     slug: Signal<String>,
     picked: Signal<Option<i64>>,
 ) -> impl IntoView {
-    move || {
-        match history.get() {
-        Some(Ok(rows)) if !rows.is_empty() => view! {
-            <section class="stack g-3" aria-labelledby="hist-h">
-                <h2 class="h2" id="hist-h">"Your submissions"</h2>
-                <ul class="card" style="list-style: none; padding: 0; overflow: hidden">
-                    {rows.into_iter().map(|h| {
-                        let href = format!("/courses/{}/assignments/{}?submission={}", course.get_untracked(), slug.get_untracked(), h.id);
-                        let current = (picked.get_untracked() == Some(h.id)).then_some("true");
-                        let when = crate::time::moment(&h.counted_at).map(|m| m.text).unwrap_or_default();
-                        let note = match &h.submitted_by {
-                            Some(by) => format!("Submitted by {by} on your behalf"),
-                            None => format!("{} file{} · {}", h.files, if h.files == 1 { "" } else { "s" }, size(h.size_bytes)),
-                        };
-                        let (late_class, late) = match &h.late {
-                            Some(l) => ("b-warn", format!("Late by {l}")),
-                            None => ("b-outline", "On time".to_owned()),
-                        };
-                        view! {
-                            <li style="border-bottom: 1px solid var(--border)">
-                                <A href=href attr:aria-current=current attr:style="display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: center; padding: 12px 20px; text-decoration: none; color: var(--text)">
-                                    <span class="stack g-1" style="flex: 1 1 260px; min-width: 0">
-                                        <span class="row g-2"><span class="strong">{when}</span><span class=format!("badge {late_class}")>{late}</span></span>
-                                        <span class="small muted">{note}</span>
-                                    </span>
-                                    <span class="row g-2">
-                                        <Badge words=history_badge(h.status, h.shown)/>
-                                        {h.counts.then(|| view! { <span class="badge b-accent"><span class="gl" aria-hidden="true">"★"</span>"Counts"</span> })}
-                                    </span>
-                                </A>
-                            </li>
-                        }
-                    }).collect_view()}
-                </ul>
-            </section>
+    let row = move |h: SubmissionRow| view! { <HistoryRow h=h course=course.get_untracked() slug=slug.get_untracked() picked=picked.get_untracked()/> };
+    move || match history.get() {
+        Some(Ok(rows)) if !rows.is_empty() => {
+            let (shown, rest) = split_history(rows);
+            let more = rest.len();
+            view! {
+                <section class="stack g-3" aria-labelledby="hist-h">
+                    <h2 class="h2" id="hist-h">"Your submissions"</h2>
+                    <div class="card" style="overflow: hidden">
+                        <ul style="list-style: none; padding: 0; margin: 0">{shown.into_iter().map(row).collect_view()}</ul>
+                        {(more > 0).then(|| view! {
+                            <details class="history-more">
+                                <summary class="row g-2 small" style="cursor: pointer; padding: 10px 20px">
+                                    <svg class="i i-sm chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+                                    {format!("{more} earlier submission{}", if more == 1 { "" } else { "s" })}
+                                </summary>
+                                <ul style="list-style: none; padding: 0; margin: 0">{rest.into_iter().map(row).collect_view()}</ul>
+                            </details>
+                        })}
+                    </div>
+                </section>
+            }
+            .into_any()
         }
-        .into_any(),
         _ => ().into_any(),
     }
+}
+
+#[component]
+fn HistoryRow(
+    h: SubmissionRow,
+    course: String,
+    slug: String,
+    picked: Option<i64>,
+) -> impl IntoView {
+    let href = format!("/courses/{course}/assignments/{slug}?submission={}", h.id);
+    let current = (picked == Some(h.id)).then_some("true");
+    let when = crate::time::moment(&h.counted_at)
+        .map(|m| m.text)
+        .unwrap_or_default();
+    let note = match &h.submitted_by {
+        Some(by) => format!("Submitted by {by} on your behalf"),
+        None => format!(
+            "{} file{} · {}",
+            h.files,
+            if h.files == 1 { "" } else { "s" },
+            size(h.size_bytes)
+        ),
+    };
+    let (late_class, late) = match &h.late {
+        Some(l) => ("b-warn", format!("Late by {l}")),
+        None => ("b-outline", "On time".to_owned()),
+    };
+    let label = format!("Download your submission from {when}");
+    view! {
+        <li class="row" style="border-bottom: 1px solid var(--border); padding-right: 12px">
+            <A href=href attr:aria-current=current attr:style="flex: 1; display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: center; padding: 12px 8px 12px 20px; text-decoration: none; color: var(--text); min-width: 0">
+                <span class="stack g-1" style="flex: 1 1 240px; min-width: 0">
+                    <span class="row g-2"><span class="strong">{when}</span><span class=format!("badge {late_class}")>{late}</span></span>
+                    <span class="small muted">{note}</span>
+                </span>
+                <span class="row g-2">
+                    <Badge words=history_badge(h.status, h.shown)/>
+                    {h.counts.then(|| view! { <span class="badge b-accent"><span class="gl" aria-hidden="true">"★"</span>"Counts"</span> })}
+                </span>
+            </A>
+            <DownloadLink href=download_url(&course, h.id) label=label/>
+        </li>
+    }
+}
+
+#[component]
+fn DownloadLink(
+    href: String,
+    label: String,
+    #[prop(optional)] text: Option<&'static str>,
+) -> impl IntoView {
+    view! {
+        <a class="btn btn-ghost btn-sm" href=href download="" aria-label=label.clone() title=label>
+            <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></svg>
+            {text}
+        </a>
     }
 }
 
@@ -371,9 +442,16 @@ fn Submit(
             sending.set(None);
         });
     };
+    // Once there's a submission, a small card until asked for the drop zone.
+    let submitted = page.assignment.mine.is_some();
+    let expanded = RwSignal::new(!submitted);
+    let compact =
+        move || !expanded.get() && files.with(Vec::is_empty) && receipt.with(Option::is_none);
     let title = move || {
         if receipt.with(Option::is_some) {
             "Receipt"
+        } else if submitted {
+            "Submit again"
         } else {
             "Submit"
         }
@@ -394,11 +472,11 @@ fn Submit(
         }
     };
     view! {
-        <aside class="card" style="flex: 1 1 340px; max-width: 100%" aria-labelledby="sub-h">
+        <aside class="card submit-col" style="flex: 1 1 340px; max-width: 100%" aria-labelledby="sub-h">
             <div class="card-head"><h2 class="h2" id="sub-h">{title}</h2></div>
             <div class="card-pad stack g-4">
                 {move || if let Some(r) = receipt.get() {
-                    view! { <Receipt reply=r again=move || receipt.set(None)/> }.into_any()
+                    view! { <Receipt reply=r again=move || { receipt.set(None); expanded.set(true); }/> }.into_any()
                 } else if !accepting {
                     let why = if window == Window::Upcoming || window == Window::NoDates || window == Window::Closed {
                         format!("Submissions aren’t open: {closed_why}.")
@@ -406,6 +484,17 @@ fn Submit(
                         "This assignment isn’t ready for submissions yet.".to_owned()
                     };
                     view! { <p class="muted">{why}</p> }.into_any()
+                } else if compact() {
+                    view! {
+                        <div class="stack g-3">
+                            <p class="small muted">{rules_line.clone()}" Submitting again replaces which one counts; earlier ones stay in your history."</p>
+                            <button class="btn btn-block" type="button" on:click=move |_| expanded.set(true)>
+                                <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>
+                                "Choose files to submit"
+                            </button>
+                        </div>
+                    }
+                    .into_any()
                 } else if files.with(Vec::is_empty) {
                     view! {
                         <div class="stack g-3">
@@ -626,6 +715,44 @@ mod tests {
     }
 
     #[test]
+    fn the_history_shows_the_latest_and_the_one_that_counts() {
+        let row = |id, counts| SubmissionRow {
+            id,
+            counted_at: String::new(),
+            late: None,
+            submitted_by: None,
+            staff: false,
+            status: Some(RunState::Graded),
+            counts,
+            activated_by: None,
+            shown: None,
+            files: 1,
+            size_bytes: 1,
+            created_at: None,
+            score: None,
+            total: None,
+        };
+        let ids = |rows: &[SubmissionRow]| rows.iter().map(|r| r.id).collect::<Vec<_>>();
+        let (shown, rest) = split_history(vec![
+            row(4, false),
+            row(3, false),
+            row(2, true),
+            row(1, false),
+        ]);
+        assert_eq!(
+            (ids(&shown), ids(&rest)),
+            (vec![4, 2], vec![3, 1]),
+            "an activated older one stays in view"
+        );
+        let (shown, rest) = split_history(vec![row(2, true), row(1, false)]);
+        assert_eq!((ids(&shown), ids(&rest)), (vec![2], vec![1]));
+        assert_eq!(
+            download_url("cop3502-f26", 7),
+            "/api/courses/cop3502-f26/submissions/7/download"
+        );
+    }
+
+    #[test]
     fn the_rules_are_said_in_a_line() {
         let r = SubmitRules {
             required: vec!["linked_list.py".into()],
@@ -676,6 +803,7 @@ mod browser {
             status,
             score,
             max,
+            extra_credit: None,
             feedback: None,
             stdout: None,
             error: Some("AttributeError".into()).filter(|_| status == Status::Fail),
@@ -695,7 +823,7 @@ mod browser {
     fn outcome(m: MyResults) -> web_sys::HtmlElement {
         mount(move || {
             let tracked = RwSignal::new(Tracked::default());
-            view! { <Outcome mine=m tracked=tracked deadline=None/> }
+            view! { <Outcome mine=m tracked=tracked deadline=None course="cop3502-f26".to_owned()/> }
         })
     }
 
