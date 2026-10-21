@@ -25,6 +25,27 @@ pub fn status_badge(s: Status) -> Words {
     }
 }
 
+/// Points for extra credit: `+1 extra` once earned, else `+0 of 1`.
+pub fn extra_points(score: f64, worth: f64) -> String {
+    if score > 0.0 {
+        format!("+{} extra", points(score))
+    } else {
+        format!("+0 of {}", points(worth))
+    }
+}
+
+/// A test's badge: its outcome, or that it's extra credit (never a failure).
+pub fn test_badge(t: &ShownTest) -> Words {
+    match t.extra_credit {
+        Some(_) => Words {
+            class: "",
+            glyph: "+",
+            text: "Extra credit".into(),
+        },
+        None => status_badge(t.status),
+    }
+}
+
 /// A rubric step: its class (`pass`, `fail`, `award`), glyph, screen-reader
 /// word and points (`+2`, `0 / 1`).
 pub fn step_parts(s: &Step) -> (&'static str, &'static str, &'static str, String) {
@@ -64,12 +85,10 @@ pub fn hidden_note(until: &[String], never: bool, deadline: Option<&str>) -> Opt
 /// The score card and the tests.
 #[component]
 pub fn Results(view: StudentView, deadline: Option<String>) -> impl IntoView {
-    let passed = view
-        .tests
-        .iter()
-        .filter(|t| t.status == Status::Pass)
-        .count();
-    let tests = view.tests.len();
+    // Extra credit isn't owed, so it isn't counted as passed or not.
+    let owed = || view.tests.iter().filter(|t| t.extra_credit.is_none());
+    let passed = owed().filter(|t| t.status == Status::Pass).count();
+    let tests = owed().count();
     let pct = if view.total > 0.0 {
         (view.score / view.total * 100.0).clamp(0.0, 100.0)
     } else {
@@ -98,7 +117,12 @@ pub fn Results(view: StudentView, deadline: Option<String>) -> impl IntoView {
 
 #[component]
 fn Test(test: ShownTest) -> impl IntoView {
-    let failed = matches!(test.status, Status::Fail | Status::Error);
+    let failed = test.extra_credit.is_none() && matches!(test.status, Status::Fail | Status::Error);
+    let badge = test_badge(&test);
+    let pts = match test.extra_credit {
+        Some(worth) => extra_points(test.score, worth),
+        None => format!("{} / {}", points(test.score), points(test.max)),
+    };
     let feedback = test.feedback.unwrap_or_default();
     let stdout = test.stdout.filter(|s| !s.is_empty());
     let error = test.error.filter(|s| !s.is_empty());
@@ -108,8 +132,8 @@ fn Test(test: ShownTest) -> impl IntoView {
             <summary>
                 <svg class="i i-sm chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
                 <span class="tname">{test.name}</span>
-                <Badge words=status_badge(test.status)/>
-                <span class="pts">{format!("{} / {}", points(test.score), points(test.max))}</span>
+                <Badge words=badge/>
+                <span class="pts">{pts}</span>
             </summary>
             <div class="test-body">
                 {(!feedback.is_empty()).then(|| view! {
@@ -118,9 +142,9 @@ fn Test(test: ShownTest) -> impl IntoView {
                         <ul class="items">
                             {feedback.into_iter().map(|item| view! {
                                 <li class="item">
-                                    <div class="item-h"><span>{item.name}</span><span class="pts">{format!("{} / {}", points(item.score), points(item.max))}</span></div>
+                                    <div class="item-h"><span>{item.name}</span><span class="pts">{if item.extra_credit { extra_points(item.score, item.max) } else { format!("{} / {}", points(item.score), points(item.max)) }}</span></div>
                                     {(!item.text.is_empty()).then(|| view! { <p class="small">{item.text.clone()}</p> })}
-                                    <ul class="isteps">
+                                    {(!item.steps.is_empty()).then(|| view! { <ul class="isteps">
                                         {item.steps.into_iter().map(|s| {
                                             let (class, glyph, sr, pts) = step_parts(&s);
                                             view! {
@@ -131,7 +155,7 @@ fn Test(test: ShownTest) -> impl IntoView {
                                                 </li>
                                             }
                                         }).collect_view()}
-                                    </ul>
+                                    </ul> })}
                                 </li>
                             }).collect_view()}
                         </ul>
@@ -191,6 +215,25 @@ mod tests {
             "0 / 1"
         );
         assert_eq!(step_parts(&step(None, 1.0, None)).0, "award");
+    }
+
+    #[test]
+    fn extra_credit_never_reads_as_a_failure() {
+        let test = |extra_credit| ShownTest {
+            name: "stretch goal".into(),
+            number: None,
+            status: Status::Fail,
+            score: 0.0,
+            max: 0.0,
+            extra_credit,
+            feedback: None,
+            stdout: None,
+            error: None,
+        };
+        assert_eq!(test_badge(&test(Some(1.0))).text, "Extra credit");
+        assert_eq!(test_badge(&test(None)).text, "Fail");
+        assert_eq!(extra_points(0.0, 1.0), "+0 of 1");
+        assert_eq!(extra_points(1.0, 1.0), "+1 extra");
     }
 
     #[test]

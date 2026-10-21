@@ -87,6 +87,9 @@ pub struct ShownTest {
     pub status: Status,
     pub score: f64,
     pub max: f64,
+    /// A test that's only extra credit: the points it could add.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_credit: Option<f64>,
     /// Each item's steps, when feedback is shown.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub feedback: Option<Vec<ShownItem>>,
@@ -101,6 +104,9 @@ pub struct ShownItem {
     pub name: String,
     pub score: f64,
     pub max: f64,
+    /// Adds to the score without being owed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub extra_credit: bool,
     pub steps: Vec<Step>,
     /// Version 1 helpers' text feedback.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -128,6 +134,7 @@ fn feedback_of(t: &TestResult) -> Vec<ShownItem> {
             name: i.name.clone(),
             score: i.score,
             max: i.max,
+            extra_credit: i.extra_credit != crate::results::ExtraCredit::None,
             steps: i.steps.clone(),
             text: i.feedback.clone(),
         })
@@ -138,6 +145,7 @@ fn feedback_of(t: &TestResult) -> Vec<ShownItem> {
             name: t.name.clone(),
             score: t.score,
             max: t.max,
+            extra_credit: t.extra_credit_worth().is_some(),
             steps: Vec::new(),
             text: t.feedback.clone(),
         });
@@ -180,6 +188,7 @@ pub fn student_view(
             status: t.status,
             score: t.score,
             max: t.max,
+            extra_credit: t.extra_credit_worth(),
             feedback: shown(v.feedback).then(|| feedback_of(t)),
             stdout: (shown(v.stdout) && !t.stdout.is_empty()).then(|| t.stdout.clone()),
             error: (shown(v.error) && !t.error.is_empty()).then(|| t.error.clone()),
