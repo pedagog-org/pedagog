@@ -45,6 +45,7 @@ fn api(state: AppState) -> Router {
         .route("/auth/finish", post(finish))
         .route("/auth/logout", post(logout))
         .route("/me", get(me))
+        .route("/me/courses", get(crate::student::home))
         .route(
             "/client-errors",
             post(crate::client_errors::report)

@@ -83,6 +83,15 @@ fn instant_text(i: Option<Instant>) -> Option<String> {
     i.map(String::from)
 }
 
+/// The window in words: "open", "open, late", or why it's closed.
+pub fn status_text(dates: &Dates, now: OffsetDateTime) -> String {
+    match dates.acceptance(now) {
+        Acceptance::OnTime => "open".to_owned(),
+        Acceptance::Late => "open, late".to_owned(),
+        Acceptance::Closed(why) => why,
+    }
+}
+
 /// Each field's value in effect and where it comes from.
 fn dates_view(p: &Policy) -> serde_json::Value {
     let field = |course: Option<String>, file: Option<String>| match (course, file) {
@@ -91,11 +100,7 @@ fn dates_view(p: &Policy) -> serde_json::Value {
         (None, None) => serde_json::Value::Null,
     };
     let (c, f) = (&p.course_dates, &p.file.dates);
-    let status = match p.dates().acceptance(OffsetDateTime::now_utc()) {
-        Acceptance::OnTime => "open".to_owned(),
-        Acceptance::Late => "open, late".to_owned(),
-        Acceptance::Closed(why) => why,
-    };
+    let status = status_text(&p.dates(), OffsetDateTime::now_utc());
     serde_json::json!({
         "open": field(open_text(c.open), open_text(f.open)),
         "due": field(instant_text(c.due), instant_text(f.due)),

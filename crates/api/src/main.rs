@@ -19,6 +19,7 @@ mod policy;
 mod results;
 mod roster;
 mod state;
+mod student;
 mod submissions;
 #[cfg(test)]
 mod testing;

@@ -9,6 +9,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use pedagog_core::api::{RunState, Shown};
 use pedagog_core::recipe::policy::ResultsPolicy;
 use pedagog_core::results::{Results, TestVisibility};
 use pedagog_core::view::{Stage, student_view, tallies};
@@ -55,6 +56,33 @@ fn parsed(run: &GradingRun) -> Option<Results> {
     run.results
         .as_deref()
         .and_then(|r| serde_json::from_str(r).ok())
+}
+
+pub(crate) fn run_state(s: RunStatus) -> RunState {
+    match s {
+        RunStatus::Queued => RunState::Queued,
+        RunStatus::Grading => RunState::Grading,
+        RunStatus::Graded => RunState::Graded,
+        RunStatus::Error => RunState::Error,
+    }
+}
+
+/// The score a student sees now of a graded run.
+pub(crate) fn shown(p: &Policy, run: &GradingRun) -> Option<Shown> {
+    if run.status != RunStatus::Graded {
+        return None;
+    }
+    let results = parsed(run)?;
+    let view = student_view(
+        &results,
+        &visibilities(p, &results),
+        p.dates().ended(OffsetDateTime::now_utc()),
+        p.released_at.is_some(),
+    );
+    Some(Shown {
+        score: view.score,
+        total: view.total,
+    })
 }
 
 /// The stage a student sees now.
@@ -439,6 +467,9 @@ mod tests {
     use sqlx::PgPool;
 
     use crate::testing::{delete, get, json, login, post, serve};
+    use pedagog_core::api::{
+        MyCourses, RunState, Shown, StudentAssignment, StudentAssignmentPage, Window,
+    };
 
     const RESULTS: &str = r#"{"run": {"status": "complete", "output": ""},
       "summary": {"score": 6.0, "total": 9.0},
@@ -638,6 +669,63 @@ mod tests {
         let mine = json(get(&format!("{url}{BASE}/my-results"), &alice).await).await;
         assert_eq!(mine["results"]["tests"].as_array().unwrap().len(), 2);
         assert_eq!(mine["results"]["tests"][1]["error"], "assert 3 == 4");
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "../store/migrations")]
+    async fn students_see_their_standing_in_lists_and_on_home(pool: PgPool) -> sqlx::Result<()> {
+        let (a, b) = course(&pool).await?;
+        graded(&pool, a, b, "alice@ufl.edu", None).await?;
+        let (url, outbox) = serve(pool.clone()).await;
+        let alice = login(&url, &outbox, "alice@ufl.edu").await;
+        let list: Vec<StudentAssignment> = serde_json::from_value(
+            json(get(&format!("{url}/courses/cop3502-f26/assignments"), &alice).await).await,
+        )
+        .unwrap();
+        assert_eq!((list[0].window, list[0].accepting), (Window::Open, true));
+        let mine = list[0].mine.clone().unwrap();
+        assert_eq!(
+            (mine.status, mine.shown, mine.submissions),
+            (
+                RunState::Graded,
+                Some(Shown {
+                    score: 2.0,
+                    total: 2.0
+                }),
+                1
+            ),
+            "only the score shown now"
+        );
+
+        let page: StudentAssignmentPage =
+            serde_json::from_value(json(get(&format!("{url}{BASE}"), &alice).await).await).unwrap();
+        let rules = page.rules.unwrap();
+        assert_eq!(
+            (rules.max_bytes, rules.unpack_archives, rules.strip_wrapper),
+            (Some(1 << 20), true, true),
+            "the api's ceiling, with no limit of the assignment's own"
+        );
+
+        // Open with no deadline: on Home until submitted.
+        let home = |token: String| {
+            let url = url.clone();
+            async move {
+                serde_json::from_value::<MyCourses>(
+                    json(get(&format!("{url}/me/courses"), &token).await).await,
+                )
+                .unwrap()
+            }
+        };
+        assert!(home(alice).await.courses[0].items.is_empty());
+        let carol = login(&url, &outbox, "carol@ufl.edu").await;
+        let courses = home(carol).await.courses;
+        assert_eq!(
+            (courses[0].id.as_str(), courses[0].items[0].slug.as_str()),
+            ("cop3502-f26", "linked-list")
+        );
+        assert!(courses[0].items[0].mine.is_none());
+        let ta = login(&url, &outbox, "ta@ufl.edu").await;
+        assert!(home(ta).await.courses[0].items.is_empty(), "staff: later");
         Ok(())
     }
 
