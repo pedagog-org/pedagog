@@ -9,6 +9,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use pedagog_core::api::{Receipt, SubmissionRow, SubmitReply, Submitted};
 use pedagog_core::recipe::policy::{Acceptance, Dates, Instant, spoken};
 use pedagog_store::db::{accounts, assignments as builds_db, queue, submissions as db};
 use pedagog_store::{Assignment, CourseRole, QueuedRun, Submission, User};
@@ -20,6 +21,7 @@ use crate::assignments::find;
 use crate::auth::CurrentUser;
 use crate::courses::{Access, Need, require};
 use crate::error::{ApiError, internal, refused};
+use crate::results::{run_state, shown};
 use crate::state::AppState;
 
 /// Course staff, and admins acting in the course.
@@ -217,7 +219,7 @@ pub async fn submit(
     if !status.is_success() {
         return Ok((status, [(header::CONTENT_TYPE, "application/json")], text).into_response());
     }
-    let mut out: serde_json::Value = serde_json::from_str(&text)
+    let submitted: Submitted = serde_json::from_str(&text)
         .map_err(|e| internal("reading the grading service's reply", e))?;
     let counted = plan
         .at
@@ -225,16 +227,19 @@ pub async fn submit(
         .and_then(parse_time)
         .unwrap_or_else(OffsetDateTime::now_utc);
     let dates = dates_of(&state, &a).await?;
-    out["for"] = serde_json::json!(plan.owner.email);
-    out["submitted_by"] = serde_json::json!(plan.by.map(|_| current.user.email.clone()));
-    out["staff"] = serde_json::json!(plan.staff);
-    out["counted_at"] = serde_json::json!(counted.format(&Rfc3339).unwrap_or_default());
-    out["late"] = serde_json::json!(if plan.staff {
-        None
-    } else {
-        dates.late_by(counted).map(spoken)
-    });
-    out["due"] = serde_json::json!(dates.due.map(String::from));
+    let out = SubmitReply {
+        submitted,
+        for_: plan.owner.email.clone(),
+        submitted_by: plan.by.map(|_| current.user.email.clone()),
+        staff: plan.staff,
+        counted_at: counted.format(&Rfc3339).unwrap_or_default(),
+        late: if plan.staff {
+            None
+        } else {
+            dates.late_by(counted).map(spoken)
+        },
+        due: dates.due.map(String::from),
+    };
     tracing::info!(
         by = current.user.id, %course, assignment = %slug, owner = plan.owner.id,
         staff = plan.staff, "submission accepted"
@@ -272,7 +277,8 @@ pub async fn list(
             ));
         }
     };
-    let dates = dates_of(&state, &a).await?;
+    let p = crate::policy::policy_of(&state, &a).await?;
+    let dates = p.dates();
     let counting = db::counting_for(&state.pool, a.id, owner.id)
         .await
         .map_err(|e| internal("reading what counts", e))?;
@@ -286,25 +292,26 @@ pub async fn list(
             .map_err(|e| internal("reading the runs", e))?
             .into_iter()
             .next();
-        let mut view = serde_json::json!({
-            "id": s.id,
-            "counted_at": s.counted_at,
-            "late": lateness(&dates, &s),
-            "submitted_by": s.submitted_by,
-            "staff": s.staff,
-            "status": latest.as_ref().map(|r| r.status.to_string()),
-            "counts": counting.as_ref().is_some_and(|c| c.submission_id == s.id),
-            "activated_by": counting
+        let receipt: Receipt = serde_json::from_str(&s.receipt).unwrap_or_default();
+        out.push(SubmissionRow {
+            id: s.id,
+            late: lateness(&dates, &s),
+            submitted_by: s.submitted_by.clone(),
+            staff: s.staff,
+            status: latest.as_ref().map(|r| run_state(r.status)),
+            counts: counting.as_ref().is_some_and(|c| c.submission_id == s.id),
+            activated_by: counting
                 .as_ref()
                 .filter(|c| c.submission_id == s.id)
                 .and_then(|c| c.activated_by.clone()),
+            shown: latest.as_ref().and_then(|r| shown(&p, r)),
+            files: receipt.files.len(),
+            size_bytes: receipt.size_bytes,
+            created_at: staff.then(|| s.created_at.clone()),
+            score: latest.as_ref().and_then(|r| r.score).filter(|_| staff),
+            total: latest.as_ref().and_then(|r| r.total).filter(|_| staff),
+            counted_at: s.counted_at,
         });
-        if staff {
-            view["created_at"] = serde_json::json!(s.created_at);
-            view["score"] = serde_json::json!(latest.as_ref().and_then(|r| r.score));
-            view["total"] = serde_json::json!(latest.as_ref().and_then(|r| r.total));
-        }
-        out.push(view);
     }
     Ok(Json(out).into_response())
 }

@@ -11,6 +11,7 @@
 //! include/exclude, check required paths, check the size. Each step is
 //! reported on the receipt.
 
+use pedagog_core::api::{Receipt, Submitted};
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 use std::path::Path;
@@ -44,22 +45,6 @@ pub struct SubmissionLimits {
 pub struct Part {
     pub name: String,
     pub bytes: Vec<u8>,
-}
-
-/// What intake did with a submission (stored, and returned to the submitter).
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Receipt {
-    /// The files submitted, after normalization.
-    pub files: Vec<String>,
-    /// Files the rules left out.
-    pub ignored: Vec<String>,
-    /// OS clutter dropped (`__MACOSX/`, `.DS_Store`, ...).
-    pub junk: usize,
-    /// The archive that was unpacked, if any.
-    pub unpacked: Option<String>,
-    /// The wrapping folder that was dropped, if any.
-    pub stripped: Option<String>,
-    pub size_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -310,18 +295,6 @@ pub struct SubmitQuery {
     staff: bool,
     /// and the time it counts at (default: now).
     at: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct Submitted {
-    pub submission_id: i64,
-    pub run_id: i64,
-    pub build_id: i64,
-    pub tree_hash: String,
-    /// 1-based position in the grading queue.
-    pub queue_position: Option<i64>,
-    #[serde(flatten)]
-    pub receipt: Receipt,
 }
 
 pub async fn submit(

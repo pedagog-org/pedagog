@@ -147,6 +147,98 @@ pub struct MyCourses {
     pub courses: Vec<HomeCourse>,
 }
 
+/// What intake did with a submission (stored, and returned to the submitter).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Receipt {
+    /// The files submitted, after normalization.
+    pub files: Vec<String>,
+    /// Files the rules left out.
+    pub ignored: Vec<String>,
+    /// OS clutter dropped (`__MACOSX/`, `.DS_Store`, ...).
+    pub junk: usize,
+    /// The archive that was unpacked, if any.
+    pub unpacked: Option<String>,
+    /// The wrapping folder that was dropped, if any.
+    pub stripped: Option<String>,
+    pub size_bytes: u64,
+}
+
+/// Jobs' reply to a submission: stored and queued.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Submitted {
+    pub submission_id: i64,
+    pub run_id: i64,
+    pub build_id: i64,
+    pub tree_hash: String,
+    /// 1-based position in the grading queue.
+    pub queue_position: Option<i64>,
+    #[serde(flatten)]
+    pub receipt: Receipt,
+}
+
+/// `POST …/submissions`: jobs' reply, and how it counts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubmitReply {
+    #[serde(flatten)]
+    pub submitted: Submitted,
+    /// The owner's email.
+    #[serde(rename = "for")]
+    pub for_: String,
+    /// Who sent it, when someone else did.
+    pub submitted_by: Option<String>,
+    pub staff: bool,
+    pub counted_at: String,
+    /// "late by …".
+    pub late: Option<String>,
+    pub due: Option<String>,
+}
+
+/// One of a student's submissions to an assignment, latest first.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SubmissionRow {
+    pub id: i64,
+    pub counted_at: String,
+    pub late: Option<String>,
+    pub submitted_by: Option<String>,
+    pub staff: bool,
+    /// Its latest run's.
+    pub status: Option<RunState>,
+    pub counts: bool,
+    pub activated_by: Option<String>,
+    /// What the student sees of its score now, once graded.
+    pub shown: Option<Shown>,
+    pub files: usize,
+    pub size_bytes: u64,
+    /// Staff only, from here on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<f64>,
+}
+
+/// `GET …/my-results`: your submission (the one that counts, or one asked
+/// for), and its results as you may see them now.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MyResults {
+    pub submission: i64,
+    pub counts: bool,
+    /// Staff made it the one that counts.
+    pub activated: bool,
+    pub counted_at: String,
+    pub submitted_by: Option<String>,
+    pub late: Option<String>,
+    pub status: RunState,
+    /// While queued.
+    pub queue_position: Option<i64>,
+    /// Why it couldn't be graded, and what to do.
+    pub why: Option<String>,
+    pub next: Option<String>,
+    /// When graded.
+    pub results: Option<crate::view::StudentView>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

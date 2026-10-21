@@ -56,10 +56,18 @@ async fn stub_jobs() -> (String, JobsSeen) {
                         recorded.lock().unwrap().push((full, body.len()));
                         (
                             axum::http::StatusCode::CREATED,
-                            axum::Json(serde_json::json!({
-                                "submission_id": 1, "run_id": 1, "build_id": 1, "tree_hash": "t",
-                                "queue_position": 1, "files": ["a.py"], "ignored": []
-                            })),
+                            axum::Json(pedagog_core::api::Submitted {
+                                submission_id: 1,
+                                run_id: 1,
+                                build_id: 1,
+                                tree_hash: "t".into(),
+                                queue_position: Some(1),
+                                receipt: pedagog_core::api::Receipt {
+                                    files: vec!["a.py".into()],
+                                    size_bytes: 3,
+                                    ..Default::default()
+                                },
+                            }),
                         )
                     }
                 },

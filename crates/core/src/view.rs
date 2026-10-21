@@ -2,7 +2,7 @@
 //! visibility: the cumulative score columns staff see (and which one a
 //! student sees now), and the student's own filtered view.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::results::{Results, Status, Step, TestResult, TestVisibility, Visibility};
 
@@ -79,7 +79,7 @@ pub fn tallies(results: &Results, visibility: &[TestVisibility]) -> Vec<(Stage, 
 }
 
 /// A test as a student sees it: parts they may not see yet are left out.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShownTest {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -96,19 +96,19 @@ pub struct ShownTest {
     pub error: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShownItem {
     pub name: String,
     pub score: f64,
     pub max: f64,
     pub steps: Vec<Step>,
     /// Version 1 helpers' text feedback.
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
 }
 
 /// What a student sees of a run.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StudentView {
     pub tests: Vec<ShownTest>,
     /// Over the tests shown.
