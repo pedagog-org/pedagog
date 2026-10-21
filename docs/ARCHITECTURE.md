@@ -235,7 +235,7 @@ Each test's result has four parts, each with its own visibility: `visible`, `hid
 
 Building happens in two stages:
 
-1. **OS base image** — platform-managed. Contains the OS and any platform-level configuration. Built in-cluster by the `jobs` service (Kaniko) from the recipes pinned into the installation and pushed to the cluster registry (e.g. `pedagog/ubuntu:22`). Rebuilt when the pinned recipes change (detected at `jobs` startup / via its rebuild endpoint). Locally, `hammer plan --os <os-id>` (or `just build-base`) renders the same Containerfile for podman.
+1. **OS base image** — platform-managed. Contains the OS and any platform-level configuration. Built in-cluster by the `jobs` service (Kaniko) from the recipes pinned into the installation and pushed to the cluster registry (e.g. `pedagog/ubuntu:22`). Rebuilt when the pinned recipes change (detected at `jobs` startup / via its rebuild endpoint). Locally, `hammer plan --os <os-id>` (or `cargo xtask build-base`) renders the same Containerfile for podman.
 2. **Instructor image** — built when the instructor uploads the assignment archive. Starts FROM the OS base image; installs toolchains, addons, platform components (code-server for `workspace`), and locked extensions declared in `assignment.yml`. The solution is run against the test suite at this step to validate the assignment. Build-time network policy is applied during this step only.
 
 All builds run in-cluster via **Kaniko** — no Docker daemon required. `core` renders the Containerfile from resolved recipes; the `k8s` crate submits it as a Kubernetes Job; `jobs` builds both OS base images and assignment images. Recipes are **pinned to the installation and baked** into the `jobs` image (with `hammer vend` ingredients) — not git-synced in-cluster.
@@ -710,7 +710,7 @@ The `k8s` crate is the sole holder of `kube`/`k8s-openapi`: its `build` submodul
 
 The web UI is built with **Leptos** (Rust → WASM), rendered in the browser (client-side), and lives in the `web` crate. `trunk` builds it into static files (`index.html`, the `.wasm` and its JS glue, CSS; ~55 KB gzipped for the skeleton). It calls the platform REST API on the same host under `/api`, with the session cookie (no CORS). Shared Rust types (request/response structs) come from the `core` crate, giving the frontend full type safety when deserializing API responses without duplicating definitions. Design tokens are CSS custom properties, light and dark. The screens are specified in `docs/design/web-ui-brief.md`.
 
-The API is callable by any HTTP client; the Leptos frontend is one consumer, not a dependency. In development, `just web-dev` serves the UI and proxies `/api/` to the api.
+The API is callable by any HTTP client; the Leptos frontend is one consumer, not a dependency. In development, `cargo xtask web-dev` serves the UI and proxies `/api/` to the api.
 
 - **Serving:** the api serves the UI's files beside `/api` (`PEDAGOG_WEB_DIR`; its image builds them with trunk and gzips them): any other path is a file, else `index.html`, so links into the app reload. Hashed assets are cached for good, `index.html` never. Unknown `/api` paths stay JSON 404s.
 - **Security headers:** a strict CSP (only our own scripts, styles, fonts and api; `index.html`'s inline scripts allowed by their hash, computed when the api starts; `wasm-unsafe-eval` for WASM; inline `style` attributes only), no framing, `nosniff`, `same-origin` referrer and opener policies.

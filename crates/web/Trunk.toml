@@ -1,5 +1,5 @@
-# `just web-dev`: the UI on http://localhost:3000, with /api/ proxied to the
-# kind api (`just kind-api`), so the browser sees one origin as in production.
+# `cargo xtask web-dev`: the UI on http://localhost:3000, with /api/ proxied to the
+# kind api (`cargo xtask kind-api`), so the browser sees one origin as in production.
 [build]
 target = "index.html"
 dist = "../../target/web"

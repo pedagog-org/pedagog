@@ -1,0 +1,16 @@
+[package]
+name = "xtask"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+# Development tasks in Rust (`cargo xtask --help`), instead of shell scripts:
+# the dev database, the kind cluster, personas, the end-to-end tests and the
+# pre-commit checks.
+[dependencies]
+clap = { workspace = true }
+pedagog-e2e = { path = "../e2e" }
+reqwest = { workspace = true }
+
+[lints]
+workspace = true
