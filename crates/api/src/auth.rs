@@ -188,6 +188,43 @@ pub fn token_of(parts: &Parts) -> Option<String> {
         .map(|(_, value)| value.to_owned())
 }
 
+/// The header the web UI sends with every change it makes; a cross-site form
+/// can't set it, so a change riding on the session cookie alone is refused.
+pub const WEB_HEADER: &str = "x-pedagog";
+
+/// Middleware: refuse cookie-authenticated POST/PUT/PATCH/DELETE without
+/// `X-Pedagog: web`. Bearer tokens (hammer) don't need it.
+pub async fn require_web_header(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::Method;
+    use axum::response::IntoResponse;
+    let changes = !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
+    let headers = req.headers();
+    let bearer = headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("Bearer "));
+    let cookie = headers
+        .get_all(COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|v| {
+            v.split(';')
+                .any(|p| p.trim().starts_with(&format!("{COOKIE_NAME}=")))
+        });
+    let marked = headers.get(WEB_HEADER).and_then(|v| v.to_str().ok()) == Some("web");
+    if changes && cookie && !bearer && !marked {
+        return crate::error::refused(
+            axum::http::StatusCode::FORBIDDEN,
+            "changes from the web need the X-Pedagog header",
+        )
+        .into_response();
+    }
+    next.run(req).await
+}
+
 /// A logged-in caller; handlers that take it refuse anonymous requests (401).
 pub struct CurrentUser {
     pub user: User,

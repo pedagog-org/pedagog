@@ -13,15 +13,31 @@ use axum::response::{AppendHeaders, IntoResponse, Json, Response};
 use axum::routing::{delete, get, post, put};
 use pedagog_store::db::accounts as db;
 use pedagog_store::{CourseRole, SessionKind};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::auth::{COOKIE_NAME, CurrentUser, Login, open_session};
 use crate::error::{ApiError, internal, refused, unauthorized};
 use crate::state::AppState;
-use crate::users::UserView;
 use crate::{assignments, courses, members, notices, policy, results, submissions, users};
+use pedagog_core::api::{Me, MyCourse};
 
-pub fn router(state: AppState) -> Router {
+/// The service: the REST api under `/api`, and the web UI (when its files are
+/// configured) everywhere else.
+pub fn router(state: AppState) -> anyhow::Result<Router> {
+    let web = state
+        .config
+        .web_dir
+        .as_deref()
+        .map(crate::web::router)
+        .transpose()?;
+    let app = Router::new().nest("/api", api(state));
+    Ok(match web {
+        Some(web) => app.fallback_service(web),
+        None => app,
+    })
+}
+
+fn api(state: AppState) -> Router {
     let max_upload = state.config.max_upload_bytes;
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
@@ -29,6 +45,11 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/finish", post(finish))
         .route("/auth/logout", post(logout))
         .route("/me", get(me))
+        .route(
+            "/client-errors",
+            post(crate::client_errors::report)
+                .layer(DefaultBodyLimit::max(crate::client_errors::MAX_BODY)),
+        )
         .route("/users", get(users::list))
         .route("/users/{query}", get(users::show))
         .route("/users/{email}/role", put(users::set_role))
@@ -92,6 +113,10 @@ pub fn router(state: AppState) -> Router {
                 .delete(policy::clear_visibility),
         )
         .route(
+            "/courses/{course}/assignments/{slug}/events",
+            get(crate::events::stream),
+        )
+        .route(
             "/courses/{course}/assignments/{slug}/release",
             post(policy::release).delete(policy::unrelease),
         )
@@ -101,6 +126,8 @@ pub fn router(state: AppState) -> Router {
             "/courses/{course}/members/{query}",
             get(members::show).put(members::add).delete(members::remove),
         )
+        .fallback(|| async { refused(StatusCode::NOT_FOUND, "no such api endpoint") })
+        .layer(axum::middleware::from_fn(crate::auth::require_web_header))
         .with_state(state)
 }
 
@@ -175,7 +202,7 @@ async fn finish(
         .await
         .map_err(|e| internal("opening a session", e))?;
     tracing::info!(user = user.id, %kind, "logged in");
-    let me = UserView::from(&user);
+    let me = crate::users::view(&user);
     Ok(match kind {
         SessionKind::Cli => Json(serde_json::json!({ "token": token, "user": me })).into_response(),
         SessionKind::Web => {
@@ -205,29 +232,22 @@ async fn logout(State(state): State<AppState>, current: CurrentUser) -> Result<R
     Ok((StatusCode::NO_CONTENT, AppendHeaders([(SET_COOKIE, clear)])).into_response())
 }
 
-#[derive(Serialize)]
-struct CourseView {
-    id: String,
-    name: String,
-    /// `instructor`, `grader` or `student`.
-    role: String,
-}
-
 async fn me(State(state): State<AppState>, current: CurrentUser) -> Result<Response, ApiError> {
     let courses = db::courses_for(&state.pool, current.user.id)
         .await
         .map_err(|e| internal("reading your courses", e))?
         .into_iter()
-        .map(|(c, role): (_, CourseRole)| CourseView {
+        .map(|(c, role): (_, CourseRole)| MyCourse {
             id: c.id,
             name: c.name,
             role: role.to_string(),
         })
-        .collect::<Vec<_>>();
-    Ok(
-        Json(serde_json::json!({ "user": UserView::from(&current.user), "courses": courses }))
-            .into_response(),
-    )
+        .collect();
+    Ok(Json(Me {
+        user: crate::users::view(&current.user),
+        courses,
+    })
+    .into_response())
 }
 
 #[cfg(test)]
@@ -357,6 +377,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(me.status(), 200);
+
+        // A change riding on the cookie alone (as a cross-site form would) is refused.
+        let logout = |header: bool| {
+            let mut req = reqwest::Client::new()
+                .post(format!("{url}/auth/logout"))
+                .header("cookie", session);
+            if header {
+                req = req.header("x-pedagog", "web");
+            }
+            req.send()
+        };
+        assert_eq!(logout(false).await.unwrap().status(), 403);
+        assert_eq!(logout(true).await.unwrap().status(), 204);
         Ok(())
     }
 

@@ -6,9 +6,11 @@
 
 mod assignments;
 mod auth;
+mod client_errors;
 mod config;
 mod courses;
 mod error;
+mod events;
 mod http;
 mod mail;
 mod members;
@@ -21,6 +23,7 @@ mod submissions;
 #[cfg(test)]
 mod testing;
 mod users;
+mod web;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -85,17 +88,23 @@ async fn serve() -> anyhow::Result<()> {
         jobs: reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(300))
             .build()?,
+        events: events::Hub::new(),
+        client_errors: Default::default(),
     };
 
     // Background work owned here: if it stops, the service exits and is restarted.
     let mut background = JoinSet::new();
     background.spawn(cleanup(state.clone()));
     background.spawn(notices::run(state.clone()));
+    background.spawn(events::listen(state.pool.clone(), state.events.clone()));
 
-    let listener = TcpListener::bind(&state.config.listen_addr).await?;
-    tracing::info!(addr = %state.config.listen_addr, "listening");
+    let addr = state.config.listen_addr.clone();
+    let web = state.config.web_dir.clone();
+    let router = http::router(state)?;
+    let listener = TcpListener::bind(&addr).await?;
+    tracing::info!(%addr, web = ?web, "listening");
     tokio::select! {
-        served = axum::serve(listener, http::router(state)) => served?,
+        served = axum::serve(listener, router) => served?,
         Some(stopped) = background.join_next() => {
             anyhow::bail!("a background task stopped: {stopped:?}");
         }

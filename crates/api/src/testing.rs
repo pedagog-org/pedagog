@@ -88,10 +88,12 @@ pub async fn serve_full(pool: PgPool) -> (String, Arc<Mutex<Vec<Mail>>>, JobsSee
         mailer,
         auth: Authenticator::EmailCode,
         jobs: reqwest::Client::new(),
+        events: crate::events::Hub::new(),
+        client_errors: Default::default(),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(listener, crate::http::router(state)).await });
+    let url = format!("http://{}/api", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, crate::http::router(state).unwrap()).await });
     (url, outbox, seen)
 }
 
@@ -185,6 +187,8 @@ pub fn state(pool: PgPool) -> (AppState, Arc<Mutex<Vec<Mail>>>) {
         mailer,
         auth: Authenticator::EmailCode,
         jobs: reqwest::Client::new(),
+        events: crate::events::Hub::new(),
+        client_errors: Default::default(),
     };
     (state, outbox)
 }
@@ -209,5 +213,69 @@ fn config(jobs_url: String) -> Config {
         jobs_url,
         max_upload_bytes: 1 << 20,
         mail_per_second: 1000,
+        web_dir: None,
     }
+}
+
+/// cop3502-f26 with prof, ta (grader), alice and bob (students) and an
+/// open `linked-list`; returns the assignment and its build.
+pub async fn course(pool: &PgPool) -> sqlx::Result<(i64, i64)> {
+    use pedagog_store::db::assignments::*;
+    use pedagog_store::{
+        BuildSettings, CourseRole, Isolation, JoinSource, PlatformKind, ValidationStatus,
+    };
+    let prof = pedagog_store::db::accounts::upsert_user(pool, "prof@ufl.edu", "Prof").await?;
+    pedagog_store::db::accounts::create_course(
+        pool,
+        "cop3502-f26",
+        "Programming 1",
+        prof.id,
+        &[prof.id],
+    )
+    .await?;
+    let me = pedagog_store::db::accounts::Actor {
+        id: prof.id,
+        admin: false,
+    };
+    for (email, name, role) in [
+        ("ta@ufl.edu", "Tara", CourseRole::Grader),
+        ("alice@ufl.edu", "Alice", CourseRole::Student),
+        ("bob@ufl.edu", "", CourseRole::Student),
+        ("cat@ufl.edu", "Cat", CourseRole::Student),
+    ] {
+        let u = pedagog_store::db::accounts::upsert_user(pool, email, name).await?;
+        pedagog_store::db::accounts::add_member(
+            pool,
+            "cop3502-f26",
+            u.id,
+            role,
+            JoinSource::Manual,
+            me,
+        )
+        .await?
+        .unwrap();
+    }
+    let a = upsert_assignment(pool, "cop3502-f26", "linked-list", "Linked List").await?;
+    let up = record_upload(pool, a.id, "tree", "k", 1).await?;
+    let settings = BuildSettings {
+        platform: PlatformKind::Upload,
+        isolation: Isolation::Process,
+        egress: r#"{"mode":"deny"}"#.into(),
+        submission: "{}".into(),
+    };
+    let b = start_build(
+        pool,
+        &NewBuild {
+            assignment_id: a.id,
+            upload_id: up.id,
+            image_hash: "h",
+            image_ref: "r",
+            settings: &settings,
+            policy: r#"{"dates": {"open": "always"}}"#,
+        },
+    )
+    .await?;
+    finish_build(pool, b, true, None).await?;
+    finish_validation(pool, b, ValidationStatus::Skipped, None, &[]).await?;
+    Ok((a.id, b))
 }

@@ -9,4 +9,4 @@ port = 3000
 
 [[proxy]]
 rewrite = "/api/"
-backend = "http://localhost:18082/"
+backend = "http://localhost:18082/api/"

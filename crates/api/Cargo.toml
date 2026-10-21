@@ -21,10 +21,13 @@ lettre = { workspace = true }
 reqwest = { workspace = true }
 rustls = { workspace = true }
 serde = { workspace = true }
+sha2 = { workspace = true }
 serde_json = { workspace = true }
+futures = { workspace = true }
 sqlx = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
+tower-http = { workspace = true }
 tracing = { workspace = true }
 
 [lints]

@@ -413,17 +413,13 @@ pub async fn run(state: AppState) {
 #[cfg(test)]
 mod tests {
     use pedagog_store::db::accounts::{self, Actor};
-    use pedagog_store::db::assignments::*;
     use pedagog_store::db::notices as db;
     use pedagog_store::db::submissions::{self as subs, NewSubmission, RunOutcome};
-    use pedagog_store::{
-        BuildSettings, CourseRole, Isolation, JoinSource, PlatformKind, SubmissionSource,
-        ValidationStatus,
-    };
+    use pedagog_store::{Isolation, SubmissionSource};
     use sqlx::PgPool;
 
     use super::*;
-    use crate::testing::{delete, json, login, post, serve_full};
+    use crate::testing::{course, delete, json, login, post, serve_full};
 
     fn results(score: f64, stdout: &str, hidden_stdout: &str) -> String {
         serde_json::json!({
@@ -437,51 +433,6 @@ mod tests {
             ]
         })
         .to_string()
-    }
-
-    /// cop3502-f26 with prof, ta (grader), alice and bob (students) and an
-    /// open `linked-list`; returns the assignment and its build.
-    async fn course(pool: &PgPool) -> sqlx::Result<(i64, i64)> {
-        let prof = accounts::upsert_user(pool, "prof@ufl.edu", "Prof").await?;
-        accounts::create_course(pool, "cop3502-f26", "Programming 1", prof.id, &[prof.id]).await?;
-        let me = Actor {
-            id: prof.id,
-            admin: false,
-        };
-        for (email, name, role) in [
-            ("ta@ufl.edu", "Tara", CourseRole::Grader),
-            ("alice@ufl.edu", "Alice", CourseRole::Student),
-            ("bob@ufl.edu", "", CourseRole::Student),
-            ("cat@ufl.edu", "Cat", CourseRole::Student),
-        ] {
-            let u = accounts::upsert_user(pool, email, name).await?;
-            accounts::add_member(pool, "cop3502-f26", u.id, role, JoinSource::Manual, me)
-                .await?
-                .unwrap();
-        }
-        let a = upsert_assignment(pool, "cop3502-f26", "linked-list", "Linked List").await?;
-        let up = record_upload(pool, a.id, "tree", "k", 1).await?;
-        let settings = BuildSettings {
-            platform: PlatformKind::Upload,
-            isolation: Isolation::Process,
-            egress: r#"{"mode":"deny"}"#.into(),
-            submission: "{}".into(),
-        };
-        let b = start_build(
-            pool,
-            &NewBuild {
-                assignment_id: a.id,
-                upload_id: up.id,
-                image_hash: "h",
-                image_ref: "r",
-                settings: &settings,
-                policy: r#"{"dates": {"open": "always"}}"#,
-            },
-        )
-        .await?;
-        finish_build(pool, b, true, None).await?;
-        finish_validation(pool, b, ValidationStatus::Skipped, None, &[]).await?;
-        Ok((a.id, b))
     }
 
     /// A graded submission by `email`, then a regrade of it to `second`,

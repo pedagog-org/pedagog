@@ -482,6 +482,7 @@ The api is the public entry point: people log in with a code sent to their email
    | `PEDAGOG_MAIL_PER_SECOND` | 5 | Notices sent per second per replica (keep under the relay's limit) |
    | `PEDAGOG_JOBS_URL` | `http://pedagog-jobs.pedagog-builds.svc:8080` | Where uploads and submissions go |
    | `PEDAGOG_MAX_UPLOAD_BYTES` | 50 MiB | The largest assignment archive passed on (match `jobs`') |
+   | `PEDAGOG_WEB_DIR` | `/usr/share/pedagog/web` (in the image) | The web UI's files, served outside `/api`; unset: the api alone |
 
 4. **The first admin:**
 

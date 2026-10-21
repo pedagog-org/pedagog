@@ -50,6 +50,8 @@ leptos = { version = "0.8", features = ["csr"] }
 # provider, no sessions (GlitchTip has none).
 sentry = { version = "0.49", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls-no-provider", "tracing"] }
 strum = "0.26"
+# The web UI's files, served by the api (same version kube brings).
+tower-http = { version = "0.6", features = ["fs"] }
 strum_macros = "0.26"
 tar = "0.4"
 # RFC 3339 dates in assignment.yml and the api.

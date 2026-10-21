@@ -15,7 +15,7 @@ use serde::Deserialize;
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, internal, refused};
 use crate::state::AppState;
-use crate::users::{UserView, forbidden, page, pages, require_admin, valid_email};
+use crate::users::{forbidden, page, pages, require_admin, valid_email};
 
 /// What a request needs in a course.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -290,8 +290,8 @@ pub async fn show(
         "id": access.course.id,
         "name": access.course.name,
         "role": access.label(),
-        "instructors": active(CourseRole::Instructor).map(|m| UserView::from(&m.user)).collect::<Vec<_>>(),
-        "graders": active(CourseRole::Grader).map(|m| UserView::from(&m.user)).collect::<Vec<_>>(),
+        "instructors": active(CourseRole::Instructor).map(|m| crate::users::view(&m.user)).collect::<Vec<_>>(),
+        "graders": active(CourseRole::Grader).map(|m| crate::users::view(&m.user)).collect::<Vec<_>>(),
         "students": active(CourseRole::Student).count(),
         "dropped": members.iter().filter(|m| m.dropped_at.is_some()).count(),
     }))

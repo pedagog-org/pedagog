@@ -16,7 +16,7 @@ impl Api {
     pub fn from_session() -> Result<Self, String> {
         let session = account::load().ok_or("not logged in: run `hammer login`")?;
         Ok(Self {
-            base: session.api,
+            base: account::rest(&session.api),
             token: session.token,
             client: reqwest::blocking::Client::builder()
                 .timeout(Duration::from_secs(60))

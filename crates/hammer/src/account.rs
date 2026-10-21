@@ -97,14 +97,21 @@ fn post(url: &str, body: &serde_json::Value, token: Option<&str>) -> Result<Stri
 }
 
 /// Ask for a code, read it from `input`, and save the session.
+/// The REST api under a host's URL (`https://host` → `https://host/api`); hammer
+/// saves and shows the host.
+pub fn rest(host: &str) -> String {
+    format!("{}/api", host.trim_end_matches('/'))
+}
+
 pub fn login(
     api: &str,
     email: &str,
     input: &mut impl BufRead,
 ) -> Result<(Session, PathBuf), String> {
     let api = api.trim_end_matches('/');
+    let rest = rest(api);
     post(
-        &format!("{api}/auth/start"),
+        &format!("{rest}/auth/start"),
         &serde_json::json!({ "email": email }),
         None,
     )?;
@@ -113,7 +120,7 @@ pub fn login(
     let mut code = String::new();
     input.read_line(&mut code).map_err(|e| e.to_string())?;
     let reply = post(
-        &format!("{api}/auth/finish"),
+        &format!("{rest}/auth/finish"),
         &serde_json::json!({ "email": email, "code": code.trim(), "client": "cli" }),
         None,
     )?;
@@ -148,7 +155,7 @@ pub fn logout() -> Result<Option<String>, String> {
     };
     // Already expired or revoked is fine: forget it either way.
     let _ = post(
-        &format!("{}/auth/logout", session.api),
+        &format!("{}/auth/logout", rest(&session.api)),
         &serde_json::json!({}),
         Some(&session.token),
     );
@@ -161,7 +168,7 @@ pub fn logout() -> Result<Option<String>, String> {
 /// Who the saved session belongs to, and their courses, as lines.
 pub fn whoami() -> Result<Vec<String>, String> {
     let session = load().ok_or("not logged in: run `hammer login`")?;
-    let url = format!("{}/me", session.api);
+    let url = format!("{}/me", rest(&session.api));
     let reply = client()?
         .get(&url)
         .bearer_auth(&session.token)
@@ -205,6 +212,18 @@ fn describe(me: &serde_json::Value, api: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_rest_api_is_under_the_host() {
+        assert_eq!(
+            rest("https://pedagog.example"),
+            "https://pedagog.example/api"
+        );
+        assert_eq!(
+            rest("http://localhost:18082/"),
+            "http://localhost:18082/api"
+        );
+    }
 
     #[test]
     fn whoami_lists_the_user_and_their_courses() {

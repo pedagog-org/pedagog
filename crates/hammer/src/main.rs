@@ -775,7 +775,7 @@ fn endpoint(flag: Option<String>, dir: &Path) -> Result<(upload::Endpoint, cours
     course::check_api(&chosen, &session.api).map_err(|e| miette!("{e}"))?;
     Ok((
         upload::Endpoint {
-            base: session.api,
+            base: account::rest(&session.api),
             token: session.token,
         },
         chosen,

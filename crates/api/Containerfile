@@ -1,18 +1,31 @@
-# The api image. Build context is the repo root:
+# The api image, with the web UI's files. Build context is the repo root:
 #   podman build -f crates/api/Containerfile -t <ref> .
 # Cache mounts keep crates.io downloads and compiled dependencies between builds.
 
 FROM docker.io/library/rust:1.97.1-bookworm AS build
+# trunk builds the web UI (its prebuilt release, for this machine's architecture).
+ARG TARGETARCH
+ARG TRUNK_VERSION=0.21.14
+RUN case "${TARGETARCH:-$(uname -m)}" in amd64|x86_64) arch=x86_64 ;; arm64|aarch64) arch=aarch64 ;; esac \
+    && curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-${arch}-unknown-linux-gnu.tar.gz" \
+       | tar -xz -C /usr/local/bin trunk \
+    && rustup target add wasm32-unknown-unknown
 WORKDIR /src
 COPY . .
 ENV SQLX_OFFLINE=true
+# The web UI is served gzipped where browsers take it (ServeDir's precompressed files).
 RUN --mount=type=cache,id=pedagog-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=pedagog-api-target,target=/src/target \
     cargo build --release --locked -p pedagog-api \
-    && mkdir -p /out && cp target/release/pedagog-api /out/
+    && (cd crates/web && trunk build --release) \
+    && mkdir -p /out && cp target/release/pedagog-api /out/ && cp -r target/web /out/web \
+    && find /out/web -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.wasm' -o -name '*.svg' \) \
+       -exec gzip -k -9 {} \;
 
 # Built against Debian 12's glibc, as is this base (with CA certificates for SMTP TLS).
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=build /out/pedagog-api /usr/local/bin/pedagog-api
+COPY --from=build /out/web /usr/share/pedagog/web
+ENV PEDAGOG_WEB_DIR=/usr/share/pedagog/web
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/pedagog-api"]
