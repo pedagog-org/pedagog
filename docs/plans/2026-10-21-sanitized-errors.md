@@ -104,6 +104,27 @@ kinds of failure.
                                ^
     ```
 
+## Under process isolation (checked in kind)
+
+Real grading runs student code in its own process; the corpus graded that way
+(`corpus/REPORT-isolated.md`) differs from the in-process run, and the sanitizer
+works from what isolation hands back:
+
+- An exception in the student's code comes back re-raised in the test process, with
+  the student's frames appended to its message as `student code traceback:` lines.
+  The summary's location and the chain come from those frames (today's short line
+  points at the test instead).
+- A timeout under isolation is 69 lines of RPyC internals ending in "student code
+  exceeded its 1s time limit or its process exited unexpectedly"; the student's
+  process is gone, so where it was stuck isn't known. Sanitized: `ran past its 1 s
+  time limit (or its process stopped)`.
+- A syntax error arrives as `_get_exception_class.<locals>.Derived: expected ':'` with
+  the run's temporary path; sanitized back to `SyntaxError` and `linked_list.py`.
+- pytest's value explanations name objects as `<bound method LinkedList.pop_front of
+  <linked_list.LinkedList object at 0x…>>`; sanitized to `<LinkedList>.pop_front`.
+- Not about errors: a test using `capsys` sees none of the student's prints under
+  isolation (they happen in the other process). Its own follow-up in the helper.
+
 ## Alternatives considered
 
 - One short `message` beside the raw `error`: students would still be one click from
@@ -116,9 +137,8 @@ kinds of failure.
 
 ## Open questions
 
-- Process isolation: the corpus runs in-process; real grading runs student code in a
-  separate process (RPyC). The expected outputs above are checked against a real
-  cluster run before the helper's tests are written.
+- None left. Process isolation was checked (step 1, `corpus/REPORT-isolated.md`): see
+  "Under process isolation" above.
 
 ## Rollback
 
