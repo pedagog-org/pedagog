@@ -1,67 +1,52 @@
 //! Pedagog's web UI: a Leptos app rendered in the browser (built with trunk),
-//! calling the api under `/api` on the same host. A skeleton for now: it shows
-//! whether the api answers.
+//! calling the api under `/api` on the same host. Styles are the design's
+//! `pedagog.css`; components map to its classes.
+
+mod api;
+mod cache;
+#[expect(
+    dead_code,
+    reason = "used by the assignment screens (the student slice)"
+)]
+mod events;
+mod pages;
+mod report;
+mod session;
+mod shell;
+mod theme;
+#[expect(
+    dead_code,
+    reason = "used by the assignment screens (the student slice)"
+)]
+mod time;
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod testing;
 
 use leptos::prelude::*;
+use leptos_meta::{Title, provide_meta_context};
+use leptos_router::components::{Route, Router, Routes};
+use leptos_router::path;
 
 fn main() {
-    console_error_panic_hook::set_once();
+    report::install();
     leptos::mount::mount_to_body(App);
 }
 
 #[component]
 fn App() -> impl IntoView {
-    let api = LocalResource::new(check_api);
+    provide_meta_context();
+    theme::provide();
+    session::provide();
     view! {
-        <main>
-            <h1>"Pedagog"</h1>
-            {move || {
-                let (class, text) = match api.get() {
-                    None => ("status", "checking the api…"),
-                    Some(Api::Up) => ("status ok", "the api is up"),
-                    Some(Api::Down) => ("status bad", "the api is unreachable"),
-                };
-                view! { <p class=class role="status">{text}</p> }
-            }}
-        </main>
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Api {
-    Up,
-    Down,
-}
-
-async fn check_api() -> Api {
-    let reply = gloo_net::http::Request::get("/api/healthz").send().await;
-    match reply {
-        Ok(r) => api_from(r.status(), &r.text().await.unwrap_or_default()),
-        Err(_) => Api::Down,
-    }
-}
-
-/// The api's health answer (`200 ok`) means it's up; anything else, down.
-fn api_from(status: u16, body: &str) -> Api {
-    if status == 200 && body.trim() == "ok" {
-        Api::Up
-    } else {
-        Api::Down
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_a_healthy_answer_is_up() {
-        assert_eq!(api_from(200, "ok"), Api::Up);
-        assert_eq!(
-            api_from(200, "<html>"),
-            Api::Down,
-            "e.g. the dev server's fallback page"
-        );
-        assert_eq!(api_from(502, ""), Api::Down);
+        <Title text="pedagog"/>
+        <a class="sr-only" href="#main">"Skip to content"</a>
+        <Router>
+            <Routes fallback=pages::NotFound>
+                <Route path=path!("/login") view=pages::login::Login/>
+                <Route path=path!("/") view=pages::home::Home/>
+                <Route path=path!("/courses/:course") view=pages::course::Course/>
+            </Routes>
+        </Router>
     }
 }

@@ -44,12 +44,19 @@ sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "macros", "migrate"] }
 # The web UI (crates/web): Leptos rendered in the browser, HTTP from WASM.
 console_error_panic_hook = "0.1"
-gloo-net = { version = "0.7", default-features = false, features = ["http"] }
+gloo-net = { version = "0.7", default-features = false, features = ["http", "eventsource", "json"] }
+js-sys = "0.3"
 leptos = { version = "0.8", features = ["csr"] }
+leptos_meta = "0.8"
+leptos_router = "0.8"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Document", "DomTokenList", "Element", "Event", "EventTarget", "HtmlElement", "HtmlFormElement", "HtmlInputElement", "Location", "NodeList", "MediaQueryList", "Storage", "Window"] }
 # Error reports to GlitchTip (Sentry-compatible): rustls on the process's ring
 # provider, no sessions (GlitchTip has none).
 sentry = { version = "0.49", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls-no-provider", "tracing"] }
 strum = "0.26"
+# Browser end-to-end tests through chromedriver (rustls, not OpenSSL).
+fantoccini = { version = "0.22", default-features = false, features = ["rustls-tls"] }
 # The web UI's files, served by the api (same version kube brings).
 tower-http = { version = "0.6", features = ["fs"] }
 strum_macros = "0.26"
@@ -70,3 +77,13 @@ zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+
+# The web UI's WebAssembly (trunk builds with it): small over fast, and
+# panics abort (they're reported to the api first). Servers keep `release`.
+[profile.web]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+

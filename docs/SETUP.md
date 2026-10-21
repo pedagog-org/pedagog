@@ -57,6 +57,8 @@ brew install trunk   # or: cargo install trunk --locked
 cargo xtask kind-api        # in one terminal: the api (and Mailpit, GlitchTip) from kind
 cargo xtask web-dev         # in another: http://localhost:3000, /api/ proxied to the api
 cargo xtask web-build       # the static files, into target/web
+cargo xtask web-test        # component tests in headless Chrome (fetches a matching chromedriver)
+cargo xtask web-budget      # the first load against its 400 KB (gzipped) budget
 ```
 
 ### Local cluster (kind)

@@ -73,6 +73,10 @@ enum Task {
     WebDev,
     /// Build the web UI's static files into target/web.
     WebBuild,
+    /// The web UI's component tests in headless Chrome (fetches a matching chromedriver if needed).
+    WebTest,
+    /// Build the web UI and check its first load against the budget (400 KB gzipped).
+    WebBudget,
     /// Download and cache recipe ingredients (hammer vend; filters: --os/--platform/--toolchain).
     Vend {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -348,6 +352,8 @@ fn run(task: Task) -> Result<()> {
         Task::WebBuild => {
             shown(here("trunk", &["build", "--release"]).current_dir(root().join("crates/web")))
         }
+        Task::WebTest => web_test(),
+        Task::WebBudget => web_budget(),
         Task::Vend { args } => {
             let args: Vec<&str> = std::iter::once("vend")
                 .chain(args.iter().map(String::as_str))
@@ -465,6 +471,8 @@ fn run(task: Task) -> Result<()> {
                 &["test", "-q", "-p", "pedagog-e2e", "--test", "kind", "--"],
             );
             cmd.args(&filters).env("PEDAGOG_E2E", "1");
+            // For the browser checks.
+            cmd.env("CHROMEDRIVER", find_chromedriver()?);
             shown(&mut cmd)
         }
     }
@@ -583,6 +591,20 @@ fn precommit() -> Result<()> {
             "warnings",
         ],
     ))?;
+    println!("pre-commit: cargo clippy -p pedagog-web --target wasm32-unknown-unknown -D warnings");
+    shown(&mut here(
+        "cargo",
+        &[
+            "clippy",
+            "-p",
+            "pedagog-web",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    ))?;
     let staged = ok(&mut here(
         "git",
         &["diff", "--cached", "--name-only", "--diff-filter=d"],
@@ -656,9 +678,214 @@ fn registry_access() -> Result<()> {
     Ok(())
 }
 
+/// The first load's budget: wasm, js, css and the preloaded fonts, gzipped.
+const WEB_BUDGET: u64 = 400 * 1024;
+
+fn web_budget() -> Result<()> {
+    run(Task::WebBuild)?;
+    let dist = root().join("target/web");
+    let index = std::fs::read_to_string(dist.join("index.html")).map_err(|e| e.to_string())?;
+    let mut files: Vec<String> = std::fs::read_dir(&dist)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|f| [".wasm", ".js", ".css"].iter().any(|x| f.ends_with(x)))
+        .collect();
+    files.extend(preloaded(&index));
+    let mut total = 0;
+    for f in &files {
+        let path = dist.join(f.trim_start_matches('/'));
+        // woff2 is compressed already; gzip the rest as the api serves them.
+        let size = if f.ends_with(".woff2") {
+            std::fs::metadata(&path)
+                .map(|m| m.len())
+                .map_err(|e| format!("{f}: {e}"))?
+        } else {
+            ok(Command::new("sh")
+                .arg("-c")
+                .arg(format!("gzip -9c '{}' | wc -c", path.display())))?
+            .trim()
+            .parse::<u64>()
+            .map_err(|e| e.to_string())?
+        };
+        println!("{:>8} KB  {f}", size / 1024);
+        total += size;
+    }
+    println!(
+        "{:>8} KB  first load (budget {} KB)",
+        total / 1024,
+        WEB_BUDGET / 1024
+    );
+    if total > WEB_BUDGET {
+        return Err(format!(
+            "the web UI's first load is {} KB, over its {} KB budget",
+            total / 1024,
+            WEB_BUDGET / 1024
+        ));
+    }
+    Ok(())
+}
+
+/// The fonts `index.html` preloads (`<link rel="preload" href="…" as="font">`).
+fn preloaded(index: &str) -> Vec<String> {
+    index
+        .split("<link")
+        .filter(|l| l.contains("rel=\"preload\"") && l.contains("as=\"font\""))
+        .filter_map(|l| {
+            l.split("href=\"")
+                .nth(1)?
+                .split('"')
+                .next()
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+fn web_test() -> Result<()> {
+    let wanted = wasm_bindgen_version()?;
+    let have = ok(&mut here("wasm-bindgen-test-runner", &["--version"])).unwrap_or_default();
+    if !have.contains(&wanted) {
+        println!("installing wasm-bindgen-cli {wanted} (it must match Cargo.lock)");
+        shown(&mut here(
+            "cargo",
+            &[
+                "install",
+                "wasm-bindgen-cli",
+                "--version",
+                &wanted,
+                "--locked",
+            ],
+        ))?;
+    }
+    let driver = find_chromedriver()?;
+    shown(
+        here(
+            "cargo",
+            &[
+                "test",
+                "-p",
+                "pedagog-web",
+                "--target",
+                "wasm32-unknown-unknown",
+            ],
+        )
+        .env("CHROMEDRIVER", driver),
+    )
+}
+
+/// The `wasm-bindgen` version in Cargo.lock.
+fn wasm_bindgen_version() -> Result<String> {
+    let lock = std::fs::read_to_string(root().join("Cargo.lock")).map_err(|e| e.to_string())?;
+    lock.split("[[package]]")
+        .find(|p| p.contains("name = \"wasm-bindgen\"\n"))
+        .and_then(|p| {
+            p.split("version = \"")
+                .nth(1)?
+                .split('"')
+                .next()
+                .map(str::to_owned)
+        })
+        .ok_or_else(|| "no wasm-bindgen in Cargo.lock".into())
+}
+
+/// A chromedriver: `CHROMEDRIVER`, the GitHub runner's (`CHROMEWEBDRIVER`),
+/// one on PATH, or one fetched for this machine's Chrome.
+fn find_chromedriver() -> Result<String> {
+    if let Ok(d) = std::env::var("CHROMEDRIVER") {
+        return Ok(d);
+    }
+    if let Ok(dir) = std::env::var("CHROMEWEBDRIVER") {
+        let d = Path::new(&dir).join("chromedriver");
+        if d.exists() {
+            return Ok(d.display().to_string());
+        }
+    }
+    match ok(&mut here("which", &["chromedriver"])) {
+        Ok(found) if !found.trim().is_empty() => Ok(found.trim().to_owned()),
+        _ => chromedriver(),
+    }
+}
+
+/// A chromedriver for this machine's Chrome, from Chrome for Testing, kept in target/tools.
+fn chromedriver() -> Result<String> {
+    let chrome = if cfg!(target_os = "macos") {
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    } else {
+        "google-chrome"
+    };
+    let version = ok(Command::new(chrome).arg("--version"))
+        .map_err(|_| "Chrome isn't installed (or set CHROMEDRIVER)".to_owned())?;
+    let full = version
+        .split_whitespace()
+        .last()
+        .unwrap_or_default()
+        .to_owned();
+    let build = full
+        .rsplit_once('.')
+        .map(|(b, _)| b.to_owned())
+        .unwrap_or(full);
+    let platform = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "mac-arm64",
+        ("macos", _) => "mac-x64",
+        _ => "linux64",
+    };
+    let tools = root().join("target/tools");
+    let driver = tools.join(format!("chromedriver-{platform}/chromedriver"));
+    let stamp = tools.join(format!("chromedriver-{platform}/for-chrome"));
+    if driver.exists() && std::fs::read_to_string(&stamp).is_ok_and(|s| s == build) {
+        return Ok(driver.display().to_string());
+    }
+    let index = reqwest::blocking::get(
+        "https://googlechromelabs.github.io/chrome-for-testing/latest-patch-versions-per-build-with-downloads.json",
+    )
+    .and_then(|r| r.text())
+    .map_err(|e| format!("Chrome for Testing: {e}"))?;
+    let url = chromedriver_url(&index, &build, platform)
+        .ok_or_else(|| format!("no chromedriver for Chrome {build} ({platform})"))?;
+    std::fs::create_dir_all(&tools).map_err(|e| e.to_string())?;
+    let zip = tools.join("chromedriver.zip");
+    let bytes = reqwest::blocking::get(&url)
+        .and_then(|r| r.bytes())
+        .map_err(|e| e.to_string())?;
+    std::fs::write(&zip, &bytes).map_err(|e| e.to_string())?;
+    ok(Command::new("unzip")
+        .arg("-oq")
+        .arg(&zip)
+        .arg("-d")
+        .arg(&tools))?;
+    std::fs::write(&stamp, &build).map_err(|e| e.to_string())?;
+    println!("chromedriver for Chrome {build}: {}", driver.display());
+    Ok(driver.display().to_string())
+}
+
+/// The download URL for `platform`'s chromedriver for Chrome `build` (major.minor.build).
+fn chromedriver_url(index: &str, build: &str, platform: &str) -> Option<String> {
+    let index: serde_json::Value = serde_json::from_str(index).ok()?;
+    index["builds"][build]["downloads"]["chromedriver"]
+        .as_array()?
+        .iter()
+        .find(|d| d["platform"] == platform)?["url"]
+        .as_str()
+        .map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn budgets_count_preloaded_fonts_and_drivers_match_chrome() {
+        let index = r#"<link rel="preload" href="/fonts/a.woff2" as="font" type="font/woff2" crossorigin />
+            <link rel="stylesheet" href="/x.css" />"#;
+        assert_eq!(preloaded(index), ["/fonts/a.woff2"]);
+        let cft = r#"{"builds": {"155.0.8059": {"downloads": {"chromedriver": [
+            {"platform": "linux64", "url": "https://x/linux64.zip"},
+            {"platform": "mac-arm64", "url": "https://x/mac-arm64.zip"}]}}}}"#;
+        assert_eq!(
+            chromedriver_url(cft, "155.0.8059", "mac-arm64").as_deref(),
+            Some("https://x/mac-arm64.zip")
+        );
+        assert_eq!(chromedriver_url(cft, "154.0.1", "linux64"), None);
+    }
 
     #[test]
     fn images_are_named_after_their_file() {

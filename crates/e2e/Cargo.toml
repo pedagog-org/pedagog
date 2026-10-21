@@ -13,6 +13,8 @@ serde_json = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+fantoccini = { workspace = true }
+tokio = { workspace = true }
 # zip's deflate needs flate2's default (pure Rust) backend.
 flate2 = { workspace = true }
 time = { workspace = true }

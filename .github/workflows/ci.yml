@@ -49,7 +49,8 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: sqlx-cli@0.9.0
+          # wasm-bindgen must match Cargo.lock (`cargo xtask web-test` checks).
+          tool: sqlx-cli@0.9.0,trunk@0.21.14,wasm-bindgen@0.2.126
 
       # Garage for the object-store tests, configured and bootstrapped from the
       # same ConfigMap the cluster uses (dev-only key; see deploy/overlays/kind).
@@ -76,6 +77,10 @@ jobs:
       - run: cargo test --locked --workspace --all-features
       # The web UI as browsers run it (the workspace build above is native).
       - run: cargo clippy --locked -p pedagog-web --target wasm32-unknown-unknown -- -D warnings
+      # Component tests in headless Chrome (xtask finds the runner's chromedriver).
+      - run: cargo xtask web-test
+      # The first load stays within its budget (wasm, js, css, preloaded fonts).
+      - run: cargo xtask web-budget
 
       # Fails if a query changed without regenerating .sqlx/ (`cargo xtask db-prepare`).
       - name: Check sqlx offline cache
