@@ -967,16 +967,26 @@ fn web_submit(e: &mut Env) -> Result<String> {
             format!("the receipt says {said:?}")
         })?;
         // Graded while the page is open: the results come in without a reload.
+        // Full marks, out of however many points the current build has.
         let score = element(&c, Duration::from_secs(300), ".score .big").await?;
         let got = score.text().await.map_err(cmd)?;
-        require(got == "10", || format!("the score shown is {got:?}"))?;
+        let of = element(&c, Duration::from_secs(5), ".score .of")
+            .await?
+            .text()
+            .await
+            .map_err(cmd)?;
+        require(of.starts_with(&format!("/ {got} ")), || {
+            format!("the score shown is {got} {of}")
+        })?;
         let history = element(&c, Duration::from_secs(30), "#hist-h + ul li").await?;
         let row = history.text().await.map_err(cmd)?;
         require(
-            row.contains("10/10 shown") && row.contains("Counts"),
+            row.contains(&format!("{got}/{got} shown")) && row.contains("Counts"),
             || format!("the history row says {row:?}"),
         )?;
-        Ok("a student submits in the browser, watches it grade live, and sees 10/10 in results and history".into())
+        Ok(format!(
+            "a student submits in the browser, watches it grade live, and sees {got}/{got} in results and history"
+        ))
     })
 }
 
