@@ -33,6 +33,14 @@ kinds of failure.
     helper doesn't sanitize (with the staff pages, PR 4);
   - in the staff results, a mark on each test whose error reaches students raw
     (with the results pages, PR 5).
+- A run that couldn't load the student's code (a syntax or import error) gets
+  `run.output-sanitized` too: where and what, e.g. `linked_list.py, line 2:
+  SyntaxError: expected ':'` with the caret lines; the "couldn't be graded" card shows
+  it under the sentence it has today.
+- A setup error the student didn't cause (it happened in the tests or their fixtures,
+  not in the student's code) is sanitized as "the tests couldn't set up; this isn't
+  your code" (the exception stays in `error` for staff). One that fails inside the
+  student's code (a fixture building their list) reads like any other failure.
 - The student page shows the summary and folds the chain ("How it got there"). Raw
   reports (from helpers that don't sanitize) show as today.
 
@@ -68,8 +76,7 @@ kinds of failure.
    ```
 6. Failed `check()` blocks: each check's summary (its own chain when it's in the
    student's code), in order.
-7. A setup error: `test_linked_list.py:61: ConnectionError: the course's test server is down`
-   (setup errors are the course's, not the student's; see Open questions).
+7. A setup error in the tests: `The tests couldn't set up; this isn't your code.`
 8. A deep failure in the student's code:
    ```
    linked_list.py:42: AttributeError: 'NoneType' object has no attribute 'value'
@@ -90,7 +97,12 @@ kinds of failure.
      + 3 -> 2 -> 1
    ```
 10. A timeout: `linked_list.py:58: ran past its 1 s time limit (here, in spin)`
-11. A syntax error in the student's file (the whole run): see Open questions.
+11. A syntax error in the student's file (the whole run, `run.output-sanitized`):
+    ```
+    linked_list.py, line 2: SyntaxError: expected ':'
+        def append(self, value)
+                               ^
+    ```
 
 ## Alternatives considered
 
@@ -104,12 +116,6 @@ kinds of failure.
 
 ## Open questions
 
-- The run-level error (a syntax or import error in the student's file): students get
-  only "the tests couldn't run with your code". Add `run.output-sanitized`
-  (`linked_list.py, line 2: SyntaxError: expected ':'` and the caret lines) shown on
-  the "couldn't be graded" card?
-- Setup errors are the course's fault: show students "the tests couldn't set up; this
-  isn't your code" instead of the exception?
 - Process isolation: the corpus runs in-process; real grading runs student code in a
   separate process (RPyC). The expected outputs above are checked against a real
   cluster run before the helper's tests are written.
