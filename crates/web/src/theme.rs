@@ -148,8 +148,7 @@ mod browser {
 
     #[wasm_bindgen_test]
     async fn choices_apply_to_the_page_and_are_saved() {
-        let owner = Owner::new();
-        owner.set();
+        let _owner = crate::testing::owner();
         let theme = provide();
         theme.set(Choice::Dark);
         crate::testing::settle(50).await;

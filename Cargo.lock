@@ -3244,6 +3244,7 @@ dependencies = [
 name = "pedagog-web"
 version = "0.0.0"
 dependencies = [
+ "any_spawner",
  "console_error_panic_hook",
  "futures",
  "gloo-net 0.7.0",

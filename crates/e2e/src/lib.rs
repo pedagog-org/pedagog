@@ -119,6 +119,72 @@ impl Forward {
         Err(format!("cannot reach {service} through a port-forward"))
     }
 
+    /// A long-lived forward (`cargo xtask kind-api`) that moves to the new pod
+    /// after a rollout; a Service forward stays on the pod it started with,
+    /// serving the old build until that pod is gone.
+    pub fn follow(namespace: &str, service: &str, local: u16, remote: u16) -> Result<()> {
+        if answers(local) {
+            return Ok(());
+        }
+        let (namespace, service) = (namespace.to_owned(), service.to_owned());
+        let (mut pod, mut forward) = Self::to_ready_pod(&namespace, &service, local, remote)?;
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(2));
+                let exited = forward
+                    .0
+                    .as_mut()
+                    .is_some_and(|c| matches!(c.try_wait(), Ok(Some(_))));
+                // A failed lookup (the cluster busy) keeps the forward it has.
+                let ready = ready_pods(&namespace, &service).ok();
+                if !stale(&pod, ready.as_deref(), exited) {
+                    continue;
+                }
+                drop(forward);
+                loop {
+                    match Self::to_ready_pod(&namespace, &service, local, remote) {
+                        Ok((p, f)) => {
+                            eprintln!("{service}: now forwarding to {p}");
+                            (pod, forward) = (p, f);
+                            break;
+                        }
+                        Err(_) => std::thread::sleep(Duration::from_secs(2)),
+                    }
+                }
+            }
+        });
+        Ok(())
+    }
+
+    fn to_ready_pod(
+        namespace: &str,
+        service: &str,
+        local: u16,
+        remote: u16,
+    ) -> Result<(String, Self)> {
+        let pod = ready_pods(namespace, service)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("{service} has no ready pod"))?;
+        let child = kubectl(&[
+            "-n",
+            namespace,
+            "port-forward",
+            &format!("pod/{pod}"),
+            &format!("{local}:{remote}"),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("couldn't start kubectl port-forward: {e}"))?;
+        let forward = Self(Some(child));
+        if wait_for(Duration::from_secs(10), || answers(local)) {
+            Ok((pod, forward))
+        } else {
+            Err(format!("cannot reach {service} through a port-forward"))
+        }
+    }
+
     /// The api and Mailpit.
     pub fn api_and_mail() -> Result<(Self, Self)> {
         Ok((
@@ -135,6 +201,27 @@ impl Drop for Forward {
             let _ = child.wait();
         }
     }
+}
+
+/// The names of a Service's ready pods (a terminating pod is never ready).
+pub fn ready_pods(namespace: &str, service: &str) -> Result<Vec<String>> {
+    let names = ok(&mut kubectl(&[
+        "-n",
+        namespace,
+        "get",
+        "endpointslices",
+        "-l",
+        &format!("kubernetes.io/service-name={service}"),
+        "-o",
+        "jsonpath={range .items[*].endpoints[?(@.conditions.ready==true)]}{.targetRef.name}{\" \"}{end}",
+    ]))?;
+    Ok(names.split_whitespace().map(str::to_owned).collect())
+}
+
+/// Whether a forward to `pod` should move: kubectl gave up, or the pod is no
+/// longer ready (`ready` is `None` when the lookup failed).
+fn stale(pod: &str, ready: Option<&[String]>, exited: bool) -> bool {
+    exited || ready.is_some_and(|r| !r.iter().any(|p| p == pod))
 }
 
 /// Poll `cond` every 250 ms for up to `within`.
@@ -309,6 +396,15 @@ pub fn flat(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forwards_move_when_their_pod_goes() {
+        let ready = ["api-new".to_owned()];
+        assert!(stale("api-old", Some(&ready), false));
+        assert!(!stale("api-new", Some(&ready), false));
+        assert!(stale("api-new", Some(&ready), true), "kubectl exited");
+        assert!(!stale("api-old", None, false), "a failed lookup keeps it");
+    }
 
     #[test]
     fn hammer_reports_flatten() {

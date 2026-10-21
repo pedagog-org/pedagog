@@ -22,6 +22,15 @@ pub fn mount<V: IntoView + 'static>(view: impl FnOnce() -> V + 'static) -> web_s
     root
 }
 
+/// A reactive owner for a test that makes signals and effects without
+/// mounting, with the executor effects run on (mounting starts it otherwise).
+pub fn owner() -> Owner {
+    let _ = any_spawner::Executor::init_wasm_bindgen();
+    let owner = Owner::new();
+    owner.set();
+    owner
+}
+
 /// Every element under `root` matching `selector`.
 pub fn all(root: &web_sys::HtmlElement, selector: &str) -> Vec<web_sys::Element> {
     let list = root.query_selector_all(selector).expect("a selector");

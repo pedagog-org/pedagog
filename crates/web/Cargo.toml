@@ -21,6 +21,8 @@ web-sys = { workspace = true }
 # Component tests in headless Chrome: `cargo xtask web-test`.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+# Leptos's executor, for tests that make effects without mounting.
+any_spawner = { version = "0.3", features = ["wasm-bindgen"] }
 
 [lints]
 workspace = true

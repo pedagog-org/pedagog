@@ -45,8 +45,19 @@ pub fn letters() -> Vec<(char, usize, String)> {
         .collect()
 }
 
+/// "pedagog" in Plex Sans Bold, in em: the letters' advances less the tracking.
+const WORD_EM: f64 = 3.84;
+
+/// The lockup's final width at `size`: the mark, the gap, the word.
+pub fn lockup_width(size: u32) -> f64 {
+    let size = f64::from(size);
+    size + 12.0 + size * 0.74 * WORD_EM
+}
+
 /// The mark and the word, as the design lays them out: the word's size is
-/// 0.74 of the mark's, its top on the mark's top.
+/// 0.74 of the mark's, its top on the mark's top. The lockup is as wide as
+/// its settled word, so while the letters shuffle the mark stays put and
+/// only the word's right edge moves.
 #[component]
 pub fn Lockup(
     #[prop(default = 40)] size: u32,
@@ -75,7 +86,7 @@ pub fn Lockup(
         view! { <span style=font>"pedagog"</span> }.into_any()
     };
     view! {
-        <div style="display: flex; align-items: flex-start; gap: 12px; color: var(--text)">
+        <div style=format!("display: flex; align-items: flex-start; gap: 12px; width: {:.1}px; color: var(--text)", lockup_width(size))>
             <Mark size=size motion=if shuffle { Motion::BuildIn } else { Motion::Still }/>
             {word}
         </div>
@@ -96,6 +107,11 @@ mod tests {
         );
         assert_eq!(l[0].2, "0.25s");
         assert_eq!(l[6].2, "0.79s");
+    }
+
+    #[test]
+    fn the_lockup_is_as_wide_as_the_design_draws_it() {
+        assert_eq!(lockup_width(40).round(), 166.0);
     }
 }
 
