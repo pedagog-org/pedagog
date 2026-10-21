@@ -11,9 +11,10 @@ kinds of failure.
 
 ## Decisions
 
-- Two fields per test: `error` (raw, staff only) and `error-sanitized` (students).
-  Staff see both. Students only ever get `error-sanitized`, on the `error` part's
-  visibility schedule (unchanged: after the deadline by default).
+- Two optional fields per test: `error` (the framework's raw report) and
+  `error-sanitized`. Students get `error-sanitized` when it's there, else `error` (as
+  today), on the `error` part's visibility schedule (unchanged: after the deadline by
+  default). Staff see both.
 - `error-sanitized` is a summary (where and what: the student's line when the
   failure is in their code, else the test's), then the call chain that led there:
   each frame that matters with its one line of code; repeated frames folded (`×2`).
@@ -21,10 +22,19 @@ kinds of failure.
   instead of `<linked_list.LinkedList object at 0xffff…>`), absolute paths (relative
   to the submission or the tests), helper/pytest/Python frames, "Use -v to get more
   diff".
-- Each framework's helper produces it from the real exception. Results without it
-  (older helpers) show students no error text until their assignment is rebuilt on a
-  helper that fills it; staff see a note saying so.
-- The page shows the summary and folds the chain ("How it got there").
+- Each framework's helper produces it from the real exception.
+- A sanitizing helper declares it once per results file (top-level
+  `sanitizes-errors: true`), so it's known at validation even when the reference
+  solution passes everything. Without it, staff are warned that students who can see
+  errors get the raw report:
+  - at upload: the build's validation carries a warning, printed by `hammer upload`
+    and shown on the build page (this PR);
+  - on the staff assignment overview, a standing alert while the current build's
+    helper doesn't sanitize (with the staff pages, PR 4);
+  - in the staff results, a mark on each test whose error reaches students raw
+    (with the results pages, PR 5).
+- The student page shows the summary and folds the chain ("How it got there"). Raw
+  reports (from helpers that don't sanitize) show as today.
 
 ## What students would see (drafts from the corpus)
 
@@ -107,9 +117,9 @@ kinds of failure.
 ## Rollback
 
 Each step is its own PR. pedagog's lands before the helper's, so nothing ever sends a
-field the platform ignores. Reverting the helper (the recipe back to 2.1.0) leaves
-`error-sanitized` empty, which the platform handles (students see no error text, staff
-the raw one); reverting pedagog's returns to showing students the raw `error`.
+field the platform ignores. Reverting the helper (the recipe back to 2.1.0) leaves the
+new fields out: students get the raw `error` as today and staff are warned; reverting
+pedagog's ignores them.
 
 ## Steps
 
@@ -117,14 +127,17 @@ the raw one); reverting pedagog's returns to showing students the raw `error`.
    buggy student file), graded for real; record its `error`s next to the in-process
    ones.
 2. **pedagog PR** (`feat/sanitized-errors`, after #61): `core::results::TestResult`
-   gains `error_sanitized` (`error-sanitized` in the YAML); the student view's error
-   comes from it; the staff results show both; ARCHITECTURE's results format and
+   gains an optional `error_sanitized` (`error-sanitized` in the YAML) and `Results` a
+   `sanitizes_errors` flag; the student view's error is the sanitized one when present,
+   else the raw one; validation warns when the flag is missing (`hammer upload`, the
+   build's status); the staff results api returns both and whether students get raw; ARCHITECTURE's results format and
    visibility sections; the UI shows the summary and folds the chain; tests in core,
    api and web.
 3. **python-pytest PR** (`feat/sanitized-errors`): the plugin keeps each failure's
    exception and builds `error-sanitized` (summary from `describe_failure` with the
    fixes above, the chain from the traceback's suite frames with relative paths);
-   the corpus cases become `tests/test_plugin.py` cases asserting the exact text;
+   it writes `sanitizes-errors: true`; the corpus cases become `tests/test_plugin.py`
+   cases asserting the exact text;
    version 2.2.0; tag v2.2.0 (the release workflow builds the bundle).
 4. **recipes PR:** `toolchains/ubuntu-22/pedagog-pytest/2.yaml` to v2.2.0 and the
    bundle's sha256 (merge commit, not squash).
