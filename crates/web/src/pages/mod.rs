@@ -1,5 +1,6 @@
 //! One module per route.
 
+pub mod assignment;
 pub mod course;
 pub mod home;
 pub mod login;

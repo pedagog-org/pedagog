@@ -22,13 +22,6 @@ pub enum Kind {
     /// Reused while fresh; refetched when stale or invalidated.
     Session,
     /// Shown from the cache at once, and refetched every time.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "used by the assignment screens (the student slice)"
-        )
-    )]
     Revalidate,
 }
 
@@ -63,12 +56,15 @@ struct Entry {
 
 thread_local! {
     static ENTRIES: RefCell<HashMap<String, Entry>> = RefCell::new(HashMap::new());
+    /// Bumped by every invalidation, so pages showing a forgotten key fetch it again.
+    static GENERATION: ArcRwSignal<u64> = ArcRwSignal::new(0);
 }
 
 /// Forget every key starting with `prefix` (after a change that affects them),
-/// e.g. `/courses/cop3502-f26/members`.
+/// e.g. `/courses/cop3502-f26/members`; pages showing one fetch it again.
 pub fn invalidate(prefix: &str) {
     ENTRIES.with(|e| e.borrow_mut().retain(|k, _| !k.starts_with(prefix)));
+    GENERATION.with(|g| g.update(|n| *n += 1));
 }
 
 /// Data for `key` (the api path it comes from), kept by `kind`: `None` while
@@ -84,9 +80,17 @@ where
     Fut: Future<Output = Result<T, Problem>> + 'static,
 {
     let (value, set_value) = signal_local(None::<Result<T, Problem>>);
+    let shown = StoredValue::new_local(None::<String>);
     Effect::new(move || {
         let key = key();
+        GENERATION.with(|g| g.track());
         let now = crate::time::now_millis();
+        let kept_here = ENTRIES.with(|e| e.borrow().contains_key(&key));
+        // Another key's invalidation: this one still stands.
+        if kept_here && shown.get_value().as_deref() == Some(key.as_str()) {
+            return;
+        }
+        shown.set_value(Some(key.clone()));
         let kept = ENTRIES.with(|e| {
             e.borrow().get(&key).map(|entry| {
                 (

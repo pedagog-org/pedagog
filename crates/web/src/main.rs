@@ -4,21 +4,16 @@
 
 mod api;
 mod cache;
-#[expect(
-    dead_code,
-    reason = "used by the assignment screens (the student slice)"
-)]
+mod components;
+mod describe;
 mod events;
 mod pages;
 mod report;
 mod session;
 mod shell;
 mod theme;
-#[expect(
-    dead_code,
-    reason = "used by the assignment screens (the student slice)"
-)]
 mod time;
+mod upload;
 
 #[cfg(all(test, target_arch = "wasm32"))]
 mod testing;
@@ -46,6 +41,7 @@ fn App() -> impl IntoView {
                 <Route path=path!("/login") view=pages::login::Login/>
                 <Route path=path!("/") view=pages::home::Home/>
                 <Route path=path!("/courses/:course") view=pages::course::Course/>
+                <Route path=path!("/courses/:course/assignments/:assignment") view=pages::assignment::Assignment/>
             </Routes>
         </Router>
     }
