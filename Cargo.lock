@@ -1383,9 +1383,14 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6420f887c48417e9e86c6cf61274eb231830cccc100e49613f7952e269a1fe1"
 dependencies = [
+ "futures-channel",
+ "futures-core",
  "gloo-utils 0.3.0",
  "http",
  "js-sys",
+ "pin-project",
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -1424,6 +1429,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4202275d95a142fa209a1e35e91c250a710c5600731372cd3464a39ed01573d6"
 dependencies = [
  "js-sys",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "web-sys",
 ]
@@ -2270,6 +2277,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptos_meta"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "987b1a07addba2647da43c0689408cccc0f428236b714ea606127b9e347d35d8"
+dependencies = [
+ "futures",
+ "indexmap",
+ "leptos",
+ "or_poisoned",
+ "send_wrapper",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "leptos_router"
+version = "0.8.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f92787ebcb5f25af6a67513dacfd75cbffce5bda3f361e2e947c3fc4e3adc14b"
+dependencies = [
+ "any_spawner",
+ "either_of",
+ "futures",
+ "gloo-net 0.6.0",
+ "js-sys",
+ "leptos",
+ "leptos_router_macro",
+ "or_poisoned",
+ "reactive_graph",
+ "rustc_version",
+ "send_wrapper",
+ "tachys",
+ "thiserror 2.0.19",
+ "url",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "leptos_router_macro"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bb5c81012dcab0d5cc032a2da0a364a18ce74a0fbeb88f091e9b53a0679bc85"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "leptos_server"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3014,8 +3071,17 @@ name = "pedagog-web"
 version = "0.0.0"
 dependencies = [
  "console_error_panic_hook",
+ "futures",
  "gloo-net 0.7.0",
+ "js-sys",
  "leptos",
+ "leptos_meta",
+ "leptos_router",
+ "pedagog-core",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
