@@ -272,9 +272,9 @@ fn run(task: Task) -> Result<()> {
             &email,
         ])),
         Task::KindApi => {
-            let _api = Forward::open("pedagog-system", "pedagog-api", API_PORT, 8080)?;
-            let _mail = Forward::open("pedagog-data", "mailpit", MAILPIT_PORT, 8025)?;
-            let _errors = Forward::open("pedagog-data", "glitchtip", GLITCHTIP_PORT, 8000)?;
+            Forward::follow("pedagog-system", "pedagog-api", API_PORT, 8080)?;
+            Forward::follow("pedagog-data", "mailpit", MAILPIT_PORT, 8025)?;
+            Forward::follow("pedagog-data", "glitchtip", GLITCHTIP_PORT, 8000)?;
             println!(
                 "api: http://localhost:{API_PORT}   mail: http://localhost:{MAILPIT_PORT}   errors: http://localhost:{GLITCHTIP_PORT}   (Ctrl-C to stop)"
             );
