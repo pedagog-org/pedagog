@@ -20,6 +20,9 @@ mod theme;
 )]
 mod time;
 
+#[cfg(all(test, target_arch = "wasm32"))]
+mod testing;
+
 use leptos::prelude::*;
 use leptos_meta::{Title, provide_meta_context};
 use leptos_router::components::{Route, Router, Routes};

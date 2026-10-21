@@ -98,3 +98,49 @@ mod tests {
         assert_eq!(l[6].2, "0.79s");
     }
 }
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod browser {
+    use wasm_bindgen_test::*;
+
+    use super::*;
+    use crate::testing::{all, mount};
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    #[wasm_bindgen_test]
+    fn the_mark_is_four_bars_and_animates_as_asked() {
+        let still = mount(|| view! { <Mark size=26/> });
+        assert_eq!(all(&still, "rect").len(), 4);
+        assert_eq!(
+            all(&still, "svg")[0]
+                .get_attribute("class")
+                .unwrap_or_default(),
+            ""
+        );
+        let building = mount(|| view! { <Mark motion=Motion::BuildIn/> });
+        assert_eq!(all(&building, "svg.mk-anim").len(), 1);
+        let loading = mount(|| view! { <Mark motion=Motion::Loading/> });
+        assert_eq!(all(&loading, "svg.mk-loop").len(), 1);
+        assert_eq!(
+            all(&loading, "svg")[0]
+                .get_attribute("aria-hidden")
+                .as_deref(),
+            Some("true")
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn the_shuffle_deals_seven_letters_in_three_orders() {
+        let lockup = mount(|| view! { <Lockup size=40 shuffle=true/> });
+        let letters = all(&lockup, ".wm-shuffle .ch");
+        assert_eq!(letters.len(), 7);
+        assert_eq!(all(&lockup, ".ch.v2").len(), 2);
+        assert_eq!(
+            all(&lockup, ".wm-shuffle")[0]
+                .get_attribute("aria-label")
+                .as_deref(),
+            Some("pedagog")
+        );
+    }
+}

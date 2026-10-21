@@ -130,3 +130,44 @@ mod tests {
         assert!(!Choice::Light.dark(true) && Choice::Dark.dark(false));
     }
 }
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod browser {
+    use wasm_bindgen_test::*;
+
+    use super::*;
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    fn root_is_dark() -> bool {
+        web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.document_element())
+            .is_some_and(|e| e.class_list().contains("dark"))
+    }
+
+    #[wasm_bindgen_test]
+    async fn choices_apply_to_the_page_and_are_saved() {
+        let owner = Owner::new();
+        owner.set();
+        let theme = provide();
+        theme.set(Choice::Dark);
+        crate::testing::settle(50).await;
+        assert!(root_is_dark());
+        assert_eq!(
+            storage()
+                .and_then(|s| s.get_item(KEY).ok().flatten())
+                .as_deref(),
+            Some("dark")
+        );
+        theme.set(Choice::Light);
+        crate::testing::settle(50).await;
+        assert!(!root_is_dark());
+        theme.set(Choice::System);
+        assert_eq!(
+            storage().and_then(|s| s.get_item(KEY).ok().flatten()),
+            None,
+            "System isn't saved"
+        );
+    }
+}

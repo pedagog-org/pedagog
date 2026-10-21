@@ -168,3 +168,42 @@ mod tests {
         assert_eq!(countdown(5), "0:05");
     }
 }
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod browser {
+    use leptos_router::components::Router;
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_test::*;
+
+    use super::*;
+    use crate::testing::{all, mount, settle, text};
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    #[wasm_bindgen_test]
+    async fn the_email_step_comes_first_and_refusals_show_inline() {
+        let page = mount(|| {
+            crate::session::provide();
+            view! { <Router><Login/></Router> }
+        });
+        assert_eq!(text(&page, "h1"), "Log in");
+        assert_eq!(all(&page, "#login-email").len(), 1);
+        assert_eq!(
+            all(&page, "#login-code").len(),
+            0,
+            "the code comes after the email"
+        );
+        let input: web_sys::HtmlInputElement =
+            all(&page, "#login-email")[0].clone().unchecked_into();
+        input.set_value("ana@ufl.edu");
+        input
+            .dispatch_event(&web_sys::Event::new("input").unwrap())
+            .unwrap();
+        let form: web_sys::HtmlFormElement = all(&page, "form")[0].clone().unchecked_into();
+        form.request_submit().unwrap();
+        // No api behind the test page: the reply is refused, and says so beside the field.
+        settle(300).await;
+        assert_eq!(all(&page, ".field-error").len(), 1, "{}", page.inner_html());
+        assert_eq!(all(&page, "#login-code").len(), 0);
+    }
+}
