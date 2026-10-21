@@ -11,6 +11,7 @@
 //! include/exclude, check required paths, check the size. Each step is
 //! reported on the receipt.
 
+use pedagog_core::api::{Receipt, Submitted};
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 use std::path::Path;
@@ -44,22 +45,6 @@ pub struct SubmissionLimits {
 pub struct Part {
     pub name: String,
     pub bytes: Vec<u8>,
-}
-
-/// What intake did with a submission (stored, and returned to the submitter).
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Receipt {
-    /// The files submitted, after normalization.
-    pub files: Vec<String>,
-    /// Files the rules left out.
-    pub ignored: Vec<String>,
-    /// OS clutter dropped (`__MACOSX/`, `.DS_Store`, ...).
-    pub junk: usize,
-    /// The archive that was unpacked, if any.
-    pub unpacked: Option<String>,
-    /// The wrapping folder that was dropped, if any.
-    pub stripped: Option<String>,
-    pub size_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -312,18 +297,6 @@ pub struct SubmitQuery {
     at: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct Submitted {
-    pub submission_id: i64,
-    pub run_id: i64,
-    pub build_id: i64,
-    pub tree_hash: String,
-    /// 1-based position in the grading queue.
-    pub queue_position: Option<i64>,
-    #[serde(flatten)]
-    pub receipt: Receipt,
-}
-
 pub async fn submit(
     State(state): State<AppState>,
     UrlPath((course, slug)): UrlPath<(String, String)>,
@@ -458,6 +431,27 @@ pub async fn submission_status(
         .map_err(|e| internal("reading the submission", e))?
         .ok_or_else(|| refused(StatusCode::NOT_FOUND, format!("no submission {id}")))?;
     Ok(Json(status_of(&state, submission).await?).into_response())
+}
+
+/// A submission's files as stored and graded: a gzipped tar.
+pub async fn submission_archive(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<i64>,
+) -> Result<Response, Refused> {
+    let submission = db::get_submission(&state.pool, id)
+        .await
+        .map_err(|e| internal("reading the submission", e))?
+        .ok_or_else(|| refused(StatusCode::NOT_FOUND, format!("no submission {id}")))?;
+    let bytes = state
+        .objects
+        .get(&submission.object_key)
+        .await
+        .map_err(|e| internal("reading the submission's files", e))?;
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/gzip")],
+        bytes,
+    )
+        .into_response())
 }
 
 async fn status_of(

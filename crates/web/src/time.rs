@@ -16,31 +16,65 @@ pub fn now_millis() -> f64 {
     Date::now()
 }
 
-/// `Fri, Oct 23, 11:59 PM EDT`, in `zone` (an IANA name) or the viewer's.
-pub fn format(rfc3339: &str, zone: Option<&str>) -> String {
-    let Some(ms) = millis(rfc3339) else {
-        return rfc3339.to_owned();
-    };
-    let options = Object::new();
-    let set = |k: &str, v: &str| {
-        let _ = Reflect::set(&options, &JsValue::from_str(k), &JsValue::from_str(v));
-    };
-    set("weekday", "short");
-    set("month", "short");
-    set("day", "numeric");
-    set("hour", "numeric");
-    set("minute", "2-digit");
-    set("timeZoneName", "short");
-    if let Some(z) = zone {
-        set("timeZone", z);
+fn formatted(ms: f64, options: &[(&str, &str)]) -> Option<String> {
+    let o = Object::new();
+    for (k, v) in options {
+        let _ = Reflect::set(&o, &JsValue::from_str(k), &JsValue::from_str(v));
     }
-    let format = Intl::DateTimeFormat::new(&Array::of1(&JsValue::from_str("en-US")), &options);
-    format
+    Intl::DateTimeFormat::new(&Array::of1(&JsValue::from_str("en-US")), &o)
         .format()
         .call1(&JsValue::NULL, &Date::new(&JsValue::from_f64(ms)))
         .ok()
         .and_then(|s| s.as_string())
-        .unwrap_or_else(|| rfc3339.to_owned())
+}
+
+/// A moment as the pages show it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Moment {
+    pub ms: f64,
+    /// `Fri, Oct 23`
+    pub day: String,
+    /// `Fri, Oct 23 · 11:59 PM`
+    pub text: String,
+    /// `Eastern Daylight Time`, for a hover title.
+    pub zone: String,
+}
+
+/// An RFC 3339 time in the viewer's zone, if it parses.
+pub fn moment(rfc3339: &str) -> Option<Moment> {
+    let ms = millis(rfc3339)?;
+    let day = formatted(
+        ms,
+        &[("weekday", "short"), ("month", "short"), ("day", "numeric")],
+    )?;
+    let clock = formatted(ms, &[("hour", "numeric"), ("minute", "2-digit")])?;
+    let zone = formatted(ms, &[("timeZoneName", "long")])
+        .and_then(|s| s.split_once(", ").map(|(_, z)| z.to_owned()))
+        .unwrap_or_default();
+    Some(Moment {
+        ms,
+        text: format!("{day} · {clock}"),
+        day,
+        zone,
+    })
+}
+
+/// The viewer's zone, short (`EDT`) and long (`Eastern Daylight Time`), now.
+pub fn zone_now() -> (String, String) {
+    let ms = now_millis();
+    let name = |style| {
+        formatted(ms, &[("timeZoneName", style)])
+            .and_then(|s| s.split_once(", ").map(|(_, z)| z.to_owned()))
+            .unwrap_or_default()
+    };
+    (name("short"), name("long"))
+}
+
+/// A clock time: `3:05 PM`.
+pub fn clock(rfc3339: &str) -> String {
+    millis(rfc3339)
+        .and_then(|ms| formatted(ms, &[("hour", "numeric"), ("minute", "2-digit")]))
+        .unwrap_or_default()
 }
 
 /// How far `then` is from `now` (both in milliseconds), as people say it:

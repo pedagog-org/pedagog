@@ -15,7 +15,7 @@ pub enum Live {
     },
     Run {
         submission: i64,
-        status: String,
+        status: pedagog_core::api::RunState,
         /// Staff only.
         student: Option<String>,
         score: Option<f64>,

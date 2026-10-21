@@ -153,8 +153,8 @@ pub(crate) async fn find(
         })
 }
 
-/// Everyone in the course sees its assignments; staff also see each one's
-/// latest build.
+/// Everyone in the course sees its assignments: students with their dates and
+/// own standing, staff with each one's latest build.
 pub async fn list(
     State(state): State<AppState>,
     current: CurrentUser,
@@ -162,11 +162,22 @@ pub async fn list(
 ) -> Result<Response, ApiError> {
     let access = require(&state, &course, &current, Need::Member).await?;
     let staff = access.role != Some(pedagog_store::CourseRole::Student);
-    let mut out = Vec::new();
-    for a in db::assignments_in(&state.pool, &access.course.id)
+    let all = db::assignments_in(&state.pool, &access.course.id)
         .await
-        .map_err(|e| internal("reading the assignments", e))?
-    {
+        .map_err(|e| internal("reading the assignments", e))?;
+    if !staff {
+        let mut out = Vec::new();
+        for a in &all {
+            out.push(
+                crate::student::assignment(&state, a, current.user.id)
+                    .await?
+                    .0,
+            );
+        }
+        return Ok(Json(out).into_response());
+    }
+    let mut out = Vec::new();
+    for a in all {
         let mut view = serde_json::json!({ "slug": a.slug, "name": a.name });
         if staff {
             let latest = db::builds_of(&state.pool, a.id, 1)
@@ -184,14 +195,23 @@ pub async fn list(
     Ok(Json(out).into_response())
 }
 
-/// An assignment and its recent builds (staff).
+/// An assignment: for staff with its recent builds, for students with their
+/// standing and what a submission must be.
 pub async fn show(
     State(state): State<AppState>,
     current: CurrentUser,
     Path((course, slug)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
-    require(&state, &course, &current, Need::See).await?;
-    let a = find(&state, &course, &slug).await?;
+    let access = require(&state, &course, &current, Need::Member).await?;
+    let a = find(&state, &access.course.id, &slug).await?;
+    if access.role == Some(pedagog_store::CourseRole::Student) {
+        let (assignment, _) = crate::student::assignment(&state, &a, current.user.id).await?;
+        return Ok(Json(pedagog_core::api::StudentAssignmentPage {
+            assignment,
+            rules: crate::student::rules(&state, &a).await?,
+        })
+        .into_response());
+    }
     let builds = db::builds_of(&state.pool, a.id, RECENT_BUILDS)
         .await
         .map_err(|e| internal("reading the builds", e))?;
@@ -305,7 +325,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../store/migrations")]
-    async fn staff_see_builds_and_students_only_the_list(pool: PgPool) -> sqlx::Result<()> {
+    async fn staff_see_builds_and_students_their_own_view(pool: PgPool) -> sqlx::Result<()> {
         use pedagog_store::db::assignments::*;
         course_with_staff(&pool).await?;
         let a = upsert_assignment(&pool, "cop3502-f26", "linked-list", "Linked List").await?;
@@ -335,18 +355,31 @@ mod tests {
         let listed =
             json(get(&format!("{url}/courses/cop3502-f26/assignments"), &alice).await).await;
         assert_eq!(
-            listed,
-            serde_json::json!([{"slug": "linked-list", "name": "Linked List"}])
+            (
+                &listed[0]["slug"],
+                &listed[0]["window"],
+                &listed[0]["accepting"]
+            ),
+            (
+                &serde_json::json!("linked-list"),
+                &serde_json::json!("no_dates"),
+                &serde_json::json!(false)
+            )
         );
-        assert_eq!(
+        assert!(
+            listed[0].get("latest_build").is_none(),
+            "builds stay with staff"
+        );
+        let page = json(
             get(
                 &format!("{url}/courses/cop3502-f26/assignments/linked-list"),
-                &alice
+                &alice,
             )
-            .await
-            .status(),
-            403
-        );
+            .await,
+        )
+        .await;
+        assert_eq!(page["rules"], serde_json::Value::Null, "no usable build");
+        assert!(page.get("builds").is_none());
 
         let ta = login(&url, &outbox, "ta@ufl.edu").await;
         let listed = json(get(&format!("{url}/courses/cop3502-f26/assignments"), &ta).await).await;

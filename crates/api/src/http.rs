@@ -45,6 +45,7 @@ fn api(state: AppState) -> Router {
         .route("/auth/finish", post(finish))
         .route("/auth/logout", post(logout))
         .route("/me", get(me))
+        .route("/me/courses", get(crate::student::home))
         .route(
             "/client-errors",
             post(crate::client_errors::report)
@@ -80,6 +81,10 @@ fn api(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(max_upload)),
         )
         .route("/courses/{course}/submissions/{id}", get(submissions::show))
+        .route(
+            "/courses/{course}/submissions/{id}/download",
+            get(submissions::download),
+        )
         .route(
             "/courses/{course}/submissions/{id}/activate",
             post(results::activate).delete(results::deactivate),

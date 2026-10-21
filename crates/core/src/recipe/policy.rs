@@ -193,6 +193,20 @@ impl Dates {
         }
     }
 
+    /// [`acceptance`](Self::acceptance) as a value to badge.
+    pub fn window(&self, now: OffsetDateTime) -> crate::api::Window {
+        use crate::api::Window;
+        if self.is_empty() {
+            return Window::NoDates;
+        }
+        match (self.open, self.acceptance(now)) {
+            (_, Acceptance::OnTime) => Window::Open,
+            (_, Acceptance::Late) => Window::OpenLate,
+            (Some(Open::At(open)), Acceptance::Closed(_)) if now < open.0 => Window::Upcoming,
+            (_, Acceptance::Closed(_)) => Window::Closed,
+        }
+    }
+
     /// Whether `after_end` results are visible at `now`.
     pub fn ended(&self, now: OffsetDateTime) -> bool {
         self.end().is_some_and(|end| now > end)
@@ -498,6 +512,20 @@ mod tests {
             matches!(d.acceptance(at("2026-09-12T12:00:00Z")), Acceptance::Closed(r) if r.contains("deadline"))
         );
         assert!(!d.ended(at("2026-09-09T12:00:00Z")) && d.ended(at("2026-09-12T12:00:00Z")));
+    }
+
+    #[test]
+    fn the_window_names_each_stage() {
+        use crate::api::Window;
+        let d = policy(DATES).unwrap().dates;
+        assert_eq!(d.window(at("2026-08-31T12:00:00Z")), Window::Upcoming);
+        assert_eq!(d.window(at("2026-09-05T12:00:00Z")), Window::Open);
+        assert_eq!(d.window(at("2026-09-09T12:00:00Z")), Window::OpenLate);
+        assert_eq!(d.window(at("2026-09-12T12:00:00Z")), Window::Closed);
+        assert_eq!(
+            Dates::default().window(at("2026-09-05T12:00:00Z")),
+            Window::NoDates
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use pedagog_core::api::{MyResults, RunState, Shown};
 use pedagog_core::recipe::policy::ResultsPolicy;
 use pedagog_core::results::{Results, TestVisibility};
 use pedagog_core::view::{Stage, student_view, tallies};
@@ -55,6 +56,33 @@ fn parsed(run: &GradingRun) -> Option<Results> {
     run.results
         .as_deref()
         .and_then(|r| serde_json::from_str(r).ok())
+}
+
+pub(crate) fn run_state(s: RunStatus) -> RunState {
+    match s {
+        RunStatus::Queued => RunState::Queued,
+        RunStatus::Grading => RunState::Grading,
+        RunStatus::Graded => RunState::Graded,
+        RunStatus::Error => RunState::Error,
+    }
+}
+
+/// The score a student sees now of a graded run.
+pub(crate) fn shown(p: &Policy, run: &GradingRun) -> Option<Shown> {
+    if run.status != RunStatus::Graded {
+        return None;
+    }
+    let results = parsed(run)?;
+    let view = student_view(
+        &results,
+        &visibilities(p, &results),
+        p.dates().ended(OffsetDateTime::now_utc()),
+        p.released_at.is_some(),
+    );
+    Some(Shown {
+        score: view.score,
+        total: view.total,
+    })
 }
 
 /// The stage a student sees now.
@@ -332,32 +360,36 @@ pub async fn mine(
             let view = results
                 .as_ref()
                 .map(|res| student_view(res, &visibilities(&p, res), ended, released));
-            ("graded", view, None)
+            (RunState::Graded, view, None)
         }
-        Some(r) if r.status == RunStatus::Error => ("error", None, Some(sentence(r.error_kind))),
         Some(r) => (
-            if r.status == RunStatus::Queued {
-                "queued"
-            } else {
-                "grading"
-            },
+            run_state(r.status),
             None,
-            None,
+            (r.status == RunStatus::Error).then(|| sentence(r.error_kind)),
         ),
-        None => ("queued", None, None),
+        None => (RunState::Queued, None, None),
     };
-    Ok(Json(serde_json::json!({
-        "submission": s.id,
-        "counts": counts,
-        "activated": activated_by.is_some(),
-        "counted_at": s.counted_at,
-        "submitted_by": s.submitted_by,
-        "late": lateness(&p.dates(), &s),
-        "status": status,
-        "why": why,
-        "next": why.map(|_| NEXT_STEP),
-        "results": view,
-    }))
+    let queue_position = match &run {
+        Some(r) if r.status == RunStatus::Queued => {
+            pedagog_store::db::queue::position(&state.pool, pedagog_store::QueuedRun::Grading(r.id))
+                .await
+                .map_err(|e| internal("reading the queue", e))?
+        }
+        _ => None,
+    };
+    Ok(Json(MyResults {
+        submission: s.id,
+        counts,
+        activated: activated_by.is_some(),
+        late: lateness(&p.dates(), &s),
+        counted_at: s.counted_at,
+        submitted_by: s.submitted_by,
+        status,
+        queue_position,
+        why: why.map(str::to_owned),
+        next: why.map(|_| NEXT_STEP.to_owned()),
+        results: view,
+    })
     .into_response())
 }
 
@@ -439,6 +471,10 @@ mod tests {
     use sqlx::PgPool;
 
     use crate::testing::{delete, get, json, login, post, serve};
+    use pedagog_core::api::{
+        MyCourses, MyResults, RunState, Shown, StudentAssignment, StudentAssignmentPage,
+        SubmissionRow, Window,
+    };
 
     const RESULTS: &str = r#"{"run": {"status": "complete", "output": ""},
       "summary": {"score": 6.0, "total": 9.0},
@@ -638,6 +674,110 @@ mod tests {
         let mine = json(get(&format!("{url}{BASE}/my-results"), &alice).await).await;
         assert_eq!(mine["results"]["tests"].as_array().unwrap().len(), 2);
         assert_eq!(mine["results"]["tests"][1]["error"], "assert 3 == 4");
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "../store/migrations")]
+    async fn students_see_their_standing_in_lists_and_on_home(pool: PgPool) -> sqlx::Result<()> {
+        let (a, b) = course(&pool).await?;
+        graded(&pool, a, b, "alice@ufl.edu", None).await?;
+        let (url, outbox) = serve(pool.clone()).await;
+        let alice = login(&url, &outbox, "alice@ufl.edu").await;
+        let list: Vec<StudentAssignment> = serde_json::from_value(
+            json(get(&format!("{url}/courses/cop3502-f26/assignments"), &alice).await).await,
+        )
+        .unwrap();
+        assert_eq!((list[0].window, list[0].accepting), (Window::Open, true));
+        let mine = list[0].mine.clone().unwrap();
+        assert_eq!(
+            (mine.status, mine.shown, mine.submissions),
+            (
+                RunState::Graded,
+                Some(Shown {
+                    score: 2.0,
+                    total: 2.0
+                }),
+                1
+            ),
+            "only the score shown now"
+        );
+
+        let page: StudentAssignmentPage =
+            serde_json::from_value(json(get(&format!("{url}{BASE}"), &alice).await).await).unwrap();
+        let rules = page.rules.unwrap();
+        assert_eq!(
+            (rules.max_bytes, rules.unpack_archives, rules.strip_wrapper),
+            (Some(1 << 20), true, true),
+            "the api's ceiling, with no limit of the assignment's own"
+        );
+
+        let history: Vec<SubmissionRow> = serde_json::from_value(
+            json(get(&format!("{url}{BASE}/submissions"), &alice).await).await,
+        )
+        .unwrap();
+        assert_eq!(
+            (history[0].shown, history[0].score),
+            (
+                Some(Shown {
+                    score: 2.0,
+                    total: 2.0
+                }),
+                None
+            ),
+            "the shown score, never the raw one"
+        );
+
+        // Open with no deadline: on Home until submitted.
+        let home = |token: String| {
+            let url = url.clone();
+            async move {
+                serde_json::from_value::<MyCourses>(
+                    json(get(&format!("{url}/me/courses"), &token).await).await,
+                )
+                .unwrap()
+            }
+        };
+        assert!(home(alice).await.courses[0].items.is_empty());
+        let carol = login(&url, &outbox, "carol@ufl.edu").await;
+        let courses = home(carol).await.courses;
+        assert_eq!(
+            (courses[0].id.as_str(), courses[0].items[0].slug.as_str()),
+            ("cop3502-f26", "linked-list")
+        );
+        assert!(courses[0].items[0].mine.is_none());
+        let ta = login(&url, &outbox, "ta@ufl.edu").await;
+        assert!(home(ta).await.courses[0].items.is_empty(), "staff: later");
+
+        // A queued submission says where it is in line.
+        let carol_id = accounts::user_by_email(&pool, "carol@ufl.edu")
+            .await?
+            .unwrap()
+            .id;
+        db::record_submission(
+            &pool,
+            &NewSubmission {
+                assignment_id: a,
+                user_id: carol_id,
+                submitted_by: None,
+                staff: false,
+                counted_at: None,
+                build_id: b,
+                source: SubmissionSource::Upload,
+                tree_hash: "t",
+                object_key: "k",
+                size_bytes: 1,
+                receipt: "{}",
+            },
+        )
+        .await?;
+        let carol = login(&url, &outbox, "carol@ufl.edu").await;
+        let mine: MyResults = serde_json::from_value(
+            json(get(&format!("{url}{BASE}/my-results"), &carol).await).await,
+        )
+        .unwrap();
+        assert_eq!(mine.status, RunState::Queued);
+        // (Not first: the fixture never releases the entries queued before it.)
+        assert!(mine.queue_position.is_some());
         Ok(())
     }
 

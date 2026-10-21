@@ -169,6 +169,24 @@ impl RubricItem {
 }
 
 impl TestResult {
+    /// What the test could add, when it's only extra credit (every item is,
+    /// or a version 1 test says so): its declared points.
+    pub fn extra_credit_worth(&self) -> Option<f64> {
+        if !self.items.is_empty() {
+            return self
+                .items
+                .iter()
+                .all(|i| i.extra_credit != ExtraCredit::None)
+                .then(|| self.items.iter().map(|i| i.max).sum());
+        }
+        match self.extra_credit {
+            Some(ExtraCredit::Bonus | ExtraCredit::AttemptedWork) => {
+                Some(self.clamp.and_then(|(_, hi)| hi).unwrap_or(self.max))
+            }
+            _ => None,
+        }
+    }
+
     /// The declared id, or else the node: what to call the test in messages.
     pub fn key(&self) -> &str {
         self.id.as_deref().unwrap_or(&self.node)
@@ -705,6 +723,18 @@ visibility:
     }
 
     #[test]
+    fn a_test_of_only_extra_credit_items_says_what_it_could_add() {
+        let mut r = with_rubric_tests();
+        let t = &mut r.tests[2];
+        assert_eq!(t.extra_credit_worth(), None, "it has owed items");
+        for i in &mut t.items {
+            i.extra_credit = ExtraCredit::Bonus;
+        }
+        let worth: f64 = t.items.iter().map(|i| i.max).sum();
+        assert_eq!(t.extra_credit_worth(), Some(worth));
+    }
+
+    #[test]
     fn rubric_items_must_add_up() {
         let mut r = with_rubric_tests();
         r.tests[2].items[0].score = 1.0;
@@ -783,6 +813,8 @@ visibility:
         assert_eq!(reverse.extra_credit, Some(ExtraCredit::AttemptedWork));
         assert_eq!(reverse.attempted, Some(false));
         assert_eq!(reverse.max, 0.0, "not attempted: not in the total");
+        assert!(reverse.extra_credit_worth().is_some(), "only extra credit");
+        assert_eq!(pop_front.extra_credit_worth(), None);
         assert!(r.tests[1].feedback.contains("+1 empty list"));
         assert!(r.solution_mismatches().is_empty(), "the example validates");
     }
