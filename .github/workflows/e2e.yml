@@ -47,6 +47,8 @@ jobs:
         run: cargo xtask kind-rebuild --wait
 
       - run: cargo xtask e2e
+        env:
+          CHROMEDRIVER: ${{ env.CHROMEWEBDRIVER }}/chromedriver
 
       - name: Logs on failure
         if: failure()

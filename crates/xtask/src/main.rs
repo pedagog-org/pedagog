@@ -471,6 +471,12 @@ fn run(task: Task) -> Result<()> {
                 &["test", "-q", "-p", "pedagog-e2e", "--test", "kind", "--"],
             );
             cmd.args(&filters).env("PEDAGOG_E2E", "1");
+            // For the browser checks.
+            let driver = match std::env::var("CHROMEDRIVER") {
+                Ok(d) => d,
+                Err(_) => chromedriver()?,
+            };
+            cmd.env("CHROMEDRIVER", driver);
             shown(&mut cmd)
         }
     }

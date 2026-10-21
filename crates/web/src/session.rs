@@ -31,9 +31,12 @@ impl Session {
             .with(|me| me.as_ref().is_some_and(|m| m.user.role == "admin"))
     }
 
-    /// Ask the api again (after logging in, or a course change).
+    /// Ask the api again (after logging in, or a course change). Until it
+    /// answers the session counts as unknown, so pages wait instead of sending
+    /// someone who just logged in back to log in.
     pub fn reload(&self) {
         let (me, loaded) = (self.me, self.loaded);
+        loaded.set(false);
         leptos::task::spawn_local(async move {
             let got = crate::api::get::<Me>("/me").await.ok();
             me.set(got);
