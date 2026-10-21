@@ -148,9 +148,12 @@ mod browser {
 
     #[wasm_bindgen_test]
     async fn choices_apply_to_the_page_and_are_saved() {
-        let owner = Owner::new();
-        owner.set();
-        let theme = provide();
+        // Provided inside a mounted view, as the app does (mounting starts the
+        // executor its effects run on, whichever test runs first).
+        let slot = std::rc::Rc::new(std::cell::Cell::new(None));
+        let set = slot.clone();
+        crate::testing::mount(move || set.set(Some(provide())));
+        let theme = slot.get().expect("provided");
         theme.set(Choice::Dark);
         crate::testing::settle(50).await;
         assert!(root_is_dark());
