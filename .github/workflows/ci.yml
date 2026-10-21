@@ -77,10 +77,8 @@ jobs:
       - run: cargo test --locked --workspace --all-features
       # The web UI as browsers run it (the workspace build above is native).
       - run: cargo clippy --locked -p pedagog-web --target wasm32-unknown-unknown -- -D warnings
-      # Component tests in headless Chrome (the runners have Chrome and its driver).
+      # Component tests in headless Chrome (xtask finds the runner's chromedriver).
       - run: cargo xtask web-test
-        env:
-          CHROMEDRIVER: ${{ env.CHROMEWEBDRIVER }}/chromedriver
       # The first load stays within its budget (wasm, js, css, preloaded fonts).
       - run: cargo xtask web-budget
 

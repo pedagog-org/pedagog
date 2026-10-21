@@ -472,11 +472,7 @@ fn run(task: Task) -> Result<()> {
             );
             cmd.args(&filters).env("PEDAGOG_E2E", "1");
             // For the browser checks.
-            let driver = match std::env::var("CHROMEDRIVER") {
-                Ok(d) => d,
-                Err(_) => chromedriver()?,
-            };
-            cmd.env("CHROMEDRIVER", driver);
+            cmd.env("CHROMEDRIVER", find_chromedriver()?);
             shown(&mut cmd)
         }
     }
@@ -760,13 +756,7 @@ fn web_test() -> Result<()> {
             ],
         ))?;
     }
-    let driver = match std::env::var("CHROMEDRIVER") {
-        Ok(d) => d,
-        Err(_) => match ok(&mut here("which", &["chromedriver"])) {
-            Ok(found) if !found.trim().is_empty() => found.trim().to_owned(),
-            _ => chromedriver()?,
-        },
-    };
+    let driver = find_chromedriver()?;
     shown(
         here(
             "cargo",
@@ -795,6 +785,24 @@ fn wasm_bindgen_version() -> Result<String> {
                 .map(str::to_owned)
         })
         .ok_or_else(|| "no wasm-bindgen in Cargo.lock".into())
+}
+
+/// A chromedriver: `CHROMEDRIVER`, the GitHub runner's (`CHROMEWEBDRIVER`),
+/// one on PATH, or one fetched for this machine's Chrome.
+fn find_chromedriver() -> Result<String> {
+    if let Ok(d) = std::env::var("CHROMEDRIVER") {
+        return Ok(d);
+    }
+    if let Ok(dir) = std::env::var("CHROMEWEBDRIVER") {
+        let d = Path::new(&dir).join("chromedriver");
+        if d.exists() {
+            return Ok(d.display().to_string());
+        }
+    }
+    match ok(&mut here("which", &["chromedriver"])) {
+        Ok(found) if !found.trim().is_empty() => Ok(found.trim().to_owned()),
+        _ => chromedriver(),
+    }
 }
 
 /// A chromedriver for this machine's Chrome, from Chrome for Testing, kept in target/tools.
