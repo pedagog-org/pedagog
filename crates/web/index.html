@@ -3,9 +3,23 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Pedagog</title>
-    <link data-trunk rel="css" href="style/tokens.css" />
+    <meta name="color-scheme" content="light dark" />
+    <title>pedagog</title>
+    <!-- The saved theme (or the system's) before the first paint, so dark mode never flashes light. -->
+    <script>
+      (function () {
+        var t;
+        try { t = localStorage.getItem("pedagog-theme"); } catch (e) {}
+        var dark = t === "dark" || (t !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+        if (dark) document.documentElement.classList.add("dark");
+      })();
+    </script>
+    <link rel="preload" href="/fonts/plex-sans-latin1.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/plex-mono-400-latin1.woff2" as="font" type="font/woff2" crossorigin />
+    <link data-trunk rel="copy-dir" href="assets/fonts" />
+    <link data-trunk rel="css" href="style/fonts.css" />
+    <link data-trunk rel="css" href="style/pedagog.css" />
     <link data-trunk rel="rust" data-wasm-opt="z" />
   </head>
-  <body></body>
+  <body class="pg"></body>
 </html>
