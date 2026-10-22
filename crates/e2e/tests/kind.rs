@@ -511,6 +511,88 @@ fn submissions_are_graded(e: &Env) -> Result<String> {
     Ok("the solution grades 10/10; a buggy one 9/10, naming the failing test".into())
 }
 
+/// The buggy submission's failure reaches students sanitized: where and what,
+/// without the test's source or object addresses (pedagog-pytest 2.2).
+fn errors_are_sanitized(e: &Env) -> Result<String> {
+    let results = sql(&format!(
+        "SELECT r.results FROM grading_runs r JOIN submissions s ON s.id = r.submission_id
+           JOIN assignments a ON a.id = s.assignment_id JOIN users u ON u.id = s.user_id
+          WHERE a.course_id = '{}' AND a.slug = '{UPLOAD_ID}' AND u.email LIKE 'e2e-buggy%'
+            AND r.status = 'graded' ORDER BY r.id DESC LIMIT 1",
+        e.course
+    ))?;
+    let results: serde_json::Value = serde_json::from_str(&results).map_err(|x| x.to_string())?;
+    require(results["sanitizes-errors"] == true, || {
+        "the results don't say they sanitize errors".into()
+    })?;
+    let failing: Vec<&serde_json::Value> = results["tests"]
+        .as_array()
+        .map(|t| t.iter().filter(|t| t["status"] != "pass").collect())
+        .unwrap_or_default();
+    require(!failing.is_empty(), || "no failing test".into())?;
+    for t in &failing {
+        let sanitized = t["error-sanitized"].as_str().unwrap_or_default();
+        require(!sanitized.is_empty(), || {
+            format!("{} has no sanitized error", t["name"])
+        })?;
+        require(
+            !sanitized.contains("def test_") && !sanitized.contains(" at 0x"),
+            || {
+                format!(
+                    "{}'s sanitized error shows test source or addresses: {sanitized}",
+                    t["name"]
+                )
+            },
+        )?;
+    }
+    let first = failing[0]["error-sanitized"].as_str().unwrap_or_default();
+    Ok(format!(
+        "students get: {}",
+        first.lines().next().unwrap_or_default()
+    ))
+}
+
+/// A downloaded submission's files are dated when they were uploaded.
+fn downloads_are_dated(e: &Env) -> Result<String> {
+    use std::io::Read as _;
+    let submission = e
+        .good_first
+        .lock()
+        .map_err(|x| x.to_string())?
+        .clone()
+        .ok_or("needs the grading check")?;
+    let session = std::fs::read_to_string(student("good").dir().join("pedagog/session.json"))
+        .map_err(|x| x.to_string())?;
+    let token: serde_json::Value = serde_json::from_str(&session).map_err(|x| x.to_string())?;
+    let url = format!(
+        "http://localhost:{}/api/courses/{}/submissions/{submission}/download",
+        pedagog_e2e::API_PORT,
+        e.course
+    );
+    let bytes = reqwest::blocking::Client::new()
+        .get(&url)
+        .bearer_auth(token["token"].as_str().unwrap_or_default())
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .and_then(reqwest::blocking::Response::bytes)
+        .map_err(|x| x.to_string())?;
+    let mut tar = Vec::new();
+    flate2::read::GzDecoder::new(bytes.as_ref())
+        .read_to_end(&mut tar)
+        .map_err(|x| x.to_string())?;
+    // The first entry's header: mtime is 12 octal digits at offset 136.
+    let field = String::from_utf8_lossy(tar.get(136..148).unwrap_or_default());
+    let mtime = i64::from_str_radix(field.trim_matches(|c: char| c == '\0' || c == ' '), 8)
+        .map_err(|x| format!("no mtime in {field:?}: {x}"))?;
+    let age = time::OffsetDateTime::now_utc().unix_timestamp() - mtime;
+    require((0..3600).contains(&age), || {
+        format!("the files are dated {mtime}, {age}s ago")
+    })?;
+    Ok(format!(
+        "submission {submission}'s files are dated {age}s ago (its upload)"
+    ))
+}
+
 fn finder_zip_is_cleaned(e: &Env) -> Result<String> {
     use std::io::Write as _;
     let zip_path = e.file("hw1.zip");
@@ -1152,6 +1234,18 @@ const CHECKS: &[Spec] = &[
         "submissions_are_graded",
         submissions_are_graded,
         &["upload_example_validates"],
+        UPLOAD,
+    ),
+    spec(
+        "errors_are_sanitized",
+        errors_are_sanitized,
+        &["submissions_are_graded"],
+        UPLOAD,
+    ),
+    spec(
+        "downloads_are_dated",
+        downloads_are_dated,
+        &["submissions_are_graded"],
         UPLOAD,
     ),
     spec(
