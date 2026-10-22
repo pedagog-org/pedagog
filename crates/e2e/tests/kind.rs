@@ -990,7 +990,7 @@ fn web_submit(e: &mut Env) -> Result<String> {
         require(of.starts_with(&format!("/ {got} ")), || {
             format!("the score shown is {got} {of}")
         })?;
-        let history = element(&c, Duration::from_secs(30), "#hist-h + ul li").await?;
+        let history = element(&c, Duration::from_secs(30), "#hist-h + .card li").await?;
         let row = history.text().await.map_err(cmd)?;
         require(
             row.contains(&format!("{got}/{got} shown")) && row.contains("Counts"),
