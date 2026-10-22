@@ -40,8 +40,6 @@ pages, read-only.
 - `error` keeps only the failure's short reason ("exit status 1", "timed out"); the log
   moves to Garage. Older rows (whose `error` is the whole pod log) keep only its last
   non-empty line, and their build page says "no log kept".
-- `rebuild_queued_by` and `rebuild_regrade` on `assignment_builds`: a rebuild waiting
-  for the build in flight (below).
 - A trigger on `assignments` sends `{kind:"current", assignment, build}` when
   `current_build_id` changes. It uses the same channel as the build events.
 
@@ -69,10 +67,9 @@ pages, read-only.
     current build already.
   - **A newer build in flight:** the make-current still happens. If the newer one
     passes later, it becomes current as usual.
-  - **Image deleted and a build in flight:** only one attempt may be in flight, so the
-    rebuild is queued on the old build and starts when the in-flight one finishes.
-    When it passes, it becomes current only if no build newer than the old one passed
-    meanwhile ("newer wins"); otherwise it's kept as a usable build, not current.
+  - **Image deleted and a build in flight:** the rebuild starts at once and cancels the
+    build in flight (superseded, as a new upload would). Its regrade request goes with
+    it, so the instructor uploads that version again if they still want it.
 
 ### Api (typed, in `core::api`)
 
@@ -134,8 +131,8 @@ pages, read-only.
   - the in-flight note ("build 15 is still validating; if it passes it becomes current
     after this");
   - the rebuild note when the image is gone ("build 12's image was cleaned up; making
-    it current rebuilds it first"), also marked in the builds table, plus "starts once
-    build 15 finishes" when one is in flight.
+    it current rebuilds it first"), also marked in the builds table, plus "this cancels
+    build 15, which is still validating" when one is in flight.
 - **Upload:**
   - form:
     - a drop zone for a folder or a `.tar.gz` / `.zip`, with name, file count, size and
@@ -177,7 +174,7 @@ pages, read-only.
   - top-level folder stripping;
   - logs written with line counts for both phases;
   - make current with the image present and deleted (rebuild row, same upload);
-  - a rebuild queued behind a build in flight starts after it, and newer wins.
+  - a rebuild with a build in flight cancels (supersedes) it and starts at once.
 - **Api:** typed shapes; 403 for graders on upload and make current; the log endpoint
   streams; staff Home items.
 - **Native web:** overview alerts from data; durations; the make-current dialog's notes;
@@ -198,9 +195,11 @@ pages, read-only.
 - **Re-running the old build in place:** fewer rows, but history is lost and "finished
   stays finished" breaks.
 - **Make current with a build in flight:**
-  - refusing it blocks a revert while a fix builds (for the rebuild case, refusing was
-    simpler but you chose to queue it);
-  - superseding the in-flight build would make the instructor upload it again.
+  - refusing it blocks a revert while a fix builds;
+  - superseding the in-flight build would make the instructor upload it again (chosen
+    only when a rebuild is needed);
+  - for the rebuild: refusing until the in-flight build ends, or queuing the rebuild
+    behind it with "newer wins" (a queued state and a check in `finish_validation`).
 - **Packing in the browser:** about 100–150 KB more wasm (rejected in the UI plan).
 - **Logs in Postgres:** they bloat the database (rejected in the UI plan).
 - **All tabs now, disabled:** the final layout early, but dead controls.
@@ -219,12 +218,12 @@ since the stored archive format doesn't change.
 
 ## Steps (commits)
 
-1. `feat(store)`: migration 0017 (uploaded_by, rebuild_of, the queued rebuild, phase
-   times, line counts, the current trigger); make current; builds pagination.
+1. `feat(store)`: migration 0017 (uploaded_by, rebuild_of, phase times, line counts,
+   the current trigger); make current; builds pagination.
 2. `feat(jobs)`: multipart / zip intake normalised to one pack; uploader recorded.
 3. `feat(jobs)`: logs to Garage per phase with line counts; their 180-day cleanup.
-4. `feat(jobs)`: make current; rebuild when the image is gone, queued behind a build in
-   flight, newer wins.
+4. `feat(jobs)`: make current; rebuild when the image is gone, cancelling a build in
+   flight.
 5. `feat(api)`: typed staff list, assignment, build, builds; log endpoint; make current;
    upload passthrough; staff Home items.
 6. `build(web)`: wasm-split spike, lazy staff routes, the per-chunk budget.
