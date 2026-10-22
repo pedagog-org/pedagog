@@ -52,9 +52,12 @@ pub fn progress(
 }
 
 #[component]
-pub fn Progress(steps: Vec<Step>) -> impl IntoView {
+pub fn Progress(
+    steps: Vec<Step>,
+    #[prop(default = "Grading progress")] label: &'static str,
+) -> impl IntoView {
     view! {
-        <ol class="steps" aria-label="Grading progress">
+        <ol class="steps" aria-label=label>
             {steps.into_iter().map(|s| {
                 let (class, current) = match s.stage {
                     Stage::Done => ("step done", None),

@@ -20,6 +20,13 @@ pub const SESSION_FOR_MS: f64 = 5.0 * 60_000.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     /// Reused while fresh; refetched when stale or invalidated.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "for members, settings and admin lists (later pages)"
+        )
+    )]
     Session,
     /// Shown from the cache at once, and refetched every time.
     Revalidate,

@@ -1,6 +1,6 @@
 //! Home: your courses, each with what needs you. Students see what's open or
-//! due soon in each; staff see their courses (what needs their attention
-//! comes with the staff pages).
+//! due soon in each; staff see failed builds, students who couldn't be
+//! graded, builds and regrades under way, and what's due within a week.
 
 use leptos::prelude::*;
 use leptos_router::components::A;
@@ -61,7 +61,9 @@ fn CourseCard(course: HomeCourse) -> impl IntoView {
     let labelled = heading.clone();
     let student = course.role == "student";
     let items = course.items;
+    let staff_items = course.staff_items;
     let id = course.id.clone();
+    let staff_id = course.id.clone();
     view! {
         <section class="card" aria-labelledby=labelled>
             <div class="card-head">
@@ -81,6 +83,25 @@ fn CourseCard(course: HomeCourse) -> impl IntoView {
                     <div class="stack">
                         <div class="eyebrow" style="padding: 12px 20px 4px">"Open or due soon"</div>
                         {items.into_iter().map(|a| view! { <Item course=id.clone() a=a/> }).collect_view()}
+                    </div>
+                }
+                .into_any()
+            })}
+            {(!student).then(|| if staff_items.is_empty() {
+                view! { <p class="small muted" style="padding: 16px 20px">"Nothing needs you right now."</p> }.into_any()
+            } else {
+                view! {
+                    <div class="stack">
+                        <div class="eyebrow" style="padding: 12px 20px 4px">"Needs attention"</div>
+                        {staff_items.iter().map(|item| {
+                            let (said, tail) = crate::staff::describe::staff_item(item);
+                            view! {
+                                <A href=format!("/courses/{staff_id}{tail}")
+                                    attr:style="display: block; padding: 12px 20px; border-top: 1px solid var(--border); text-decoration: none; color: var(--text)">
+                                    {said}
+                                </A>
+                            }
+                        }).collect_view()}
                     </div>
                 }
                 .into_any()

@@ -1,24 +1,16 @@
 //! A course's assignments: for students, each with its window, when it's due
-//! and their own state; for staff, names (their table comes with the staff
-//! pages).
+//! and their own state; for staff, a table with builds and submissions.
 
 use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
 use pedagog_core::api::StudentAssignment;
-use serde::Deserialize;
 
 use crate::cache::{Kind, use_cached};
 use crate::components::{Badge, Failed, Loading, moments};
 use crate::describe::{mine_badge, when_line, window_badge};
 use crate::session::use_session;
 use crate::shell::Shell;
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct AssignmentRow {
-    pub slug: String,
-    pub name: String,
-}
 
 #[component]
 pub fn Course() -> impl IntoView {
@@ -39,7 +31,7 @@ pub fn Course() -> impl IntoView {
                     <p class="muted small">"Times are in your time zone ("<abbr class="t" title=zone_long.clone()>{zone.clone()}</abbr>")."</p>
                 </div>
             </div>
-            {move || if student() { view! { <StudentList course=course/> }.into_any() } else { view! { <StaffList course=course/> }.into_any() }}
+            {move || if student() { view! { <StudentList course=course/> }.into_any() } else { view! { <crate::staff::list::StaffList course=course/> }.into_any() }}
         </Shell>
     }
 }
@@ -84,33 +76,6 @@ fn Row(course: String, a: StudentAssignment) -> impl IntoView {
                 <Badge words=state style="height: 26px; padding: 0 10px; font-size: 12.5px"/>
             </A>
         </li>
-    }
-}
-
-#[component]
-fn StaffList(course: Signal<String>) -> impl IntoView {
-    let assignments = use_cached(
-        move || format!("/courses/{}/assignments", course.get()),
-        Kind::Session,
-        |path| async move { crate::api::get::<Vec<AssignmentRow>>(&path).await },
-    );
-    move || {
-        match assignments.get() {
-        None => view! { <Loading/> }.into_any(),
-        Some(Err(p)) => view! { <Failed problem=p/> }.into_any(),
-        Some(Ok(list)) if list.is_empty() => view! { <Nothing/> }.into_any(),
-        Some(Ok(list)) => view! {
-            <div class="card">
-                {list.into_iter().map(|a| view! {
-                    <div class="row between" style="padding: 14px 18px; border-bottom: 1px solid var(--border)">
-                        <span class="strong">{a.name}</span>
-                        <span class="mono xs faint">{a.slug}</span>
-                    </div>
-                }).collect_view()}
-            </div>
-        }
-        .into_any(),
-    }
     }
 }
 

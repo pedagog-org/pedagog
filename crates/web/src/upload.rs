@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use pedagog_core::api::{SubmitReply, SubmitRules};
+use pedagog_core::api::SubmitRules;
 use pedagog_core::recipe::submission::is_junk;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::Closure;
@@ -208,11 +208,11 @@ async fn entries_of(reader: &web_sys::FileSystemDirectoryReader) -> Vec<web_sys:
 
 /// Send the files to `path` (under `/api`), reporting the share uploaded
 /// (0.0–1.0) as it goes.
-pub async fn send(
+pub async fn send<T: serde::de::DeserializeOwned>(
     path: &str,
     files: &[Picked],
     progress: impl Fn(f64) + 'static,
-) -> Result<SubmitReply, Problem> {
+) -> Result<T, Problem> {
     let unreachable = |_| Problem::unreachable();
     let form = web_sys::FormData::new().map_err(unreachable)?;
     for f in files {

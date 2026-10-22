@@ -109,6 +109,24 @@ pub async fn get<T: DeserializeOwned>(path: &str) -> Result<T, Problem> {
     finish(Request::get(&url(path)).send().await).await
 }
 
+/// A text reply (a build's log).
+pub async fn get_text(path: &str) -> Result<String, Problem> {
+    let reply = Request::get(&url(path))
+        .send()
+        .await
+        .map_err(|_| Problem::unreachable())?;
+    let status = reply.status();
+    let body = reply.text().await.unwrap_or_default();
+    if (200..300).contains(&status) {
+        Ok(body)
+    } else {
+        Err(Problem {
+            status,
+            message: message_of(status, &body),
+        })
+    }
+}
+
 async fn send_json<T: DeserializeOwned>(
     builder: RequestBuilder,
     body: &impl Serialize,

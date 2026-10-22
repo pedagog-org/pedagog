@@ -124,10 +124,19 @@ pub fn Results(view: StudentView, deadline: Option<String>) -> impl IntoView {
     }
 }
 
+/// A test, opened when it failed; `verdict` replaces its badge and `note`
+/// goes under its name (a validation's "expected to pass · failed").
 #[component]
-fn Test(test: ShownTest) -> impl IntoView {
-    let failed = test.extra_credit.is_none() && matches!(test.status, Status::Fail | Status::Error);
-    let badge = test_badge(&test);
+pub fn Test(
+    test: ShownTest,
+    #[prop(optional)] verdict: Option<Words>,
+    #[prop(optional)] note: Option<String>,
+) -> impl IntoView {
+    let failed = match &verdict {
+        Some(v) => v.class == "b-fail",
+        None => test.extra_credit.is_none() && matches!(test.status, Status::Fail | Status::Error),
+    };
+    let badge = verdict.unwrap_or_else(|| test_badge(&test));
     let pts = match test.extra_credit {
         Some(worth) => extra_points(test.score, worth),
         None => format!("{} / {}", points(test.score), points(test.max)),
@@ -141,7 +150,10 @@ fn Test(test: ShownTest) -> impl IntoView {
         <details class="test" open=failed>
             <summary>
                 <svg class="i i-sm chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
-                <span class="tname">{test.name}</span>
+                <span class="stack" style="min-width: 0">
+                    <span class="tname">{test.name}</span>
+                    {note.map(|n| view! { <span class="small muted">{n}</span> })}
+                </span>
                 <Badge words=badge/>
                 <span class="pts">{pts}</span>
             </summary>

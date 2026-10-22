@@ -56,8 +56,24 @@ impl Tracked {
     }
 }
 
+/// Staff get the overview; students their page.
 #[component]
 pub fn Assignment() -> impl IntoView {
+    let params = use_params_map();
+    let session = crate::session::use_session();
+    let course = Signal::derive(move || params.with(|p| p.get("course").unwrap_or_default()));
+    let slug = Signal::derive(move || params.with(|p| p.get("assignment").unwrap_or_default()));
+    move || {
+        if crate::staff::is_staff(&session, &course.get()) {
+            view! { <crate::staff::overview::Overview course=course slug=slug/> }.into_any()
+        } else {
+            view! { <StudentAssignment/> }.into_any()
+        }
+    }
+}
+
+#[component]
+fn StudentAssignment() -> impl IntoView {
     let params = use_params_map();
     let query = use_query_map();
     let course = Signal::derive(move || params.with(|p| p.get("course").unwrap_or_default()));
@@ -432,7 +448,9 @@ fn Submit(
         sending.set(Some(0.0));
         let path = format!("{}/submissions", base.get_untracked());
         leptos::task::spawn_local(async move {
-            match crate::upload::send(&path, &list, move |p| sending.set(Some(p))).await {
+            match crate::upload::send::<SubmitReply>(&path, &list, move |p| sending.set(Some(p)))
+                .await
+            {
                 Ok(r) => {
                     receipt.set(Some(r));
                     files.set(Vec::new());
