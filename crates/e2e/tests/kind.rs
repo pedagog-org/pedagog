@@ -6,13 +6,18 @@
 //!
 //! `cargo xtask e2e [FILTER…]` runs it (it needs `kind-up`, both images loaded
 //! and `kind-deploy`); without `PEDAGOG_E2E` set it skips itself, so
-//! `cargo test --workspace` stays offline. Checks run in order and share the
-//! course; a filter runs only the checks whose names contain it (plus setup).
+//! `cargo test --workspace` stays offline. Checks share the course and run in
+//! lanes side by side (a lane's checks share an assignment, so they run in
+//! order); one that restarts jobs or measures the cluster runs alone, and one
+//! whose prerequisite failed is skipped. Each prints its time. A filter runs
+//! only the checks whose names contain it, plus what they build on.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
+use pedagog_e2e::schedule::{Outcome, Scheduler};
 use pedagog_e2e::{
     Forward, Persona, Result, flat, kubectl, latest_mail, mail_after, ok, root, run, sql, wait_for,
 };
@@ -32,8 +37,8 @@ struct Env {
     ta: Persona,
     _forwards: (Forward, Forward),
     /// Set by the checks that make them, used by later ones.
-    second_build: Option<String>,
-    good_first: Option<String>,
+    second_build: Mutex<Option<String>>,
+    good_first: Mutex<Option<String>>,
 }
 
 fn student(name: &str) -> Persona {
@@ -82,8 +87,8 @@ impl Env {
             course,
             work,
             _forwards: forwards,
-            second_build: None,
-            good_first: None,
+            second_build: Mutex::new(None),
+            good_first: Mutex::new(None),
         };
         println!("course {}", env.course);
         Ok(env)
@@ -149,7 +154,7 @@ fn replace_in(file: &Path, from: &str, to: &str) -> Result<()> {
 
 // ---- the checks, in order -------------------------------------------------
 
-fn personas(e: &mut Env) -> Result<String> {
+fn personas(e: &Env) -> Result<String> {
     ok(&mut kubectl(&[
         "-n",
         "pedagog-system",
@@ -199,7 +204,7 @@ fn personas(e: &mut Env) -> Result<String> {
     ))
 }
 
-fn example_validates(e: &mut Env) -> Result<String> {
+fn example_validates(e: &Env) -> Result<String> {
     let (_, out) = e.upload(&path(EXAMPLE), &["--wait"])?;
     require(out.contains("validation passed: 10.0 / 10.0"), || {
         out.clone()
@@ -211,7 +216,7 @@ fn example_validates(e: &mut Env) -> Result<String> {
     Ok("example validates (10/10)".into())
 }
 
-fn reupload_rebuilds(e: &mut Env) -> Result<String> {
+fn reupload_rebuilds(e: &Env) -> Result<String> {
     let current = || {
         sql(&format!(
             "SELECT a.current_build_id FROM assignments a WHERE a.course_id = '{}' AND a.slug = '{EXAMPLE_ID}'",
@@ -229,7 +234,7 @@ fn reupload_rebuilds(e: &mut Env) -> Result<String> {
     ))
 }
 
-fn buggy_solution_fails(e: &mut Env) -> Result<String> {
+fn buggy_solution_fails(e: &Env) -> Result<String> {
     let buggy = e.file("buggy");
     copy_dir(&root().join(EXAMPLE), &buggy)?;
     replace_in(
@@ -253,7 +258,7 @@ fn buggy_solution_fails(e: &mut Env) -> Result<String> {
     Ok("a buggy solution fails validation and doesn't replace the current build".into())
 }
 
-fn newer_upload_supersedes(e: &mut Env) -> Result<String> {
+fn newer_upload_supersedes(e: &Env) -> Result<String> {
     let build = |out: String| first_number_after(&out, "build ").map(str::to_owned);
     let first = build(e.upload(&path(EXAMPLE), &[])?.1).ok_or("no first build")?;
     let second = build(e.upload(&path(EXAMPLE), &[])?.1).ok_or("no second build")?;
@@ -263,12 +268,17 @@ fn newer_upload_supersedes(e: &mut Env) -> Result<String> {
     require(status == "superseded", || {
         format!("build {first} is '{status}'")
     })?;
-    e.second_build = Some(second.clone());
+    *e.second_build.lock().map_err(|x| x.to_string())? = Some(second.clone());
     Ok(format!("build {first} superseded by {second}"))
 }
 
-fn build_resumes_after_restart(e: &mut Env) -> Result<String> {
-    let second = e.second_build.clone().ok_or("needs the supersede check")?;
+fn build_resumes_after_restart(e: &Env) -> Result<String> {
+    let second = e
+        .second_build
+        .lock()
+        .map_err(|x| x.to_string())?
+        .clone()
+        .ok_or("needs the supersede check")?;
     let stage = || {
         sql(&format!(
             "SELECT validation_status FROM assignment_builds WHERE id = {second}"
@@ -374,7 +384,7 @@ spec:
     logs
 }
 
-fn egress_deny(_: &mut Env) -> Result<String> {
+fn egress_deny(_: &Env) -> Result<String> {
     let out = probe(
         "e2e-netprobe",
         "deny",
@@ -388,7 +398,7 @@ wget -q -T 5 -O /dev/null http://1.1.1.1/ >/dev/null 2>&1 && echo internet-open 
     Ok("egress: Garage reachable, internet blocked".into())
 }
 
-fn egress_allow(_: &mut Env) -> Result<String> {
+fn egress_allow(_: &Env) -> Result<String> {
     let node = ok(&mut kubectl(&[
         "get",
         "nodes",
@@ -412,7 +422,7 @@ nc -z -w 3 {node} 10250 && echo node-open || echo node-blocked"
     ))
 }
 
-fn upload_example_validates(e: &mut Env) -> Result<String> {
+fn upload_example_validates(e: &Env) -> Result<String> {
     let (_, out) = e.upload(&path(UPLOAD_EXAMPLE), &["--wait"])?;
     let (dated, dates) = e.prof.says(&[
         "dates", "set", UPLOAD_ID, "--open", "always", "-c", &e.course,
@@ -436,10 +446,11 @@ fn upload_example_validates(e: &mut Env) -> Result<String> {
     Ok("upload example validates (10/10)".into())
 }
 
-/// The upload example's last build fetched its pytest bundle from Garage (its
+/// A build of this run fetched its pytest bundle from Garage (its
 /// `fetch-ingredients` init), not from the internet.
-fn ingredients_come_from_garage(_: &mut Env) -> Result<String> {
-    let pod = pedagog_e2e::ok(&mut pedagog_e2e::kubectl(&[
+fn ingredients_come_from_garage(e: &Env) -> Result<String> {
+    // This run's build pods (their names carry the course), newest first.
+    let pods = pedagog_e2e::ok(&mut pedagog_e2e::kubectl(&[
         "-n",
         "pedagog-builds",
         "get",
@@ -448,38 +459,47 @@ fn ingredients_come_from_garage(_: &mut Env) -> Result<String> {
         "app=pedagog-assignment-build",
         "--sort-by=.metadata.creationTimestamp",
         "-o",
-        "jsonpath={.items[-1:].metadata.name}",
+        "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}",
     ]))?;
-    let pod = pod.trim();
-    require(!pod.is_empty(), || "no assignment build pod".into())?;
-    let log = pedagog_e2e::ok(&mut pedagog_e2e::kubectl(&[
-        "-n",
-        "pedagog-builds",
-        "logs",
-        pod,
-        "-c",
-        "fetch-ingredients",
-    ]))?;
-    require(
-        log.contains("fetched toolchain/pedagog-pytest/2/pedagog-pytest-bundle.tar.gz"),
-        || format!("{pod}'s fetch-ingredients said: {log}"),
-    )?;
-    Ok(format!(
-        "{pod} fetched its pytest bundle from Garage by checksum"
-    ))
+    let ours: Vec<&str> = pods
+        .lines()
+        .rev()
+        .filter(|p| p.contains(&e.course))
+        .collect();
+    require(!ours.is_empty(), || {
+        "no assignment build pod for this course".into()
+    })?;
+    for pod in ours {
+        let log = pedagog_e2e::ok(&mut pedagog_e2e::kubectl(&[
+            "-n",
+            "pedagog-builds",
+            "logs",
+            pod,
+            "-c",
+            "fetch-ingredients",
+        ]))
+        .unwrap_or_default();
+        if log.contains("fetched toolchain/pedagog-pytest/2/pedagog-pytest-bundle.tar.gz") {
+            return Ok(format!(
+                "{pod} fetched its pytest bundle from Garage by checksum"
+            ));
+        }
+    }
+    Err("no build pod of this course fetched its pytest bundle from Garage".into())
 }
 
 fn solution(_: &Env) -> String {
     path(&format!("{UPLOAD_EXAMPLE}/solution"))
 }
 
-fn submissions_are_graded(e: &mut Env) -> Result<String> {
+fn submissions_are_graded(e: &Env) -> Result<String> {
     let (_, out) = e.submit(&student("good"), UPLOAD_ID, &[&solution(e), "--wait"])?;
     require(
         out.contains("(counts), on time: 10/10 on the tests shown"),
         || out.clone(),
     )?;
-    e.good_first = first_number_after(&out, "submission ").map(str::to_owned);
+    *e.good_first.lock().map_err(|x| x.to_string())? =
+        first_number_after(&out, "submission ").map(str::to_owned);
     let buggy = e.file("buggy-sub").display().to_string();
     let (_, out) = e.submit(&student("buggy"), UPLOAD_ID, &[&buggy, "--wait"])?;
     let names_it = out
@@ -491,7 +511,7 @@ fn submissions_are_graded(e: &mut Env) -> Result<String> {
     Ok("the solution grades 10/10; a buggy one 9/10, naming the failing test".into())
 }
 
-fn finder_zip_is_cleaned(e: &mut Env) -> Result<String> {
+fn finder_zip_is_cleaned(e: &Env) -> Result<String> {
     use std::io::Write as _;
     let zip_path = e.file("hw1.zip");
     let file = std::fs::File::create(&zip_path).map_err(|x| x.to_string())?;
@@ -524,7 +544,7 @@ fn finder_zip_is_cleaned(e: &mut Env) -> Result<String> {
     Ok("zip: wrapping folder, notes.txt and OS clutter dropped; graded 10/10".into())
 }
 
-fn refusals(e: &mut Env) -> Result<String> {
+fn refusals(e: &Env) -> Result<String> {
     let (_, out) = e.submit(
         &student("buggy"),
         UPLOAD_ID,
@@ -559,7 +579,7 @@ fn refusals(e: &mut Env) -> Result<String> {
     )
 }
 
-fn burst_respects_the_quota(e: &mut Env) -> Result<String> {
+fn burst_respects_the_quota(e: &Env) -> Result<String> {
     let sol = solution(e);
     for n in 1..=6 {
         let email = format!("e2e-burst{n}@{D}");
@@ -601,7 +621,7 @@ fn burst_respects_the_quota(e: &mut Env) -> Result<String> {
     ))
 }
 
-fn roles(e: &mut Env) -> Result<String> {
+fn roles(e: &Env) -> Result<String> {
     let denied = |p: &Persona, args: &[&str]| -> Result<bool> {
         let (ok, out) = p.says(args)?;
         Ok(!ok && !out.contains("cannot reach"))
@@ -653,7 +673,7 @@ fn roles(e: &mut Env) -> Result<String> {
     Ok("students can't manage; graders see results but can't release or add members".into())
 }
 
-fn late_closed_and_on_behalf(e: &mut Env) -> Result<String> {
+fn late_closed_and_on_behalf(e: &Env) -> Result<String> {
     let late = student("late");
     let sol = solution(e);
     e.prof.says(&[
@@ -708,7 +728,7 @@ fn late_closed_and_on_behalf(e: &mut Env) -> Result<String> {
     Ok("late after due, refused after late due, staff submit on a student's behalf".into())
 }
 
-fn regrade_and_notice(e: &mut Env) -> Result<String> {
+fn regrade_and_notice(e: &Env) -> Result<String> {
     let v2 = e.file("v2");
     copy_dir(&root().join(UPLOAD_EXAMPLE), &v2)?;
     let tests = v2.join("tests/test_linked_list.py");
@@ -762,7 +782,7 @@ def test_pop_shrinks(score: Score):
     ))
 }
 
-fn visibility_and_release(e: &mut Env) -> Result<String> {
+fn visibility_and_release(e: &Env) -> Result<String> {
     let good = student("good");
     e.prof.says(&[
         "visibility",
@@ -800,9 +820,14 @@ fn visibility_and_release(e: &mut Env) -> Result<String> {
     ))
 }
 
-fn activation(e: &mut Env) -> Result<String> {
+fn activation(e: &Env) -> Result<String> {
     let good = student("good");
-    let first = e.good_first.clone().ok_or("needs the grading check")?;
+    let first = e
+        .good_first
+        .lock()
+        .map_err(|x| x.to_string())?
+        .clone()
+        .ok_or("needs the grading check")?;
     let buggy = e.file("buggy-sub").display().to_string();
     e.submit(&good, UPLOAD_ID, &[&buggy, "--wait"])?;
     e.prof
@@ -835,6 +860,9 @@ fn in_browser<F>(name: &str, check: impl FnOnce(fantoccini::Client) -> F) -> Res
 where
     F: std::future::Future<Output = Result<String>>,
 {
+    // One browser at a time: chromedriver listens on a fixed port.
+    static BROWSER_IN_USE: Mutex<()> = Mutex::new(());
+    let _turn = BROWSER_IN_USE.lock().unwrap_or_else(|p| p.into_inner());
     let driver = std::env::var("CHROMEDRIVER")
         .map_err(|_| "CHROMEDRIVER isn't set (run through `cargo xtask e2e`)")?;
     let mut chromedriver = std::process::Command::new(driver)
@@ -951,7 +979,7 @@ async fn log_in(c: &fantoccini::Client, who: &Persona) -> Result<()> {
     Ok(())
 }
 
-fn web_login(e: &mut Env) -> Result<String> {
+fn web_login(e: &Env) -> Result<String> {
     let course = e.course.clone();
     in_browser("web-login", |c| async move {
         log_in(&c, &student("good")).await?;
@@ -974,7 +1002,7 @@ fn web_login(e: &mut Env) -> Result<String> {
     })
 }
 
-fn web_submit(e: &mut Env) -> Result<String> {
+fn web_submit(e: &Env) -> Result<String> {
     let course = e.course.clone();
     let file = root()
         .join(UPLOAD_EXAMPLE)
@@ -1035,94 +1063,223 @@ fn web_submit(e: &mut Env) -> Result<String> {
     })
 }
 
-type Check = fn(&mut Env) -> Result<String>;
+type Check = fn(&Env) -> Result<String>;
 
-/// Each check, and the earlier checks it builds on (a filter runs those too).
-const CHECKS: &[(&str, Check, &[&str])] = &[
-    ("example_validates", example_validates, &[]),
-    (
+/// A check: what it builds on, its lane (checks in a lane share state, such as
+/// an assignment's dates, so they run in order; lanes run side by side), and
+/// whether it must run alone (it restarts jobs, or measures the cluster).
+struct Spec {
+    name: &'static str,
+    check: Check,
+    needs: &'static [&'static str],
+    lane: &'static str,
+    alone: bool,
+}
+
+const fn spec(
+    name: &'static str,
+    check: Check,
+    needs: &'static [&'static str],
+    lane: &'static str,
+) -> Spec {
+    Spec {
+        name,
+        check,
+        needs,
+        lane,
+        alone: false,
+    }
+}
+
+const fn alone(
+    name: &'static str,
+    check: Check,
+    needs: &'static [&'static str],
+    lane: &'static str,
+) -> Spec {
+    Spec {
+        alone: true,
+        ..spec(name, check, needs, lane)
+    }
+}
+
+const WORKSPACE: &str = "workspace";
+const NETWORK: &str = "network";
+const UPLOAD: &str = "upload";
+const BROWSER: &str = "browser";
+
+const CHECKS: &[Spec] = &[
+    spec("example_validates", example_validates, &[], WORKSPACE),
+    spec(
         "reupload_rebuilds",
         reupload_rebuilds,
         &["example_validates"],
+        WORKSPACE,
     ),
-    (
+    spec(
         "buggy_solution_fails",
         buggy_solution_fails,
         &["example_validates"],
+        WORKSPACE,
     ),
-    (
+    spec(
         "newer_upload_supersedes",
         newer_upload_supersedes,
         &["example_validates"],
+        WORKSPACE,
     ),
-    (
+    alone(
         "build_resumes_after_restart",
         build_resumes_after_restart,
         &["newer_upload_supersedes"],
+        WORKSPACE,
     ),
-    ("egress_deny", egress_deny, &[]),
-    ("egress_allow", egress_allow, &[]),
-    ("upload_example_validates", upload_example_validates, &[]),
-    (
+    spec("egress_deny", egress_deny, &[], NETWORK),
+    spec("egress_allow", egress_allow, &[], NETWORK),
+    spec(
+        "upload_example_validates",
+        upload_example_validates,
+        &[],
+        UPLOAD,
+    ),
+    spec(
         "ingredients_come_from_garage",
         ingredients_come_from_garage,
         &["upload_example_validates"],
+        UPLOAD,
     ),
-    (
+    spec(
         "submissions_are_graded",
         submissions_are_graded,
         &["upload_example_validates"],
+        UPLOAD,
     ),
-    (
+    spec(
         "finder_zip_is_cleaned",
         finder_zip_is_cleaned,
         &["upload_example_validates"],
+        UPLOAD,
     ),
-    (
+    spec(
         "refusals",
         refusals,
         &["example_validates", "upload_example_validates"],
+        UPLOAD,
     ),
-    (
+    alone(
         "burst_respects_the_quota",
         burst_respects_the_quota,
         &["upload_example_validates"],
+        UPLOAD,
     ),
-    ("roles", roles, &["submissions_are_graded"]),
-    (
+    spec("roles", roles, &["submissions_are_graded"], UPLOAD),
+    spec(
         "late_closed_and_on_behalf",
         late_closed_and_on_behalf,
         &["upload_example_validates"],
+        UPLOAD,
     ),
-    (
+    spec(
         "regrade_and_notice",
         regrade_and_notice,
         &["submissions_are_graded"],
+        UPLOAD,
     ),
-    (
+    spec(
         "visibility_and_release",
         visibility_and_release,
         &["regrade_and_notice"],
+        UPLOAD,
     ),
-    ("activation", activation, &["submissions_are_graded"]),
-    ("web_login", web_login, &["upload_example_validates"]),
-    ("web_submit", web_submit, &["upload_example_validates"]),
+    spec(
+        "activation",
+        activation,
+        &["submissions_are_graded"],
+        UPLOAD,
+    ),
+    spec(
+        "web_submit",
+        web_submit,
+        &["upload_example_validates"],
+        UPLOAD,
+    ),
+    spec(
+        "web_login",
+        web_login,
+        &["upload_example_validates"],
+        BROWSER,
+    ),
 ];
+
+/// Run the chosen checks, lanes side by side; print each with its time.
+fn run_checks(e: &Env, chosen: &[&str]) -> Vec<(&'static str, Outcome, Duration)> {
+    let scheduler = Scheduler::default();
+    let mut lanes: Vec<&str> = Vec::new();
+    for c in CHECKS.iter().filter(|c| chosen.contains(&c.name)) {
+        if !lanes.contains(&c.lane) {
+            lanes.push(c.lane);
+        }
+    }
+    let results = Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for lane in lanes {
+            let (scheduler, results) = (&scheduler, &results);
+            scope.spawn(move || {
+                for c in CHECKS
+                    .iter()
+                    .filter(|c| c.lane == lane && chosen.contains(&c.name))
+                {
+                    if !scheduler.prerequisites_passed(c.needs) {
+                        println!("SKIP  {}: a check it builds on didn't pass", c.name);
+                        scheduler.finish(c.name, Outcome::Skipped);
+                        results.lock().unwrap_or_else(|p| p.into_inner()).push((
+                            c.name,
+                            Outcome::Skipped,
+                            Duration::ZERO,
+                        ));
+                        continue;
+                    }
+                    scheduler.enter(c.alone);
+                    let started = Instant::now();
+                    let outcome = (c.check)(e);
+                    let took = started.elapsed();
+                    scheduler.leave(c.alone);
+                    let outcome = match outcome {
+                        Ok(what) => {
+                            println!("PASS  {} ({:.0}s): {what}", c.name, took.as_secs_f64());
+                            Outcome::Passed
+                        }
+                        Err(why) => {
+                            println!("FAIL  {} ({:.0}s): {why}", c.name, took.as_secs_f64());
+                            Outcome::Failed
+                        }
+                    };
+                    scheduler.finish(c.name, outcome);
+                    results
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .push((c.name, outcome, took));
+                }
+            });
+        }
+    });
+    results.into_inner().unwrap_or_else(|p| p.into_inner())
+}
 
 /// The checks to run: those matching a filter (all without one), and what
 /// they build on.
 fn selected(filters: &[String]) -> Vec<&'static str> {
     let mut chosen: Vec<&str> = CHECKS
         .iter()
-        .map(|(name, _, _)| *name)
+        .map(|c| c.name)
         .filter(|name| filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str())))
         .collect();
     let mut i = 0;
     while i < chosen.len() {
         let needs = CHECKS
             .iter()
-            .find(|(n, _, _)| *n == chosen[i])
-            .map_or(&[][..], |(_, _, needs)| *needs);
+            .find(|c| c.name == chosen[i])
+            .map_or(&[][..], |c| c.needs);
         for need in needs {
             if !chosen.contains(need) {
                 chosen.push(need);
@@ -1143,29 +1300,45 @@ fn main() -> ExitCode {
         .filter(|a| !a.starts_with('-'))
         .collect();
     let chosen = selected(&filters);
-    let mut e = match Env::setup() {
+    let e = match Env::setup() {
         Ok(e) => e,
         Err(why) => {
             println!("FAIL  setup: {why}");
             return ExitCode::FAILURE;
         }
     };
-    let mut failed = 0;
-    let order = CHECKS
-        .iter()
-        .filter(|(n, _, _)| chosen.contains(n))
-        .map(|(n, c, _)| (*n, *c));
-    for (name, check) in std::iter::once(("personas", personas as Check)).chain(order) {
-        match check(&mut e) {
-            Ok(what) => println!("PASS  {name}: {what}"),
-            Err(why) => {
-                println!("FAIL  {name}: {why}");
-                failed += 1;
-                if name == "personas" {
-                    break;
-                }
-            }
+    let started = Instant::now();
+    match personas(&e) {
+        Ok(what) => println!("PASS  personas: {what}"),
+        Err(why) => {
+            println!("FAIL  personas: {why}");
+            return ExitCode::FAILURE;
         }
+    }
+    let results = run_checks(&e, &chosen);
+    let failed = results
+        .iter()
+        .filter(|(_, o, _)| *o == Outcome::Failed)
+        .count();
+    let skipped = results
+        .iter()
+        .filter(|(_, o, _)| *o == Outcome::Skipped)
+        .count();
+    let mut slowest: Vec<_> = results.iter().filter(|(_, _, t)| !t.is_zero()).collect();
+    slowest.sort_by_key(|(_, _, t)| std::cmp::Reverse(*t));
+    println!();
+    println!(
+        "took {:.0}s; slowest: {}",
+        started.elapsed().as_secs_f64(),
+        slowest
+            .iter()
+            .take(5)
+            .map(|(n, _, t)| format!("{n} {:.0}s", t.as_secs_f64()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    if skipped > 0 {
+        println!("{skipped} check(s) skipped: something they build on failed");
     }
     println!();
     if failed == 0 {

@@ -4,6 +4,8 @@
 //!
 //! Everything is blocking: these drive external tools and wait on a cluster.
 
+pub mod schedule;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
