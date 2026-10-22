@@ -49,7 +49,7 @@ pub fn resolve(
     let toolchain = toolchain_layers(&env.toolchains, assignment.testing.as_ref(), &os, store)?;
     let assignment_layer = Layer {
         source: LayerSource::Assignment(assignment.id.clone()),
-        steps: resolve_steps(&env.steps, os.pkg_install, &Params::new())?,
+        steps: resolve_steps(&env.steps, os.pkg, &Params::new())?,
         ingredients: Vec::new(),
     };
 
@@ -76,11 +76,18 @@ pub fn resolve(
 
 // ---- Per-recipe artifacts ----------------------------------------------------
 
+/// The OS's package hooks, as steps that install packages use them.
+#[derive(Clone, Copy)]
+struct Pkg<'a> {
+    install: &'a ArgHook<PkgArg>,
+    update: Option<&'a ArgHook<PkgArg>>,
+}
+
 struct OsArtifact<'a> {
     id: &'a OsId,
     upstream: &'a str,
     image: &'a str,
-    pkg_install: &'a ArgHook<PkgArg>,
+    pkg: Pkg<'a>,
     init: Layer,
     cleanup: Layer,
 }
@@ -89,21 +96,24 @@ fn os_artifact<'a>(os_id: &OsId, store: &'a RecipeStore) -> Result<OsArtifact<'a
     let os = store
         .os(os_id)
         .ok_or_else(|| ResolveError::OsNotFound(os_id.clone()))?;
-    let pkg_install = &os.hooks.pkg.install;
+    let pkg = Pkg {
+        install: &os.hooks.pkg.install,
+        update: os.hooks.pkg.update.as_ref(),
+    };
     let empty = Params::new();
     Ok(OsArtifact {
         id: &os.id,
         upstream: &os.upstream,
         image: &os.image,
-        pkg_install,
+        pkg,
         init: Layer {
             source: LayerSource::Os(os.id.clone()),
-            steps: resolve_steps(&os.hooks.build.init, pkg_install, &empty)?,
+            steps: resolve_steps(&os.hooks.build.init, pkg, &empty)?,
             ingredients: pins(&os.ingredients),
         },
         cleanup: Layer {
             source: LayerSource::OsCleanup(os.id.clone()),
-            steps: resolve_steps(&os.hooks.build.cleanup, pkg_install, &empty)?,
+            steps: resolve_steps(&os.hooks.build.cleanup, pkg, &empty)?,
             ingredients: pins(&os.ingredients),
         },
     })
@@ -142,7 +152,7 @@ fn platform_artifact(
     Ok(PlatformArtifact {
         layer: Layer {
             source: LayerSource::Platform(spec.kind.clone()),
-            steps: resolve_steps(&platform.hooks.build.steps, os.pkg_install, &params)?,
+            steps: resolve_steps(&platform.hooks.build.steps, os.pkg, &params)?,
             ingredients: pins(&platform.ingredients),
         },
         entrypoint,
@@ -162,7 +172,7 @@ fn toolchain_layers(
         .into_iter()
         .map(|p| {
             Ok(Layer {
-                steps: resolve_steps(&p.recipe.steps, os.pkg_install, &p.recipe.params)?,
+                steps: resolve_steps(&p.recipe.steps, os.pkg, &p.recipe.params)?,
                 ingredients: pins(&p.recipe.ingredients),
                 source: LayerSource::Toolchain {
                     tc: p.tc,
@@ -340,20 +350,13 @@ fn check_versions(picked: &[Picked]) -> Result<(), ResolveError> {
 
 fn resolve_steps(
     steps: &[Step],
-    pkg_install: &ArgHook<PkgArg>,
+    pkg: Pkg<'_>,
     params: &Params,
 ) -> Result<Vec<ResolvedStep>, ResolveError> {
-    steps
-        .iter()
-        .map(|s| resolve_step(s, pkg_install, params))
-        .collect()
+    steps.iter().map(|s| resolve_step(s, pkg, params)).collect()
 }
 
-fn resolve_step(
-    step: &Step,
-    pkg_install: &ArgHook<PkgArg>,
-    params: &Params,
-) -> Result<ResolvedStep, ResolveError> {
+fn resolve_step(step: &Step, pkg: Pkg<'_>, params: &Params) -> Result<ResolvedStep, ResolveError> {
     match step {
         Step::Run { name, run } => {
             let commands = run
@@ -372,8 +375,14 @@ fn resolve_step(
         Step::Install { name, packages } => {
             let mut args = Params::new();
             args.insert("packages".to_owned(), pkg_names(packages));
-            let commands = expand_arg_hook(pkg_install, &args)
+            let mut commands = expand_arg_hook(pkg.install, &args)
                 .map_err(|message| interp_error("pkg.install hook", message))?;
+            if let Some(update) = pkg.update {
+                let mut all = expand_arg_hook(update, &Params::new())
+                    .map_err(|message| interp_error("pkg.update hook", message))?;
+                all.append(&mut commands);
+                commands = vec![one_step(&all)];
+            }
             Ok(ResolvedStep {
                 name: name.clone(),
                 commands,
@@ -384,6 +393,28 @@ fn resolve_step(
 
 /// Expand an OS arg-hook's steps by interpolating each command with `args`
 /// (keyed by the hook's declared arg names, e.g. `packages`).
+/// Commands as one build step (`&&`, or a script when any spans lines), so a
+/// cached step keeps what the earlier commands did.
+fn one_step(commands: &[Command]) -> Command {
+    if commands.iter().any(|c| c.0.contains('\n')) {
+        Command(
+            commands
+                .iter()
+                .map(|c| c.0.trim_end_matches('\n'))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+    } else {
+        Command(
+            commands
+                .iter()
+                .map(|c| c.0.as_str())
+                .collect::<Vec<_>>()
+                .join(" && "),
+        )
+    }
+}
+
 fn expand_arg_hook<A: Ord>(hook: &ArgHook<A>, args: &Params) -> Result<Vec<Command>, String> {
     let mut out = Vec::new();
     for step in &hook.steps {
@@ -462,10 +493,42 @@ mod tests {
 
     #[test]
     fn resolve_step_install_expands_via_pkg_hook() {
-        let pkg = arg_hook("args: [packages]\nsteps:\n  - run: ['install {packages}']\n");
+        let install = arg_hook("args: [packages]\nsteps:\n  - run: ['install {packages}']\n");
+        let pkg = Pkg {
+            install: &install,
+            update: None,
+        };
         let step: Step = serde_yaml::from_str("packages: [gcc-13, g++]\n").unwrap();
-        let resolved = resolve_step(&step, &pkg, &HashMap::new()).unwrap();
+        let resolved = resolve_step(&step, pkg, &HashMap::new()).unwrap();
         assert_eq!(resolved.commands[0].0, "install gcc-13 g++");
+    }
+
+    #[test]
+    fn installs_refresh_the_package_index_in_the_same_step() {
+        let install =
+            arg_hook("args: [packages]\nsteps:\n  - run: ['apt-get install -y {packages}']\n");
+        let update = arg_hook("steps:\n  - run: ['apt-get update']\n");
+        let pkg = Pkg {
+            install: &install,
+            update: Some(&update),
+        };
+        let step: Step = serde_yaml::from_str("packages: [gcc-13]\n").unwrap();
+        let resolved = resolve_step(&step, pkg, &HashMap::new()).unwrap();
+        assert_eq!(
+            resolved
+                .commands
+                .iter()
+                .map(|c| c.0.as_str())
+                .collect::<Vec<_>>(),
+            ["apt-get update && apt-get install -y gcc-13"],
+            "one step: a cached install keeps its own index"
+        );
+        let run: Step = serde_yaml::from_str("run: ['echo hi']\n").unwrap();
+        assert_eq!(
+            resolve_step(&run, pkg, &HashMap::new()).unwrap().commands[0].0,
+            "echo hi",
+            "only installs"
+        );
     }
 
     #[test]
