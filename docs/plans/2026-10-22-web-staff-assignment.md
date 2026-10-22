@@ -56,8 +56,13 @@ pages, read-only.
   whether it passed or failed, with its line count recorded. The nightly cleanup deletes
   logs older than 180 days.
 - **Make current** (`POST /internal/…/builds/{id}/current`, with the optional regrade
-  policy):
-  - **Image present:** one transaction sets `current_build_id`, queues regrades if
+  policy). Whatever else is going on, choosing a build cancels anything in flight,
+  then activates it, rebuilding it first if needed:
+  - **A build in flight:** always cancelled (superseded, as a new upload is), its pods
+    stopped, and its regrade request dropped; the instructor uploads that version again
+    if they still want it.
+  - **Image present:** one transaction supersedes the build in flight, sets
+    `current_build_id`, queues regrades if
     asked, and the trigger announces it. Dates and visibility don't change
     (`take_dates` off).
   - **Image deleted:** a new build attempt with `rebuild_of = id`. It uses the same
@@ -65,11 +70,6 @@ pages, read-only.
     It builds and validates through the normal path and becomes current if usable.
   - **Eligible:** build succeeded, and validation passed or skipped. It isn't the
     current build already.
-  - **A newer build in flight:** the make-current still happens. If the newer one
-    passes later, it becomes current as usual.
-  - **Image deleted and a build in flight:** the rebuild starts at once and cancels the
-    build in flight (superseded, as a new upload would). Its regrade request goes with
-    it, so the instructor uploads that version again if they still want it.
 
 ### Api (typed, in `core::api`)
 
@@ -128,11 +128,9 @@ pages, read-only.
   - the builds table with "Make current…" and "Show all builds".
 - **Make current dialog:**
   - the regrade checkbox and "Tell students";
-  - the in-flight note ("build 15 is still validating; if it passes it becomes current
-    after this");
+  - the in-flight note ("this cancels build 15, which is still validating");
   - the rebuild note when the image is gone ("build 12's image was cleaned up; making
-    it current rebuilds it first"), also marked in the builds table, plus "this cancels
-    build 15, which is still validating" when one is in flight.
+    it current rebuilds it first"), also marked in the builds table.
 - **Upload:**
   - form:
     - a drop zone for a folder or a `.tar.gz` / `.zip`, with name, file count, size and
@@ -174,7 +172,8 @@ pages, read-only.
   - top-level folder stripping;
   - logs written with line counts for both phases;
   - make current with the image present and deleted (rebuild row, same upload);
-  - a rebuild with a build in flight cancels (supersedes) it and starts at once.
+  - make current with a build in flight cancels it, both with the image present and
+    with a rebuild.
 - **Api:** typed shapes; 403 for graders on upload and make current; the log endpoint
   streams; staff Home items.
 - **Native web:** overview alerts from data; durations; the make-current dialog's notes;
@@ -194,12 +193,13 @@ pages, read-only.
   - **a separate staff app:** duplicated shared code and full page loads.
 - **Re-running the old build in place:** fewer rows, but history is lost and "finished
   stays finished" breaks.
-- **Make current with a build in flight:**
+- **Make current with a build in flight** (chosen: always cancel it):
   - refusing it blocks a revert while a fix builds;
-  - superseding the in-flight build would make the instructor upload it again (chosen
-    only when a rebuild is needed);
-  - for the rebuild: refusing until the in-flight build ends, or queuing the rebuild
-    behind it with "newer wins" (a queued state and a check in `finish_validation`).
+  - letting the in-flight build win if it passes ("revert now, my fix is on the way"),
+    but then a rebuild would have to wait behind it (one attempt in flight), and "which
+    becomes current" depends on what finishes when;
+  - queuing a rebuild behind it with "newer wins": a queued state and a check in
+    `finish_validation`.
 - **Packing in the browser:** about 100–150 KB more wasm (rejected in the UI plan).
 - **Logs in Postgres:** they bloat the database (rejected in the UI plan).
 - **All tabs now, disabled:** the final layout early, but dead controls.
@@ -222,8 +222,8 @@ since the stored archive format doesn't change.
    the current trigger); make current; builds pagination.
 2. `feat(jobs)`: multipart / zip intake normalised to one pack; uploader recorded.
 3. `feat(jobs)`: logs to Garage per phase with line counts; their 180-day cleanup.
-4. `feat(jobs)`: make current; rebuild when the image is gone, cancelling a build in
-   flight.
+4. `feat(jobs)`: make current, cancelling any build in flight; rebuild when the image is
+   gone.
 5. `feat(api)`: typed staff list, assignment, build, builds; log endpoint; make current;
    upload passthrough; staff Home items.
 6. `build(web)`: wasm-split spike, lazy staff routes, the per-chunk budget.
