@@ -7,6 +7,7 @@
 
 use std::time::Duration;
 
+use pedagog_core::recipe::render::Needed;
 use pedagog_core::results::Results;
 use pedagog_k8s::build::{BuildRequest, Context, IfBuilt, JobKey, JobState, Waited};
 use pedagog_k8s::validate::ValidationRequest;
@@ -42,6 +43,8 @@ pub struct Plan {
     pub tree_hash: String,
     pub object_key: String,
     pub containerfile: String,
+    /// The ingredients its build `vend`s.
+    pub ingredients: Vec<Needed>,
     pub has_solution: bool,
     pub settings: RunSettings,
     /// The file's `assignment:` policy as JSON.
@@ -103,6 +106,12 @@ pub async fn dispatch(state: &AppState, plan: Plan) -> anyhow::Result<Decision> 
             settings: &plan.settings.to_stored()?,
             policy: &plan.policy,
         },
+    )
+    .await?;
+    db::record_ingredients(
+        &mut *tx,
+        build_id,
+        &crate::ingredients::checksums(&plan.ingredients),
     )
     .await?;
     tx.commit().await?;
@@ -181,6 +190,8 @@ async fn run(state: &AppState, build_id: i64, plan: &Plan, from: Resume) -> anyh
             .objects
             .presign_get(&plan.object_key, deadline + URL_MARGIN)
             .await?;
+        let ingredients =
+            crate::ingredients::fetches(state, &plan.ingredients, deadline + URL_MARGIN).await?;
         let request = BuildRequest {
             dest: image_ref.clone(),
             containerfile: plan.containerfile.clone(),
@@ -188,6 +199,7 @@ async fn run(state: &AppState, build_id: i64, plan: &Plan, from: Resume) -> anyh
                 url: url.to_string(),
                 tree_hash: plan.tree_hash.clone(),
             },
+            ingredients,
             deadline: Some(deadline),
             if_built: IfBuilt::Rebuild,
         };
@@ -489,6 +501,7 @@ mod tests {
             tree_hash: tree.into(),
             object_key: "assignments/cop3502-f26/ll/t.tgz".into(),
             containerfile: containerfile.into(),
+            ingredients: Vec::new(),
             has_solution: true,
             settings: crate::settings::RunSettings {
                 platform: pedagog_core::recipe::platform::PlatformKind::Upload,

@@ -326,6 +326,37 @@ pub async fn start_build<'e>(db: impl sqlx::PgExecutor<'e>, b: &NewBuild<'_>) ->
     Ok(row.id)
 }
 
+/// The ingredient files (sha256) a build attempt declared.
+pub async fn record_ingredients<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    build: i64,
+    sha256s: &[String],
+) -> sqlx::Result<()> {
+    sqlx::query!(
+        "UPDATE assignment_builds SET ingredients = $2 WHERE id = $1",
+        build,
+        sha256s
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Ingredients a build still in flight declared (assignment and OS builds):
+/// not to be deleted, though no recipe pins them any more.
+pub async fn ingredients_in_flight(pool: &PgPool) -> sqlx::Result<Vec<String>> {
+    let rows = sqlx::query_scalar!(
+        r#"SELECT DISTINCT unnest(ingredients) AS "sha256!"
+             FROM assignment_builds WHERE build_status = 'running'
+           UNION
+           SELECT DISTINCT unnest(ingredients)
+             FROM build_runs WHERE status = 'running'"#
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Record the image build's outcome. A failed build also ends the attempt.
 /// Returns false if the attempt is no longer in flight (e.g. superseded).
 pub async fn finish_build(
@@ -865,6 +896,22 @@ mod tests {
         assert_eq!(row.error.as_deref(), Some("kaniko: exit 1"));
 
         assert_eq!(current_build_id(&pool, up.assignment_id).await?, Some(good));
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn ingredients_of_builds_in_flight_are_spared(pool: PgPool) -> sqlx::Result<()> {
+        let up = uploaded(&pool, "ll", "tree-a").await?;
+        let build = start_build(&pool, &crate::db::test_build(&up, "img-a", "reg/a:1")).await?;
+        record_ingredients(&pool, build, &["aa".into(), "bb".into()]).await?;
+        let run = crate::db::builds::start_run(&pool, "ubuntu-22", "h", "reg/u:22").await?;
+        crate::db::builds::record_run_ingredients(&pool, run, &["cc".into()]).await?;
+        let mut spared = ingredients_in_flight(&pool).await?;
+        spared.sort();
+        assert_eq!(spared, ["aa", "bb", "cc"]);
+        finish_build(&pool, build, true, None).await?;
+        let spared = ingredients_in_flight(&pool).await?;
+        assert_eq!(spared, ["cc"], "built: its ingredients aren't needed again");
         Ok(())
     }
 

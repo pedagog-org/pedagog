@@ -124,7 +124,12 @@ fn render_layer(to: &mut String, layer: &Layer) {
         let _ = writeln!(
             to,
             "ENV PEDAGOG_INGREDIENTS=\"{}\"",
-            layer.ingredients.join(" ")
+            layer
+                .ingredients
+                .iter()
+                .map(|p| format!("{}=sha256:{}", p.output, p.sha256))
+                .collect::<Vec<_>>()
+                .join(" ")
         );
     }
     for step in &layer.steps {
@@ -203,7 +208,7 @@ fn exec_array(words: &[String]) -> String {
 /// (PEDAGOG_TYPE, PEDAGOG_ID) for a layer — the `vend` helper joins these into
 /// the ingredient path `/pedagog/ingredients/<type>/<id>/<file>`, matching how
 /// `hammer vend` lays ingredients out on disk.
-fn layer_env(source: &LayerSource) -> (String, String) {
+pub(crate) fn layer_env(source: &LayerSource) -> (String, String) {
     match source {
         LayerSource::Os(id) => ("os".to_owned(), id.to_string()),
         LayerSource::Platform(kind) => ("platform".to_owned(), kind.to_string()),
@@ -399,6 +404,49 @@ mod tests {
     }
 
     #[test]
+    fn a_build_needs_the_ingredients_of_the_layers_it_renders() {
+        use crate::recipe::render::Needed;
+        let ImageSpec::Full {
+            mut plan,
+            upstream,
+            base_image,
+            runtime,
+            ports,
+            network,
+            testing,
+            files,
+        } = full_spec(&["code-server"], vec![], NetworkSpec::Allow)
+        else {
+            unreachable!()
+        };
+        let pin = |output: &str, sha: &str| crate::recipe::primitives::Pin {
+            output: output.into(),
+            sha256: sha.into(),
+        };
+        plan.os.ingredients = vec![pin("os.tar", "11")];
+        plan.platform.ingredients = vec![pin("code-server.deb", "22")];
+        let spec = ImageSpec::Full {
+            plan,
+            upstream,
+            base_image,
+            runtime,
+            ports,
+            network,
+            testing,
+            files,
+        };
+        assert_eq!(
+            spec.needed_ingredients(FromSource::PrebuiltBase),
+            [Needed {
+                path: "platform/workspace/code-server.deb".into(),
+                sha256: "22".into()
+            }],
+            "the base image already has the os layer"
+        );
+        assert_eq!(spec.needed_ingredients(FromSource::Standalone).len(), 2);
+    }
+
+    #[test]
     fn a_layers_pinned_ingredients_come_before_its_steps() {
         let render = |pin: &str| {
             let ImageSpec::Full {
@@ -414,7 +462,10 @@ mod tests {
             else {
                 unreachable!()
             };
-            plan.platform.ingredients = vec![format!("code-server.deb=sha256:{pin}")];
+            plan.platform.ingredients = vec![crate::recipe::primitives::Pin {
+                output: "code-server.deb".into(),
+                sha256: pin.into(),
+            }];
             let spec = ImageSpec::Full {
                 plan,
                 upstream,

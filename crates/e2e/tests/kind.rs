@@ -436,6 +436,39 @@ fn upload_example_validates(e: &mut Env) -> Result<String> {
     Ok("upload example validates (10/10)".into())
 }
 
+/// The upload example's last build fetched its pytest bundle from Garage (its
+/// `fetch-ingredients` init), not from the internet.
+fn ingredients_come_from_garage(_: &mut Env) -> Result<String> {
+    let pod = pedagog_e2e::ok(&mut pedagog_e2e::kubectl(&[
+        "-n",
+        "pedagog-builds",
+        "get",
+        "pods",
+        "-l",
+        "app=pedagog-assignment-build",
+        "--sort-by=.metadata.creationTimestamp",
+        "-o",
+        "jsonpath={.items[-1:].metadata.name}",
+    ]))?;
+    let pod = pod.trim();
+    require(!pod.is_empty(), || "no assignment build pod".into())?;
+    let log = pedagog_e2e::ok(&mut pedagog_e2e::kubectl(&[
+        "-n",
+        "pedagog-builds",
+        "logs",
+        pod,
+        "-c",
+        "fetch-ingredients",
+    ]))?;
+    require(
+        log.contains("fetched toolchain/pedagog-pytest/2/pedagog-pytest-bundle.tar.gz"),
+        || format!("{pod}'s fetch-ingredients said: {log}"),
+    )?;
+    Ok(format!(
+        "{pod} fetched its pytest bundle from Garage by checksum"
+    ))
+}
+
 fn solution(_: &Env) -> String {
     path(&format!("{UPLOAD_EXAMPLE}/solution"))
 }
@@ -1030,6 +1063,11 @@ const CHECKS: &[(&str, Check, &[&str])] = &[
     ("egress_deny", egress_deny, &[]),
     ("egress_allow", egress_allow, &[]),
     ("upload_example_validates", upload_example_validates, &[]),
+    (
+        "ingredients_come_from_garage",
+        ingredients_come_from_garage,
+        &["upload_example_validates"],
+    ),
     (
         "submissions_are_graded",
         submissions_are_graded,

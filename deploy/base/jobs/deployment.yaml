@@ -38,11 +38,8 @@ spec:
               value: registry-service.pedagog-data.svc:5000
             - name: PEDAGOG_BUILD_NAMESPACE
               value: pedagog-builds
-            # Images for pods jobs launches; every overlay sets the pushed refs:
-            # the full image (Kaniko's recipe staging) and pedagog/jobs-init
-            # (initContainers: await-egress, fetch-context).
-            - name: PEDAGOG_JOBS_IMAGE
-              value: pedagog-jobs
+            # The image for initContainers of pods jobs launches (await-egress,
+            # fetch-context, fetch-ingredients); every overlay sets the pushed ref.
             - name: PEDAGOG_JOBS_INIT_IMAGE
               value: pedagog-jobs-init
             # Garage: assignment archives and run results.

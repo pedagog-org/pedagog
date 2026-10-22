@@ -42,6 +42,22 @@ pub async fn record_build(
 ///
 /// Fails with a unique violation if the OS already has a running attempt (the
 /// partial index) — the DB backstop for dispatch dedup.
+/// The ingredient files (sha256) an OS build run declared.
+pub async fn record_run_ingredients(
+    pool: &PgPool,
+    run: i64,
+    sha256s: &[String],
+) -> sqlx::Result<()> {
+    sqlx::query!(
+        "UPDATE build_runs SET ingredients = $2 WHERE id = $1",
+        run,
+        sha256s
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn start_run(
     pool: &PgPool,
     os_id: &str,

@@ -3,13 +3,14 @@ pub mod hook;
 pub mod id;
 pub mod ingredient;
 pub mod param;
+pub mod release;
 pub mod step;
 pub mod version;
 
 pub use command::Command;
 pub use hook::{ArgHook, ParamHook};
 pub use id::{AssignmentId, Id, OsId, PkgName, PlatformId, ToolchainId};
-pub use ingredient::{GithubSource, Ingredient, IngredientSource};
+pub use ingredient::{GithubSource, Ingredient, IngredientSource, Pin};
 pub use param::{ParamDef, ParamType, ParamVal};
 pub use step::Step;
 pub use version::{MaybeVersioned, Version, Versioned};

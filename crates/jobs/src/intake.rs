@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use pedagog_core::recipe::assignment::{AssignmentYaml, Isolation};
 use pedagog_core::recipe::render::containerfile::Containerfile;
-use pedagog_core::recipe::render::{AssignmentFiles, FromSource, Render, RenderOptions};
+use pedagog_core::recipe::render::{AssignmentFiles, FromSource, Needed, Render, RenderOptions};
 use pedagog_core::recipe::resolve::resolve;
 use pedagog_core::recipe::store::RecipeStore;
 use pedagog_store::db::assignments as db;
@@ -59,6 +59,8 @@ pub struct Checked {
     pub tree_hash: String,
     /// Rendered FROM the prebuilt OS image in `registry`.
     pub containerfile: String,
+    /// The ingredients its build `vend`s.
+    pub ingredients: Vec<Needed>,
     pub has_solution: bool,
     pub warnings: Vec<String>,
 }
@@ -101,6 +103,7 @@ pub fn check_upload(
         },
     )
     .to_string();
+    let ingredients = spec.needed_ingredients(FromSource::PrebuiltBase);
 
     let mut warnings = Vec::new();
     let hosts: Vec<String> = assignment
@@ -132,6 +135,7 @@ pub fn check_upload(
         assignment,
         tree_hash: inspected.tree_hash,
         containerfile,
+        ingredients,
         has_solution: files.solution.is_some(),
         warnings,
     })
@@ -308,6 +312,7 @@ impl Plan {
             tree_hash: checked.tree_hash,
             object_key,
             containerfile: checked.containerfile,
+            ingredients: checked.ingredients,
             has_solution: checked.has_solution,
             settings: RunSettings::of(&checked.assignment),
             policy: serde_json::to_string(&checked.assignment.assignment)?,

@@ -17,12 +17,6 @@ spec:
               value: dev
             - name: PEDAGOG_RECIPES_DIR
               value: /host/recipes
-            # node path handed to Kaniko pods as their /pedagog/recipes hostPath
-            - name: PEDAGOG_RECIPES_HOSTPATH
-              value: /srv/pedagog/recipes
-            # Kaniko initContainers (fetch-context) run the jobs image, loaded into the node.
-            - name: PEDAGOG_JOBS_IMAGE
-              value: localhost/pedagog/jobs:dev
             # test-run and build pods' initContainers (await-egress, fetch-context)
             - name: PEDAGOG_JOBS_INIT_IMAGE
               value: localhost/pedagog/jobs-init:dev

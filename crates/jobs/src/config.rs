@@ -17,9 +17,7 @@ pub const RECIPES_DIR: &str = "PEDAGOG_RECIPES_DIR";
 pub const BUILD_NAMESPACE: &str = "PEDAGOG_BUILD_NAMESPACE";
 pub const RUN_NAMESPACE: &str = "PEDAGOG_RUN_NAMESPACE";
 pub const REGISTRY: &str = "PEDAGOG_REGISTRY";
-pub const JOBS_IMAGE: &str = "PEDAGOG_JOBS_IMAGE";
 pub const JOBS_INIT_IMAGE: &str = "PEDAGOG_JOBS_INIT_IMAGE";
-pub const RECIPES_HOSTPATH: &str = "PEDAGOG_RECIPES_HOSTPATH";
 pub const LISTEN_ADDR: &str = "PEDAGOG_LISTEN_ADDR";
 pub const MAX_UPLOAD_BYTES: &str = "PEDAGOG_MAX_UPLOAD_BYTES";
 pub const MAX_UNPACKED_BYTES: &str = "PEDAGOG_MAX_UNPACKED_BYTES";
@@ -80,13 +78,9 @@ pub struct Config {
     /// Where test runs (validation, grading) and their network policies live.
     pub run_namespace: String,
     pub registry: String,
-    /// prod: image whose baked recipes the Kaniko initContainer stages.
-    pub jobs_image: String,
     /// The small image with only the jobs binary, for initContainers
-    /// (`await-egress`, `fetch-context`).
+    /// (`await-egress`, `fetch-context`, `fetch-ingredients`).
     pub init_image: String,
-    /// dev: node path to the recipes checkout mounted into Kaniko.
-    pub recipes_hostpath: Option<String>,
     pub listen_addr: String,
     /// Garage, for assignment archives and run results.
     pub objects: ObjectsConfig,
@@ -141,12 +135,7 @@ impl Config {
             namespace: var_or(BUILD_NAMESPACE, DEFAULT_NAMESPACE),
             run_namespace: var_or(RUN_NAMESPACE, DEFAULT_RUN_NAMESPACE),
             registry: var_or(REGISTRY, DEFAULT_REGISTRY),
-            jobs_image: std::env::var(JOBS_IMAGE).unwrap_or_default(),
-            // Falls back to the full image, which has the same binary.
-            init_image: std::env::var(JOBS_INIT_IMAGE)
-                .or_else(|_| std::env::var(JOBS_IMAGE))
-                .unwrap_or_default(),
-            recipes_hostpath: std::env::var(RECIPES_HOSTPATH).ok(),
+            init_image: std::env::var(JOBS_INIT_IMAGE).unwrap_or_default(),
             listen_addr: var_or(LISTEN_ADDR, DEFAULT_LISTEN),
             objects: ObjectsConfig::from_env().map_err(|e| anyhow::anyhow!(e))?,
             limits: Limits {
@@ -217,17 +206,19 @@ impl Config {
         })
     }
 
-    pub fn build_env(&self) -> BuildEnv {
-        BuildEnv {
+    /// The build pods' environment, with the recipes' `vend` script.
+    pub fn build_env(&self) -> anyhow::Result<BuildEnv> {
+        let vend = self.recipes_dir.join("lib/vend");
+        Ok(BuildEnv {
             kind: self.env,
-            jobs_image: self.jobs_image.clone(),
             init_image: self.init_image.clone(),
-            recipes_hostpath: self.recipes_hostpath.clone(),
+            vend_script: std::fs::read_to_string(&vend)
+                .map_err(|e| anyhow::anyhow!("reading {}: {e}", vend.display()))?,
             cache_repo: self
                 .build_cache
                 .then(|| format!("{}/pedagog/cache", self.registry)),
             disk: self.build_disk.clone(),
-        }
+        })
     }
 }
 

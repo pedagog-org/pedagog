@@ -238,7 +238,7 @@ Building happens in two stages:
 1. **OS base image** — platform-managed. Contains the OS and any platform-level configuration. Built in-cluster by the `jobs` service (Kaniko) from the recipes pinned into the installation and pushed to the cluster registry (e.g. `pedagog/ubuntu:22`). Rebuilt when the pinned recipes change (detected at `jobs` startup); its rebuild endpoint (`cargo xtask kind-rebuild`, or `os=<id>` for one) rebuilds them all. Locally, `hammer plan --os <os-id>` (or `cargo xtask build-base`) renders the same Containerfile for podman.
 2. **Instructor image** — built when the instructor uploads the assignment archive. Starts FROM the OS base image; installs toolchains, addons, platform components (code-server for `workspace`), and locked extensions declared in `assignment.yml`. The solution is run against the test suite at this step to validate the assignment. Build-time network policy is applied during this step only.
 
-All builds run in-cluster via **Kaniko** — no Docker daemon required. `core` renders the Containerfile from resolved recipes; the `k8s` crate submits it as a Kubernetes Job; `jobs` builds both OS base images and assignment images. Recipes are **pinned to the installation and baked** into the `jobs` image (with `hammer vend` ingredients) — not git-synced in-cluster.
+All builds run in-cluster via **Kaniko** — no Docker daemon required. `core` renders the Containerfile from resolved recipes; the `k8s` crate submits it as a Kubernetes Job; `jobs` builds both OS base images and assignment images. Recipes are **pinned to the installation and baked** into the `jobs` image — not git-synced in-cluster; their ingredients are kept in Garage (see Ingredient Vendoring).
 
 ### Assignment Uploads
 
@@ -259,7 +259,7 @@ Assignments belong to a course: a numeric id keys them, and the `id` in `assignm
   - Kaniko keeps a layer cache in the registry (`pedagog/cache`; `PEDAGOG_BUILD_CACHE=false` turns it off), so an upload that only changes its files rebuilds just the ASSIGNMENT FILES phase. `RUN` layers are cached by their script text and the layers before them; each layer's pinned ingredients (`ENV PEDAGOG_INGREDIENTS`) come before its steps, so a new pinned file invalidates them.
 - **Validation:** after a successful build, a Job from the image runs `/pedagog/bin/run-tests --code /pedagog/solution` (isolation from `testing:`), which uploads `results.yaml` to a presigned PUT; no solution means validation is `skipped`.
   - Test runs (validation, and grading next) live in their own namespace, `pedagog-grading`, with their own ResourceQuota and LimitRange, so a burst of runs can't starve image builds in `pedagog-builds` or the other way round. `jobs` creates them there through a Role in that namespace; the pods only ever see presigned URLs, so no credentials live there.
-  - Their init steps (`await-egress`, `fetch-context`, and Kaniko's `fetch-context`) run `pedagog/jobs-init`: the same binary as `jobs`, on a minimal base (~66 MB), so a node pulls the full `pedagog/jobs` image (~340 MB, recipes and vendored downloads baked in) only for image builds.
+  - Their init steps (`await-egress`, `fetch-context`, and Kaniko's `fetch-context` and `fetch-ingredients`) run `pedagog/jobs-init`: the same binary as `jobs`, on a minimal base (~66 MB). Build pods never pull the full `pedagog/jobs` image.
   - Network policies take a few seconds to apply to a new pod. Every test-run pod's first initContainer (`pedagog-jobs await-egress`) retries a connection to CoreDNS's metrics port (`kube-dns.kube-system.svc:9153`), which every policy blocks, until it fails; only then does the run start (the pod fails if that takes over 30 s).
   - The pod starts as root with every capability dropped except SETUID, SETGID, CHOWN, FOWNER, DAC_OVERRIDE and KILL (what the launcher uses to drop to `grader`/`runner`), no privilege escalation, the default seccomp profile, and no service account token. This fits Pod Security "baseline", which `pedagog-grading` enforces.
   - Egress follows `environment.network`: label-selected policies that `jobs` installs at startup allow DNS and Garage for every test-run pod (selected by its `pedagog.io/network` label), plus public addresses for `mode: allow` (private, shared `100.64.0.0/10`, link-local and unique-local ranges, so the cluster, node IPs and the LAN, are always excluded, as is anything in `PEDAGOG_BLOCKED_CIDRS`); loopback inside the pod is never filtered; `cidr` rules get a per-run policy owned by the Job. No ingress.
@@ -387,23 +387,34 @@ An assignment selects addons per toolchain, as `gcc:13+gdb:12` or `{id, version,
 
 ### Ingredient Vendoring
 
-Platform and toolchain recipes may declare `ingredients:` — dev assets that are fetched
-locally to speed up or enable offline builds. Each entry is either a GitHub release asset
-or a plain URL:
+Platform and toolchain recipes may declare `ingredients:` — files their steps install,
+each a GitHub release asset or a plain URL, and each pinned by its SHA-256 (required):
 
 ```yaml
 # platforms/ubuntu-22/workspace.yaml
 ingredients:
   - output: code-server.deb
+    sha256: 19831ffc…
     github:
       repo: pedagog-org/code-server
       asset: "code-server_*_arm64.deb"
       tag: v4.127.0-pedagog.1
 ```
 
-`hammer vend` downloads these into `$HAMMER_RECIPES/ingredients/<type>/<id>/`. The
-`ingredients/` directory is gitignored (except for `.keep`); only `lib/` and recipe
-YAMLs are tracked.
+- **In the cluster** they live in Garage once per content (`ingredients/sha256/<hex>`),
+  shared by every recipe and assignment that pins the same file. `jobs` downloads what its
+  recipes pin (checking each sha256) at startup and every ten minutes, and a build that
+  needs one not yet stored fetches it then; after that, builds never reach the internet
+  for them. A file no recipe pins any more is deleted by the next pass, unless a build in
+  flight declared it (each build records its ingredients). Missing ones are errors
+  (GlitchTip), and builds needing them fail with "ingredient X isn't available yet".
+- **A build fetches only what it declares**: its `fetch-ingredients` initContainer
+  (`jobs-init`) downloads each through a presigned URL, checks its sha256, and puts it
+  where `vend` looks (`/pedagog/ingredients/<type>/<id>/<file>`). `vend` itself comes in
+  the build's ConfigMap, beside the Containerfile.
+- **Locally**, `hammer vend` downloads them into `$HAMMER_RECIPES/ingredients/<type>/<id>/`
+  for podman builds (`cargo xtask build`). The `ingredients/` directory is gitignored
+  (except for `.keep`); only `lib/` and recipe YAMLs are tracked.
 
 Recipe steps check for the vendored file before falling back to the source URL:
 ```bash
@@ -423,8 +434,7 @@ fi
 - `PEDAGOG_ID` — e.g. `ubuntu-22`, `workspace`, `gcc/12`
 
 A layer whose recipe declares ingredients also renders their pins after those two
-(`ENV PEDAGOG_INGREDIENTS="pedagog-pytest-bundle.tar.gz=sha256:fef3…"`; the source when
-there's no checksum). A new pinned file changes the Containerfile, so the image's hash
+(`ENV PEDAGOG_INGREDIENTS="pedagog-pytest-bundle.tar.gz=sha256:fef3…"`). A new pinned file changes the Containerfile, so the image's hash
 and the build cache's key for every later step: a rebuild can't reuse a step that
 installed the old file.
 

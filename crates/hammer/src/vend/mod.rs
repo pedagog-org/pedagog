@@ -51,10 +51,8 @@ pub fn run_vend(args: VendArgs, dirs: Vec<PathBuf>) -> Result<()> {
                 println!("✓ (cached)");
                 continue;
             }
-            let fetched = fetch(ingredient, &out_path).and_then(|()| match &ingredient.sha256 {
-                Some(expected) => verify_sha256(&out_path, expected),
-                None => Ok(()),
-            });
+            let fetched = fetch(ingredient, &out_path)
+                .and_then(|()| verify_sha256(&out_path, &ingredient.sha256));
             match fetched {
                 Ok(()) => println!("✓"),
                 Err(e) => {
@@ -130,13 +128,10 @@ fn fetch(ingredient: &Ingredient, out_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// A previously vended file is reused only when the recipe pins its checksum
-/// and the file still matches (otherwise it's deleted and fetched again).
+/// A previously vended file is reused while it still matches its checksum
+/// (otherwise it's deleted and fetched again).
 fn is_cached(ingredient: &Ingredient, path: &Path) -> bool {
-    match &ingredient.sha256 {
-        Some(expected) if path.exists() => verify_sha256(path, expected).is_ok(),
-        _ => false,
-    }
+    path.exists() && verify_sha256(path, &ingredient.sha256).is_ok()
 }
 
 /// Refuses (and deletes) a download whose SHA-256 isn't the recipe's.
@@ -311,9 +306,10 @@ mod tests {
             std::fs::create_dir_all(ing.join(path).parent().unwrap()).unwrap();
             std::fs::write(ing.join(path), content).unwrap();
         }
-        let ingredient: Ingredient =
-            serde_yaml::from_str("output: code-server.deb\nurl: https://example.com/cs.deb\n")
-                .unwrap();
+        let ingredient: Ingredient = serde_yaml::from_str(&format!(
+            "output: code-server.deb\nurl: https://example.com/cs.deb\nsha256: {HELLO}\n"
+        ))
+        .unwrap();
         let targets = [RecipeTarget {
             label: "platform/workspace".into(),
             ingredients: vec![ingredient],
@@ -348,32 +344,21 @@ mod tests {
         assert!(path.exists());
     }
 
-    fn ingredient(sha256: Option<&str>) -> Ingredient {
-        let yaml = match sha256 {
-            Some(s) => format!("output: f\nurl: 'https://example.com/f'\nsha256: {s}\n"),
-            None => "output: f\nurl: 'https://example.com/f'\n".to_owned(),
-        };
-        serde_yaml::from_str(&yaml).unwrap()
+    fn ingredient(sha256: &str) -> Ingredient {
+        serde_yaml::from_str(&format!(
+            "output: f\nurl: 'https://example.com/f'\nsha256: {sha256}\n"
+        ))
+        .unwrap()
     }
 
     #[test]
-    fn only_pinned_matching_files_count_as_cached() {
+    fn only_matching_files_count_as_cached() {
         let path = scratch_file("cache", b"hello");
-        assert!(is_cached(&ingredient(Some(HELLO)), &path));
-        assert!(
-            !is_cached(&ingredient(None), &path),
-            "unpinned: always refetch"
-        );
+        assert!(is_cached(&ingredient(HELLO), &path));
         let other = "0".repeat(64);
-        assert!(
-            !is_cached(&ingredient(Some(&other)), &path),
-            "stale: refetch"
-        );
+        assert!(!is_cached(&ingredient(&other), &path), "stale: refetch");
         assert!(!path.exists(), "a stale file is removed");
-        assert!(
-            !is_cached(&ingredient(Some(HELLO)), &path),
-            "missing: fetch"
-        );
+        assert!(!is_cached(&ingredient(HELLO), &path), "missing: fetch");
     }
 
     #[test]

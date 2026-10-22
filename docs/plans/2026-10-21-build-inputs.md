@@ -32,10 +32,10 @@ Previewing pedagog-pytest 2.2.0 found three problems with how images are built:
    and asset) instead.
 3. **Ingredients live in Garage, once per content.** `ingredients/sha256/<hex>`, shared by
    every recipe and assignment that pins the same file.
-   - **Jobs syncs at startup:** it reads every ingredient its recipes pin and downloads
-     the missing ones (checking sha256) into Garage. After start, builds never reach
-     GitHub. A pin without a sha256 is downloaded and stored by the hash it gets, with a
-     warning to pin it.
+   - **Jobs syncs at startup and every ten minutes:** it reads every ingredient its
+     recipes pin and downloads the missing ones (checking sha256) into Garage; a build
+     needing one not yet stored fetches it then. After that, builds never reach GitHub.
+     Every ingredient must be pinned by sha256 (recipe loading refuses one without).
    - **Builds fetch only what they declare,** by checksum, with `jobs-init`'s
      `fetch-context` (which already fetches and verifies by hash), into
      `/pedagog/ingredients/<type>/<id>/<file>` where `vend` looks. The `stage-recipes`
@@ -43,10 +43,10 @@ Previewing pedagog-pytest 2.2.0 found three problems with how images are built:
      doesn't need the recipes folder at build time (the OS init step that installs
      `vend` reads `/pedagog/recipes/lib/vend`: that one file is fetched too, or inlined).
    - **Cleanup, at once:** an ingredient no recipe pins any more is deleted by the
-     startup sync that finds it unpinned (images are already built, so nothing needs it
-     again), except while a build in flight still declares it (a jobs replica on the
-     old recipes during a rollout); those go at the next sync. The nightly maintenance
-     repeats the check as a backstop.
+     sync pass that finds it unpinned (images are already built, so nothing needs it
+     again), except while a build in flight still declares it (each build records its
+     ingredients; a jobs replica on the old recipes during a rollout); those go at the
+     next pass, ten minutes later.
    - **Dev:** kind uses the same Garage path; no hostPath recipes for ingredients, so
      nothing to vend by hand.
    - The jobs image drops its vend stage (~200 MB smaller).
@@ -74,9 +74,9 @@ Previewing pedagog-pytest 2.2.0 found three problems with how images are built:
 
 ## Rollback
 
-Each step is its own PR. Step 1 (checksums) and step 2 (always rebuild) revert on their
-own. Step 3 keeps the old `stage-recipes` path behind a config switch for one release
-(`PEDAGOG_INGREDIENTS=baked|garage`), so a revert is a config change.
+Each step is its own PR, and each reverts on its own. Step 3 has no switch back to baked
+ingredients (it would keep the 200 MB in the image): rolling it back is deploying the
+previous jobs image, which still bakes them.
 
 ## Steps
 
@@ -92,10 +92,10 @@ own. Step 3 keeps the old `stage-recipes` path behind a config switch for one re
    - move the vend download code (GitHub API, URL, sha256 check) from hammer into core
      so jobs can use it; `objects::ingredient_key(sha256)`;
    - jobs' startup sync (and a retry loop), reported in its health and logs;
-   - `kaniko_job` adds per-ingredient fetches to `fetch-context` (a list of
-     `<sha256> <dest>`), drops `stage-recipes`, keeps a switch for the old path;
+   - `kaniko_job` adds a `fetch-ingredients` initContainer (`<sha256> <path> <url>`
+     triples), drops `stage-recipes`, and gets `vend` from the build's ConfigMap;
    - deleting unpinned ingredients in the sync (skipping ones a build in flight
-     declares), with the nightly maintenance as a backstop;
+     declares, recorded per build);
    - the jobs image without the vend stage; xtask stops mounting recipes for kind
      builds if the open question allows;
    - tests: core (key, render), jobs (sync with a fake source; cleanup), k8s (the job
