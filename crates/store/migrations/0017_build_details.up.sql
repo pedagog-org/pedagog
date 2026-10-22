@@ -11,6 +11,11 @@ ALTER TABLE assignment_builds
     ADD COLUMN build_log_lines INTEGER,
     ADD COLUMN validation_log_lines INTEGER;
 
+-- When the current build became current (validated, or made current by hand).
+ALTER TABLE assignments ADD COLUMN current_since TIMESTAMPTZ;
+UPDATE assignments a SET current_since = b.finished_at
+  FROM assignment_builds b WHERE b.id = a.current_build_id;
+
 -- `error` holds only a failure's short reason from now on; the whole pod log it
 -- used to hold is cut to its last non-empty line (those builds have no log kept).
 UPDATE assignment_builds b

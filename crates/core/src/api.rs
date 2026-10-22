@@ -139,6 +139,50 @@ pub struct HomeCourse {
     pub role: String,
     /// For students: open or due soon, soonest first.
     pub items: Vec<StudentAssignment>,
+    /// For staff: what needs their attention.
+    #[serde(default)]
+    pub staff_items: Vec<StaffItem>,
+}
+
+/// Something in a course that needs its staff, on Home.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StaffItem {
+    /// The latest build failed and nothing newer is on the way (instructors).
+    BuildFailed {
+        slug: String,
+        name: String,
+        build: i64,
+        /// It built, but the reference solution disagreed with the tests.
+        validation: bool,
+    },
+    /// Students whose submission that counts couldn't be graded.
+    NotGraded {
+        slug: String,
+        name: String,
+        count: i64,
+    },
+    /// Due within a week.
+    DueSoon {
+        slug: String,
+        name: String,
+        due: String,
+        submitted: i64,
+        students: i64,
+    },
+    /// A build on its way.
+    Building {
+        slug: String,
+        name: String,
+        build: i64,
+        validating: bool,
+    },
+    Regrading {
+        slug: String,
+        name: String,
+        done: i64,
+        total: i64,
+    },
 }
 
 /// `GET /api/me/courses`.
@@ -276,4 +320,141 @@ pub enum MadeCurrent {
     /// Its image was cleaned up, so it's building again as `build`, which
     /// becomes current once it validates.
     Rebuilding { build: i64, cancelled: Option<i64> },
+}
+
+/// A build attempt as staff lists show it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildSummary {
+    pub id: i64,
+    /// `running`, `succeeded`, `failed` or `superseded`.
+    pub build_status: String,
+    /// `pending`, `running`, `passed`, `failed`, `skipped` or `invalid`.
+    pub validation_status: String,
+    pub finished: bool,
+    pub current: bool,
+    /// When it started (RFC 3339).
+    pub started_at: String,
+    /// Who started it (an upload, or making an old build current).
+    pub uploaded_by: Option<String>,
+    /// The build whose upload it built again.
+    pub rebuild_of: Option<i64>,
+    /// Cleanup deleted its image: making it current rebuilds it first.
+    pub image_deleted: bool,
+    /// It built and validated, and isn't current.
+    pub usable: bool,
+}
+
+/// Where an assignment's students stand.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssignmentCounts {
+    /// Active students in the course.
+    pub students: i64,
+    /// Of them, those with a submission.
+    pub submitted: i64,
+    /// Of them, those whose submission that counts couldn't be graded.
+    pub not_graded: i64,
+    /// The latest regrade, while it runs.
+    pub regrading: Option<Progress>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Progress {
+    pub done: i64,
+    pub total: i64,
+}
+
+/// An assignment in the staff list (`GET /api/courses/{c}/assignments`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StaffAssignment {
+    pub slug: String,
+    pub name: String,
+    pub dates: DatesView,
+    pub window: Window,
+    pub status: String,
+    pub current_build: Option<i64>,
+    pub latest_build: Option<BuildSummary>,
+    pub counts: AssignmentCounts,
+}
+
+/// `GET /api/courses/{c}/assignments/{a}` for staff: the overview.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StaffAssignmentPage {
+    pub course: String,
+    #[serde(flatten)]
+    pub assignment: StaffAssignment,
+    /// When the current build became current (its validation's end).
+    pub current_since: Option<String>,
+    pub released_at: Option<String>,
+    /// The current build's test helper doesn't sanitize errors.
+    pub students_see_raw_errors: bool,
+    /// The latest builds, newest first (`…/builds` pages through the rest).
+    pub builds: Vec<BuildSummary>,
+}
+
+/// A test of a validation run: what the reference solution did, against
+/// what the test declares.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReferenceTest {
+    #[serde(flatten)]
+    pub test: crate::view::ShownTest,
+    pub expected: crate::results::Expect,
+    pub as_expected: bool,
+}
+
+/// `GET /api/courses/{c}/assignments/{a}/builds/{id}` (staff).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BuildPage {
+    #[serde(flatten)]
+    pub build: BuildSummary,
+    pub course: String,
+    pub assignment: String,
+    pub image_ref: String,
+    /// A failure in a line.
+    pub error: Option<String>,
+    pub validation_problems: Vec<String>,
+    pub validation_warnings: Vec<String>,
+    pub build_ms: Option<i64>,
+    pub validation_ms: Option<i64>,
+    /// Each phase's log length, while its log is kept (`…/log?phase=`).
+    pub build_log_lines: Option<i32>,
+    pub validation_log_lines: Option<i32>,
+    /// The reference solution's results, every part shown.
+    pub tests: Vec<ReferenceTest>,
+    /// Over every test.
+    pub score: Option<f64>,
+    pub total: Option<f64>,
+}
+
+/// `GET …/builds`: a page of builds, newest first.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildsPage {
+    pub builds: Vec<BuildSummary>,
+    /// Pass as `before` for the next page.
+    pub next: Option<i64>,
+}
+
+/// One of a validation's date differences: the course's (in use) against the file's.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DateDiff {
+    pub field: String,
+    pub course: Option<String>,
+    pub file: Option<String>,
+}
+
+/// `POST /api/courses/{c}/assignments`: what the upload started.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Uploaded {
+    pub course: String,
+    pub assignment: String,
+    pub upload_id: i64,
+    pub tree_hash: String,
+    pub size_bytes: i64,
+    pub warnings: Vec<String>,
+    /// `{"status": "dispatched", "build_id": n}`.
+    pub build: serde_json::Value,
+    pub policy: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub date_diff: Vec<DateDiff>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dates_note: Option<String>,
 }

@@ -44,6 +44,10 @@ pub fn router(state: AppState) -> Router {
             post(submissions::submit).layer(DefaultBodyLimit::max(max_submission)),
         )
         .route(
+            "/internal/builds/{build}/log/{phase}",
+            get(crate::build_logs::serve),
+        )
+        .route(
             "/internal/submissions/{id}",
             get(submissions::submission_status),
         )

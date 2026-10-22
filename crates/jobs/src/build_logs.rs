@@ -54,6 +54,65 @@ pub async fn keep(state: &AppState, build: i64, phase: LogPhase, log: &str) {
     }
 }
 
+/// The last `n` lines of `log` (all of it without `n`).
+pub fn last_lines(log: &str, n: Option<usize>) -> &str {
+    let Some(n) = n else { return log };
+    let body = log.trim_end_matches('\n');
+    match body.rmatch_indices('\n').nth(n.saturating_sub(1)) {
+        Some((i, _)) if n > 0 => &log[i + 1..],
+        _ if n == 0 => "",
+        _ => log,
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct LogQuery {
+    tail: Option<usize>,
+}
+
+/// `GET /internal/builds/{id}/log/{phase}[?tail=n]`: a phase's log as text.
+pub async fn serve(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    axum::extract::Path((build, phase)): axum::extract::Path<(i64, String)>,
+    axum::extract::Query(q): axum::extract::Query<LogQuery>,
+) -> Result<axum::response::Response, crate::http::error::Refused> {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use std::io::Read;
+
+    use crate::http::error::{internal, refused};
+    if !matches!(phase.as_str(), "build" | "validation") {
+        return Err(refused(StatusCode::NOT_FOUND, format!("no {phase} log")));
+    }
+    let gz = state
+        .objects
+        .get(&build_log_key(build, &phase))
+        .await
+        .map_err(|_| {
+            refused(
+                StatusCode::NOT_FOUND,
+                format!("build {build} has no {phase} log kept"),
+            )
+        })?;
+    let text = tokio::task::spawn_blocking(move || {
+        let mut text = String::new();
+        flate2::read::GzDecoder::new(gz.as_slice())
+            .read_to_string(&mut text)
+            .map(|_| text)
+    })
+    .await
+    .map_err(|e| internal("reading the log", e))?
+    .map_err(|e| internal("reading the log", e))?;
+    Ok((
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
+        last_lines(&text, q.tail).to_owned(),
+    )
+        .into_response())
+}
+
 /// Delete the logs of attempts that ended more than [`KEEP_DAYS`] ago.
 pub async fn expire(state: &AppState) -> anyhow::Result<usize> {
     let builds = db::expired_logs(&state.pool, KEEP_DAYS).await?;
@@ -85,6 +144,16 @@ mod tests {
         assert_eq!(reason("timed out\nStep 3/9\n"), "timed out");
         assert_eq!(reason(""), "failed (no log)");
         assert_eq!(reason(&"é".repeat(600)).chars().count(), 500);
+    }
+
+    #[test]
+    fn a_tail_is_the_last_lines() {
+        let log = "a\nb\nc\n";
+        assert_eq!(last_lines(log, Some(2)), "b\nc\n");
+        assert_eq!(last_lines(log, Some(5)), log);
+        assert_eq!(last_lines(log, None), log);
+        assert_eq!(last_lines(log, Some(0)), "");
+        assert_eq!(last_lines("a\nb", Some(1)), "b");
     }
 
     #[test]

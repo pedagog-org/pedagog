@@ -475,7 +475,7 @@ pub async fn finish_validation(
     if status.is_usable() {
         sqlx::query!(
             "UPDATE assignments
-                SET current_build_id = $2, updated_at = now(),
+                SET current_build_id = $2, current_since = now(), updated_at = now(),
                     date_overrides = CASE WHEN $3 THEN '{}'::jsonb ELSE date_overrides END
               WHERE id = $1",
             row.assignment_id,
@@ -653,7 +653,8 @@ pub async fn make_current(
         None => None,
     };
     sqlx::query!(
-        "UPDATE assignments SET current_build_id = $2, updated_at = now() WHERE id = $1",
+        "UPDATE assignments SET current_build_id = $2, current_since = now(), updated_at = now()
+          WHERE id = $1",
         assignment_id,
         build
     )
@@ -831,6 +832,33 @@ pub async fn current_build_id(pool: &PgPool, assignment_id: i64) -> sqlx::Result
     .fetch_optional(pool)
     .await?;
     Ok(row.and_then(|r| r.current_build_id))
+}
+
+/// When the current build became current (RFC 3339).
+pub async fn current_since(pool: &PgPool, assignment_id: i64) -> sqlx::Result<Option<String>> {
+    sqlx::query_scalar!(
+        r#"SELECT to_char(current_since AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+             FROM assignments WHERE id = $1"#,
+        assignment_id
+    )
+    .fetch_optional(pool)
+    .await
+    .map(Option::flatten)
+}
+
+/// The latest regrade's runs done and in all, while some are still to run.
+pub async fn regrading(pool: &PgPool, assignment_id: i64) -> sqlx::Result<Option<(i64, i64)>> {
+    let row = sqlx::query!(
+        r#"SELECT b.runs::bigint AS "total!",
+                  (SELECT count(*) FROM grading_runs g
+                    WHERE g.regrade_batch_id = b.id AND g.status IN ('graded', 'error')) AS "done!"
+             FROM regrade_batches b WHERE b.assignment_id = $1
+            ORDER BY b.id DESC LIMIT 1"#,
+        assignment_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.filter(|r| r.done < r.total).map(|r| (r.done, r.total)))
 }
 
 /// `assignment_builds` as stored; statuses are parsed into their enums.
