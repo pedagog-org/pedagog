@@ -870,15 +870,8 @@ fn run_upload(args: UploadArgs) -> Result<()> {
     let (to, course) = endpoint(args.course, &dir)?;
     let archive = upload::pack(&dir).map_err(|e| miette!("{e}"))?;
     let regrade = args.regrade.then_some(args.notify);
-    let uploaded = upload::send(
-        &to,
-        &segment(&course.id),
-        archive,
-        args.force,
-        regrade,
-        args.take_dates,
-    )
-    .map_err(|e| miette!("{e}"))?;
+    let uploaded = upload::send(&to, &segment(&course.id), archive, regrade, args.take_dates)
+        .map_err(|e| miette!("{e}"))?;
     println!(
         "uploaded {}/{} (tree {}, {} bytes) as upload {}{}",
         uploaded.course,
@@ -888,16 +881,8 @@ fn run_upload(args: UploadArgs) -> Result<()> {
         uploaded.upload_id,
         course.origin()
     );
-    match uploaded.build.status.as_str() {
-        "already_built" => println!(
-            "already built and validated as build {}; nothing to do (--force rebuilds)",
-            uploaded.build.build_id
-        ),
-        _ => println!("build {} dispatched", uploaded.build.build_id),
-    }
-    if let Some(notify) = regrade
-        && uploaded.build.status != "already_built"
-    {
+    println!("build {} dispatched", uploaded.build.build_id);
+    if let Some(notify) = regrade {
         println!(
             "every student's latest submission will be regraded once it's current (notify: {notify})"
         );

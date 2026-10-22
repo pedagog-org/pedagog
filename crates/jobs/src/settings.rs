@@ -85,9 +85,7 @@ pub async fn settings_of(state: &AppState, build: &AssignmentBuild) -> anyhow::R
     let upload = db::get_upload(&state.pool, build.upload_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("build {} has no upload {}", build.id, build.upload_id))?;
-    let settings = crate::assignments::plan_for(state, &upload, false)
-        .await?
-        .settings;
+    let settings = crate::assignments::plan_for(state, &upload).await?.settings;
     db::set_build_settings(&state.pool, build.id, &settings.to_stored()?).await?;
     tracing::info!(build = build.id, "backfilled run settings");
     Ok(settings)

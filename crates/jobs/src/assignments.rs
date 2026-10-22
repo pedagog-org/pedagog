@@ -46,7 +46,6 @@ pub struct Plan {
     pub settings: RunSettings,
     /// The file's `assignment:` policy as JSON.
     pub policy: String,
-    pub force: bool,
 }
 
 impl Plan {
@@ -78,10 +77,8 @@ impl Plan {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "status")]
 pub enum Decision {
-    /// A build attempt started.
+    /// A build attempt started (every upload builds: nothing is reused).
     Dispatched { build_id: i64 },
-    /// This exact image was already built and validated (or validation was skipped).
-    AlreadyBuilt { build_id: i64 },
 }
 
 pub async fn dispatch(state: &AppState, plan: Plan) -> anyhow::Result<Decision> {
@@ -92,11 +89,6 @@ pub async fn dispatch(state: &AppState, plan: Plan) -> anyhow::Result<Decision> 
     let mut tx = state.pool.begin().await?;
     store_db::lock(&mut tx, &format!("dispatch:{id}")).await?;
     let image_hash = plan.image_hash();
-    if !plan.force
-        && let Some(build_id) = db::usable_build_for(&mut *tx, id, &image_hash).await?
-    {
-        return Ok(Decision::AlreadyBuilt { build_id });
-    }
     if let Some(running) = db::in_flight_for(&mut *tx, id).await? {
         supersede(state, &mut tx, &running).await?;
     }
@@ -144,7 +136,8 @@ async fn supersede(
 /// Where an attempt picks up.
 #[derive(Clone, Copy, Debug)]
 enum Resume {
-    /// Ensure the build Job (reusing one that already built this image unless forced).
+    /// Start the build Job, replacing one that already built this image (an
+    /// identical upload still rebuilds: its base or ingredients may have moved).
     Build,
     /// The build Job exists; wait for it.
     AwaitBuild,
@@ -196,11 +189,7 @@ async fn run(state: &AppState, build_id: i64, plan: &Plan, from: Resume) -> anyh
                 tree_hash: plan.tree_hash.clone(),
             },
             deadline: Some(deadline),
-            if_built: if plan.force {
-                IfBuilt::Rebuild
-            } else {
-                IfBuilt::Skip
-            },
+            if_built: IfBuilt::Rebuild,
         };
         let outcome = state.builder.ensure(&build_key, &request).await?;
         tracing::info!(build = build_id, ?outcome, "build Job ensured");
@@ -407,7 +396,7 @@ pub fn judge(uploaded: Option<&[u8]>) -> Verdict {
 pub async fn reconcile(state: &AppState) -> anyhow::Result<()> {
     for build in db::in_flight(&state.pool).await? {
         let upload = upload_of(state, &build).await?;
-        let plan = match plan_for(state, &upload, false).await {
+        let plan = match plan_for(state, &upload).await {
             Ok(plan) => plan,
             Err(e) => {
                 let message = format!("can't resume after a restart: {e}");
@@ -444,7 +433,7 @@ pub async fn reconcile(state: &AppState) -> anyhow::Result<()> {
         spawn(state, build.id, plan, from);
     }
     for upload in db::uploads_without_builds(&state.pool).await? {
-        match plan_for(state, &upload, false).await {
+        match plan_for(state, &upload).await {
             Ok(plan) => {
                 let decision = dispatch(state, plan).await?;
                 tracing::info!(
@@ -468,11 +457,7 @@ async fn upload_of(state: &AppState, build: &AssignmentBuild) -> anyhow::Result<
 }
 
 /// Re-derives an upload's plan from its stored archive.
-pub(crate) async fn plan_for(
-    state: &AppState,
-    upload: &AssignmentUpload,
-    force: bool,
-) -> anyhow::Result<Plan> {
+pub(crate) async fn plan_for(state: &AppState, upload: &AssignmentUpload) -> anyhow::Result<Plan> {
     let assignment = db::assignment_by_id(&state.pool, upload.assignment_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("upload {} has no assignment", upload.id))?;
@@ -488,13 +473,7 @@ pub(crate) async fn plan_for(
     })
     .await?
     .map_err(|r| anyhow::anyhow!(r.error))?;
-    Plan::from_checked(
-        checked,
-        &assignment,
-        upload.id,
-        upload.object_key.clone(),
-        force,
-    )
+    Plan::from_checked(checked, &assignment, upload.id, upload.object_key.clone())
 }
 
 #[cfg(test)]
@@ -518,7 +497,6 @@ mod tests {
                 submission: Default::default(),
             },
             policy: "{}".into(),
-            force: false,
         }
     }
 
@@ -538,10 +516,10 @@ mod tests {
 
     #[test]
     fn decisions_serialize_with_a_status_tag() {
-        let json = serde_json::to_value(Decision::AlreadyBuilt { build_id: 7 }).unwrap();
+        let json = serde_json::to_value(Decision::Dispatched { build_id: 7 }).unwrap();
         assert_eq!(
             json,
-            serde_json::json!({"status": "already_built", "build_id": 7})
+            serde_json::json!({"status": "dispatched", "build_id": 7})
         );
     }
 
