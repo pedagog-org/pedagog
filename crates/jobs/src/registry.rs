@@ -318,10 +318,16 @@ pub async fn run(state: AppState) {
         {
             let day = now.date().to_string();
             match db::maintenance::claim(&state.pool, "registry-cleanup", &day).await {
-                Ok(true) => match cleanup(&state).await {
-                    Ok(c) => tracing::info!(?c, "registry cleanup done"),
-                    Err(e) => tracing::error!(error = %e, "registry cleanup failed"),
-                },
+                Ok(true) => {
+                    match cleanup(&state).await {
+                        Ok(c) => tracing::info!(?c, "registry cleanup done"),
+                        Err(e) => tracing::error!(error = %e, "registry cleanup failed"),
+                    }
+                    match crate::build_logs::expire(&state).await {
+                        Ok(n) => tracing::info!(builds = n, "old build logs deleted"),
+                        Err(e) => tracing::error!(error = %e, "deleting old build logs failed"),
+                    }
+                }
                 Ok(false) => {}
                 Err(e) => tracing::warn!(error = %e, "claiming the registry cleanup failed"),
             }

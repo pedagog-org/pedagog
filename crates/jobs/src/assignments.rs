@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use pedagog_core::recipe::render::Needed;
 use pedagog_core::results::Results;
-use pedagog_core::text::tail;
 use pedagog_k8s::build::{BuildRequest, Context, IfBuilt, JobKey, JobState, Waited};
 use pedagog_k8s::validate::ValidationRequest;
+use pedagog_store::db::assignments::LogPhase;
 use pedagog_store::db::queue;
 use pedagog_store::db::{self as store_db, assignments as db};
 use pedagog_store::objects::results_key;
@@ -20,14 +20,13 @@ use serde::Serialize;
 use sqlx::PgConnection;
 
 use crate::admission::Launch;
+use crate::build_logs;
 use crate::intake;
 use crate::settings::{RunSettings, settings_of};
 use crate::state::AppState;
 
 /// Extra validity for presigned URLs beyond their Job's deadline.
 const URL_MARGIN: Duration = Duration::from_secs(600);
-/// How much of a failed validation pod's log is kept with its problems.
-const LOG_TAIL: usize = 4000;
 
 /// The assignment part of its Jobs' names: course and slug.
 pub fn job_id(course: &str, slug: &str) -> String {
@@ -220,10 +219,14 @@ async fn run(state: &AppState, build_id: i64, plan: &Plan, from: Resume) -> anyh
                     return Ok(()); // superseded meanwhile
                 }
                 tracing::info!(build = build_id, "image built");
+                let log = state.builder.logs(&build_key).await;
+                build_logs::keep(state, build_id, LogPhase::Build, &log).await;
             }
             Waited::Failed { logs } => {
-                if db::finish_build(&state.pool, build_id, false, Some(&logs)).await? {
-                    tracing::warn!(build = build_id, "image build failed");
+                let reason = build_logs::reason(&logs);
+                if db::finish_build(&state.pool, build_id, false, Some(&reason)).await? {
+                    tracing::warn!(build = build_id, %reason, "image build failed");
+                    build_logs::keep(state, build_id, LogPhase::Build, &logs).await;
                 }
                 return Ok(());
             }
@@ -260,19 +263,20 @@ pub async fn settle_validation(
     }
     let uploaded = state.objects.get(&results_key(build_id)).await.ok();
     let mut verdict = judge(uploaded.as_deref());
+    let log = state
+        .builder
+        .logs(&JobKey::validation(
+            &job_id(&build.course_id, &build.slug),
+            build_id,
+        ))
+        .await;
     if uploaded.is_none() && !succeeded {
-        let logs = state
-            .builder
-            .logs(&JobKey::validation(
-                &job_id(&build.course_id, &build.slug),
-                build_id,
-            ))
-            .await;
-        let tail = tail(&logs, LOG_TAIL);
-        verdict
-            .problems
-            .push(format!("validation pod log (tail):\n{tail}"));
+        verdict.problems.push(format!(
+            "the validation pod ended without results: {} (see the validation log)",
+            build_logs::reason(&log)
+        ));
     }
+    build_logs::keep(state, build_id, LogPhase::Validation, &log).await;
     if db::finish_validation(
         &state.pool,
         build_id,
