@@ -14,6 +14,8 @@ pub mod describe;
 pub struct Layer {
     pub source: LayerSource,
     pub steps: Vec<ResolvedStep>,
+    /// `file=pin` for the ingredients its steps can `vend`.
+    pub ingredients: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

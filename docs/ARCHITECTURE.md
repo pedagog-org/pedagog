@@ -422,6 +422,12 @@ fi
 - `PEDAGOG_TYPE` — `os`, `platform`, or `toolchain`
 - `PEDAGOG_ID` — e.g. `ubuntu-22`, `workspace`, `gcc/12`
 
+A layer whose recipe declares ingredients also renders their pins after those two
+(`ENV PEDAGOG_INGREDIENTS="pedagog-pytest-bundle.tar.gz=sha256:fef3…"`; the source when
+there's no checksum). A new pinned file changes the Containerfile, so the image's hash
+and the build cache's key for every later step: a rebuild can't reuse a step that
+installed the old file.
+
 The function lives at `$HAMMER_RECIPES/lib/vend` and is part of the OS init contract
 (see below). Every OS recipe's init hook must install it.
 

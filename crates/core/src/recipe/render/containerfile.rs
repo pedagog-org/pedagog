@@ -118,6 +118,15 @@ fn render_layer(to: &mut String, layer: &Layer) {
     let (ptype, pid) = layer_env(&layer.source);
     let _ = writeln!(to, "ENV PEDAGOG_TYPE={ptype}");
     let _ = writeln!(to, "ENV PEDAGOG_ID={pid}");
+    // What its steps can `vend`, pinned: a new file changes this line, so the
+    // image's hash and the build cache's key for every step after it.
+    if !layer.ingredients.is_empty() {
+        let _ = writeln!(
+            to,
+            "ENV PEDAGOG_INGREDIENTS=\"{}\"",
+            layer.ingredients.join(" ")
+        );
+    }
     for step in &layer.steps {
         render_step(to, step);
     }
@@ -228,6 +237,7 @@ mod tests {
         Layer {
             source: LayerSource::Os(id("ubuntu-22")),
             steps: vec![step("init", &["apt-get update"])],
+            ingredients: Vec::new(),
         }
     }
 
@@ -237,15 +247,18 @@ mod tests {
             platform: Layer {
                 source: LayerSource::Platform(PlatformKind::Workspace),
                 steps: vec![step("code-server", &["install cs"])],
+                ingredients: Vec::new(),
             },
             toolchain: vec![],
             assignment: Layer {
                 source: LayerSource::Assignment(id("hw1")),
                 steps: vec![],
+                ingredients: Vec::new(),
             },
             os_cleanup: Layer {
                 source: LayerSource::OsCleanup(id("ubuntu-22")),
                 steps: vec![],
+                ingredients: Vec::new(),
             },
         }
     }
@@ -382,6 +395,52 @@ mod tests {
         let out = Containerfile::render(&spec, &opts(None, FromSource::PrebuiltBase)).to_string();
         assert!(out.contains("ENV PEDAGOG_TYPE=platform"), "{out}");
         assert!(out.contains("ENV PEDAGOG_ID=workspace"), "{out}");
+        assert!(!out.contains("PEDAGOG_INGREDIENTS"), "none declared: {out}");
+    }
+
+    #[test]
+    fn a_layers_pinned_ingredients_come_before_its_steps() {
+        let render = |pin: &str| {
+            let ImageSpec::Full {
+                mut plan,
+                upstream,
+                base_image,
+                runtime,
+                ports,
+                network,
+                testing,
+                files,
+            } = full_spec(&["code-server"], vec![], NetworkSpec::Allow)
+            else {
+                unreachable!()
+            };
+            plan.platform.ingredients = vec![format!("code-server.deb=sha256:{pin}")];
+            let spec = ImageSpec::Full {
+                plan,
+                upstream,
+                base_image,
+                runtime,
+                ports,
+                network,
+                testing,
+                files,
+            };
+            Containerfile::render(&spec, &opts(None, FromSource::PrebuiltBase)).to_string()
+        };
+        let out = render("aa");
+        let env = out
+            .find("ENV PEDAGOG_INGREDIENTS=\"code-server.deb=sha256:aa\"")
+            .expect(&out);
+        assert!(env > out.find("ENV PEDAGOG_ID=workspace").unwrap());
+        assert!(
+            env < out.find("RUN install cs").unwrap(),
+            "before the step that vends it"
+        );
+        assert_ne!(
+            render("aa"),
+            render("bb"),
+            "a new file changes the Containerfile"
+        );
     }
 
     #[test]
@@ -392,6 +451,7 @@ mod tests {
             os: Layer {
                 source: LayerSource::Os(id("ubuntu-22")),
                 steps: vec![step("multi", &["if true; then\n  echo hi\nfi"])],
+                ingredients: Vec::new(),
             },
         };
         let out = Containerfile::render(&spec, &opts(None, FromSource::Standalone)).to_string();
