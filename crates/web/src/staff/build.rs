@@ -16,7 +16,7 @@ use crate::session::use_session;
 use crate::shell::Shell;
 
 use super::describe::{build_badge, took, validation_badge};
-use super::make_current::MakeCurrent;
+use super::make_current::{Picked, dialog};
 
 /// Lines shown before "Show all".
 const TAIL: usize = 200;
@@ -66,6 +66,7 @@ pub fn Build() -> impl IntoView {
     Effect::new(move || {
         crate::events::watch(course.get(), slug.get(), move |_| refresh(), refresh);
     });
+    let picking = RwSignal::new(None::<Picked>);
     let name = move || match assignment.get() {
         Some(Ok(a)) => a.assignment.name,
         _ => slug.get(),
@@ -91,9 +92,10 @@ pub fn Build() -> impl IntoView {
                         ),
                         _ => (None, 0, None),
                     };
-                    view! { <Page b=b base=base() manages=super::manages(&session, &course.get()) in_flight=in_flight students=students current=current refresh=refresh/> }.into_any()
+                    view! { <Page b=b base=base() manages=super::manages(&session, &course.get()) in_flight=in_flight students=students current=current picking=picking/> }.into_any()
                 }
             }}
+            {dialog(base, picking, refresh)}
         </Shell>
     }
 }
@@ -106,10 +108,9 @@ fn Page(
     in_flight: Option<i64>,
     students: i64,
     current: Option<i64>,
-    refresh: impl Fn() + Copy + Send + Sync + 'static,
+    picking: RwSignal<Option<Picked>>,
 ) -> impl IntoView {
     let s = b.build.clone();
-    let picking = RwSignal::new(false);
     let mismatches = b.tests.iter().filter(|t| !t.as_expected).count();
     let still = match current {
         Some(c) if c != s.id => format!("Build {c} is still current; students aren’t affected."),
@@ -133,7 +134,7 @@ fn Page(
             </div>
             <div class="row g-2">
                 {(manages && s.usable).then(|| view! {
-                    <button class="btn" type="button" on:click=move |_| picking.set(true)>
+                    <button class="btn" type="button" on:click=move |_| picking.set(Some(Picked { target: summary.clone(), in_flight, students }))>
                         {if s.image_deleted { "Rebuild and make current…" } else { "Make current…" }}
                     </button>
                 })}
@@ -200,10 +201,6 @@ fn Page(
             <Log base=base.clone() id=s.id phase="build" lines=b.build_log_lines open=s.build_status == "failed"/>
             <Log base=base.clone() id=s.id phase="validation" lines=b.validation_log_lines open=false/>
         </div>
-        {move || picking.get().then(|| view! {
-            <MakeCurrent base=base.clone() target=summary.clone() in_flight=in_flight students=students
-                close=move || picking.set(false) done=refresh/>
-        })}
     }
 }
 

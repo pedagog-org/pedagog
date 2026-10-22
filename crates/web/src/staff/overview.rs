@@ -14,7 +14,7 @@ use crate::session::use_session;
 use crate::shell::Shell;
 
 use super::describe::{build_badge, validation_badge};
-use super::make_current::MakeCurrent;
+use super::make_current::{Picked, dialog};
 
 /// The latest build, when it failed and isn't current: what to say.
 pub fn failed_alert(latest: &BuildSummary, current: Option<i64>) -> Option<String> {
@@ -47,6 +47,7 @@ pub fn Overview(course: Signal<String>, slug: Signal<String>) -> impl IntoView {
         crate::events::watch(course.get(), slug.get(), move |_| refresh(), refresh);
     });
     let manages = move || super::manages(&session, &course.get());
+    let picking = RwSignal::new(None::<Picked>);
     let title = move || match page.get() {
         Some(Ok(p)) => p.assignment.name,
         _ => slug.get(),
@@ -61,8 +62,9 @@ pub fn Overview(course: Signal<String>, slug: Signal<String>) -> impl IntoView {
             {move || match page.get() {
                 None => view! { <Loading/> }.into_any(),
                 Some(Err(p)) => view! { <Failed problem=p/> }.into_any(),
-                Some(Ok(p)) => view! { <Page page=p base=base() manages=manages() refresh=refresh/> }.into_any(),
+                Some(Ok(p)) => view! { <Page page=p base=base() manages=manages() picking=picking/> }.into_any(),
             }}
+            {dialog(base, picking, refresh)}
         </Shell>
     }
 }
@@ -72,7 +74,7 @@ fn Page(
     page: StaffAssignmentPage,
     base: String,
     manages: bool,
-    refresh: impl Fn() + Copy + Send + Sync + 'static,
+    picking: RwSignal<Option<Picked>>,
 ) -> impl IntoView {
     let a = page.assignment.clone();
     let m = moments(&a.dates);
@@ -84,7 +86,6 @@ fn Page(
     let in_flight = building.as_ref().map(|b| b.id);
     let ui_base = format!("/{}", base.trim_start_matches('/'));
     let current = page.builds.iter().find(|b| b.current).cloned();
-    let picking = RwSignal::new(None::<BuildSummary>);
     let students = a.counts.submitted;
     let due = m.due.clone();
     let late = m.late_due.clone();
@@ -167,12 +168,9 @@ fn Page(
                     }}
                 </div>
             </div>
-            <Builds builds=page.builds.clone() base=base.clone() ui_base=ui_base.clone() manages=manages picking=picking/>
+            <Builds builds=page.builds.clone() base=base.clone() ui_base=ui_base.clone() manages=manages
+                pick=move |b: BuildSummary| picking.set(Some(Picked { target: b, in_flight, students }))/>
         </div>
-        {move || picking.get().map(|b| view! {
-            <MakeCurrent base=base.clone() target=b in_flight=in_flight students=students
-                close=move || picking.set(None) done=refresh/>
-        })}
     }
 }
 
@@ -182,7 +180,7 @@ fn Builds(
     base: String,
     ui_base: String,
     manages: bool,
-    picking: RwSignal<Option<BuildSummary>>,
+    pick: impl Fn(BuildSummary) + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
     let more = RwSignal::new(Vec::<BuildSummary>::new());
     let next = RwSignal::new(builds.last().map(|b| b.id).filter(|_| builds.len() >= 10));
@@ -203,7 +201,7 @@ fn Builds(
     };
     let row = move |b: BuildSummary| {
         let href = format!("{ui_base}/builds/{}", b.id);
-        let pick = b.clone();
+        let target = b.clone();
         view! {
             <tr>
                 <td><A href=href.clone() attr:class="rowlink mono">{format!("build {}", b.id)}</A>
@@ -217,7 +215,7 @@ fn Builds(
                     {(manages && b.usable).then(|| view! {
                         <button class="btn btn-sm" type="button"
                             title=if b.image_deleted { "Its image was cleaned up: it’s built again first" } else { "Students’ new submissions are graded with this build" }
-                            on:click=move |_| picking.set(Some(pick.clone()))>
+                            on:click=move |_| pick(target.clone())>
                             {if b.image_deleted { "Rebuild and make current…" } else { "Make current…" }}
                         </button>
                     })}

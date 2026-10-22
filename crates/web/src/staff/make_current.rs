@@ -5,6 +5,32 @@
 use leptos::prelude::*;
 use pedagog_core::api::{BuildSummary, MadeCurrent};
 
+/// The build being made current, with what the dialog says about it. Kept
+/// by the page above the data it refetches, so a refresh after it's done
+/// (or the live "current" event) doesn't close the dialog before it says so.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Picked {
+    pub target: BuildSummary,
+    pub in_flight: Option<i64>,
+    pub students: i64,
+}
+
+/// The dialog for `picking`, while there is one.
+pub fn dialog(
+    base: impl Fn() -> String + Send + Sync + 'static,
+    picking: RwSignal<Option<Picked>>,
+    done: impl Fn() + Copy + Send + Sync + 'static,
+) -> impl IntoView {
+    move || {
+        picking.get().map(|p| {
+            view! {
+                <MakeCurrent base=base() target=p.target in_flight=p.in_flight students=p.students
+                    close=move || picking.set(None) done=done/>
+            }
+        })
+    }
+}
+
 /// What the dialog warns about before anything happens.
 pub fn notes(build: &BuildSummary, in_flight: Option<i64>) -> Vec<String> {
     let mut notes = Vec::new();
