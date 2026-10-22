@@ -114,6 +114,20 @@ pub struct AssignmentBuild {
     /// The file's `assignment:` policy as JSON text; `None` for builds from
     /// before it was saved (the default policy).
     pub policy: Option<String>,
+    pub uploaded_by: Option<i64>,
+    pub uploaded_by_email: Option<String>,
+    pub rebuild_of: Option<i64>,
+    /// When the attempt started (RFC 3339, UTC).
+    pub started_at: String,
+    /// How long the image build took (ms), once it ended.
+    pub build_ms: Option<i64>,
+    /// How long validation took (ms), once it ended.
+    pub validation_ms: Option<i64>,
+    /// The nightly cleanup deleted its image.
+    pub image_deleted: bool,
+    /// Each phase's log length, while its log is kept (`None`: no log).
+    pub build_log_lines: Option<i32>,
+    pub validation_log_lines: Option<i32>,
 }
 
 /// A build's run settings as stored; `jobs` owns what the JSON means.

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE assignment_builds SET finished_at = now() - interval '181 days' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e0f9ed1c82543a160dcef0d5e0a92ec965e3e7f23d76d12ce8d18c19e529283c"
+}

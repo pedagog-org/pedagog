@@ -1,7 +1,8 @@
 //! Live updates: a trigger (migration 0015) announces every grading run's and
 //! build's status change on [`CHANNEL`] as JSON: `{"kind":"run", run,
-//! submission, assignment, user, email, status, score, total}` or `{"kind":"build",
-//! build, assignment, build_status, validation_status}`.
+//! submission, assignment, user, email, status, score, total}`, `{"kind":"build",
+//! build, assignment, build_status, validation_status}`, or (migration 0017)
+//! `{"kind":"current", assignment, build}` when an assignment's current build changes.
 
 /// The Postgres `NOTIFY` channel the api listens on.
 pub const CHANNEL: &str = "pedagog_events";
@@ -96,6 +97,28 @@ mod tests {
             kinds.iter().any(|k| k.contains(r#""kind" : "build""#)),
             "{kinds:?}"
         );
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn a_new_current_build_is_announced(pool: PgPool) -> sqlx::Result<()> {
+        let first = current_build(&pool, "ll", "img-a").await?;
+        let second = current_build(&pool, "ll", "img-b").await?;
+        let a = crate::db::assignments::assignment(&pool, "c", "ll")
+            .await?
+            .unwrap();
+        let mut listener = PgListener::connect_with(&pool).await?;
+        listener.listen(CHANNEL).await?;
+
+        crate::db::assignments::make_current(&pool, a.id, first, None).await?;
+        let made = next(&mut listener).await;
+        assert!(
+            made.contains(r#""kind" : "current""#)
+                && made.contains(&format!(r#""assignment" : {}"#, a.id))
+                && made.contains(&format!(r#""build" : {first}"#)),
+            "{made}"
+        );
+        assert_ne!(first, second);
         Ok(())
     }
 }

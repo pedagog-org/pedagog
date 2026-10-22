@@ -347,6 +347,8 @@ mod tests {
                 image_ref: "reg/pedagog/assignments/cop3502-f26/linked-list:h",
                 settings: &settings,
                 policy: "{}",
+                uploaded_by: None,
+                rebuild_of: None,
             },
         )
         .await?;

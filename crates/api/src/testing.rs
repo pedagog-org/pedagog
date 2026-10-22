@@ -284,6 +284,8 @@ pub async fn course(pool: &PgPool) -> sqlx::Result<(i64, i64)> {
             image_ref: "r",
             settings: &settings,
             policy: r#"{"dates": {"open": "always"}}"#,
+            uploaded_by: None,
+            rebuild_of: None,
         },
     )
     .await?;

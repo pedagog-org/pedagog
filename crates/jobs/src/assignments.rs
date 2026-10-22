@@ -106,6 +106,8 @@ pub async fn dispatch(state: &AppState, plan: Plan) -> anyhow::Result<Decision> 
             image_ref: &image_ref,
             settings: &plan.settings.to_stored()?,
             policy: &plan.policy,
+            uploaded_by: None,
+            rebuild_of: None,
         },
     )
     .await?;

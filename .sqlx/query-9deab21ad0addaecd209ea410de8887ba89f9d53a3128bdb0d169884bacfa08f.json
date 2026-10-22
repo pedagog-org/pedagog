@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT current_build_id FROM assignments WHERE id = $1 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "current_build_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignments",
+            "name": "current_build_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "9deab21ad0addaecd209ea410de8887ba89f9d53a3128bdb0d169884bacfa08f"
+}
