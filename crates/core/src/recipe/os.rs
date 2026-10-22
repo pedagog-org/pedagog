@@ -41,10 +41,6 @@ pub struct BuildHookDefs {
 #[derive(Debug, Deserialize)]
 pub struct PkgHookDefs {
     pub install: ArgHook<PkgArg>,
-    /// Refreshes the package index; run in the same step as every install, so a
-    /// cached install keeps the index it installed with (never a stale one).
-    #[serde(default)]
-    pub update: Option<ArgHook<PkgArg>>,
     /// Reserved; not used by the resolver yet.
     #[serde(default)]
     pub remove: Option<ArgHook<PkgArg>>,
