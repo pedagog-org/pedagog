@@ -14,8 +14,8 @@ pub mod describe;
 pub struct Layer {
     pub source: LayerSource,
     pub steps: Vec<ResolvedStep>,
-    /// `file=pin` for the ingredients its steps can `vend`.
-    pub ingredients: Vec<String>,
+    /// The ingredients its steps can `vend`.
+    pub ingredients: Vec<crate::recipe::primitives::Pin>,
 }
 
 #[derive(Debug, Clone)]
@@ -199,6 +199,51 @@ pub enum ImageSpec {
         testing: Option<Testing>,
         files: AssignmentFiles,
     },
+}
+
+/// A file a build needs where `vend` looks: `<type>/<id>/<file>` under
+/// `/pedagog/ingredients`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Needed {
+    pub path: String,
+    pub sha256: String,
+}
+
+impl ImageSpec {
+    /// The ingredients a build of this image needs, by where `vend` finds them
+    /// (`from` decides whether the os layer is part of the build).
+    pub fn needed_ingredients(&self, from: FromSource) -> Vec<Needed> {
+        let layers: Vec<&Layer> = match self {
+            ImageSpec::Base { os, .. } => vec![os],
+            ImageSpec::Full { plan, .. } => {
+                let mut l = Vec::new();
+                if matches!(from, FromSource::Standalone) {
+                    l.push(&plan.os);
+                }
+                l.push(&plan.platform);
+                l.extend(plan.toolchain.iter());
+                l.push(&plan.assignment);
+                if matches!(from, FromSource::Standalone) {
+                    l.push(&plan.os_cleanup);
+                }
+                l
+            }
+        };
+        let mut out = Vec::new();
+        for layer in layers {
+            let (ptype, pid) = containerfile::layer_env(&layer.source);
+            for pin in &layer.ingredients {
+                let needed = Needed {
+                    path: format!("{ptype}/{pid}/{}", pin.output),
+                    sha256: pin.sha256.clone(),
+                };
+                if !out.contains(&needed) {
+                    out.push(needed);
+                }
+            }
+        }
+        out
+    }
 }
 
 /// Where a `Full` image's FROM comes from: `Standalone` builds from upstream and

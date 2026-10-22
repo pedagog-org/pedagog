@@ -1,37 +1,26 @@
 # Multi-stage jobs image. Build context is the repo root:
 #   podman build -f crates/jobs/Containerfile -t <ref> .
 #
-# build   -> compile the jobs + hammer binaries (sqlx offline via committed .sqlx/)
-# vend    -> hammer vend the pinned recipes (fetch ingredients at image-build time)
+# build   -> compile the jobs binary (sqlx offline via committed .sqlx/)
 # init    -> pedagog/jobs-init: only the binary, for test-run and build pods'
-#            initContainers (await-egress, fetch-context):
+#            initContainers (await-egress, fetch-context, fetch-ingredients):
 #              podman build -f crates/jobs/Containerfile --target init -t <ref> .
-# runtime -> pedagog/jobs (the default target): the binary + baked recipes at
-#            /opt/pedagog/recipes
+# runtime -> pedagog/jobs (the default target): the binary + the pinned recipes
+#            at /opt/pedagog/recipes. Their ingredients aren't baked: jobs keeps
+#            them in Garage, and builds fetch what they declare.
 #
-# hammer is a build-time tool only; it is not in the runtime image.
-#
-# Cache mounts keep crates.io downloads, compiled dependencies and vended
-# ingredients between builds, so a code change recompiles only the workspace
-# and pinned ingredients aren't downloaded again.
+# Cache mounts keep crates.io downloads and compiled dependencies between
+# builds, so a code change recompiles only the workspace.
 
 FROM docker.io/library/rust:1.97.1-bookworm AS build
 WORKDIR /src
 COPY . .
 ENV SQLX_OFFLINE=true
-# A cache mount isn't part of the image, so the binaries are copied out of it.
+# A cache mount isn't part of the image, so the binary is copied out of it.
 RUN --mount=type=cache,id=pedagog-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=pedagog-jobs-target,target=/src/target \
-    cargo build --release --locked -p pedagog-jobs -p hammer \
-    && mkdir -p /out && cp target/release/pedagog-jobs target/release/hammer /out/
-
-FROM build AS vend
-# Needs network + the recipes' pinned upstream tags. Baked so Kaniko builds are hermetic.
-# Ingredients with a pinned checksum are reused from the cache when they still
-# match; --prune drops cached files no recipe declares any more (e.g. renamed).
-RUN --mount=type=cache,id=pedagog-ingredients,target=/src/recipes/ingredients \
-    /out/hammer vend --recipes /src/recipes --quiet --prune \
-    && cp -a /src/recipes/ingredients /out/ingredients
+    cargo build --release --locked -p pedagog-jobs \
+    && mkdir -p /out && cp target/release/pedagog-jobs /out/
 
 # Built against Debian 12's glibc (rust:*-bookworm), as is this base.
 FROM gcr.io/distroless/cc-debian12:nonroot AS init
@@ -43,8 +32,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/pedagog-jobs /usr/local/bin/pedagog-jobs
-COPY --from=vend  /src/recipes /opt/pedagog/recipes
-COPY --from=vend  /out/ingredients /opt/pedagog/recipes/ingredients
+# (.containerignore leaves out recipes/ingredients.)
+COPY recipes /opt/pedagog/recipes
 ENV PEDAGOG_RECIPES_DIR=/opt/pedagog/recipes
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/pedagog-jobs"]

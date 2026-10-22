@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::anyhow;
 use pedagog_core::recipe::render::containerfile::Containerfile;
-use pedagog_core::recipe::render::{FromSource, ImageSpec, Render, RenderOptions};
+use pedagog_core::recipe::render::{FromSource, ImageSpec, Needed, Render, RenderOptions};
 use pedagog_core::recipe::resolve::resolve_base;
 use pedagog_core::recipe::store::RecipeStore;
 use pedagog_k8s::build::{BuildRequest, Context, IfBuilt, JobKey, JobState, Outcome, Waited};
@@ -28,7 +28,11 @@ struct Planned {
     hash: String,
     dest: String,
     containerfile: String,
+    ingredients: Vec<Needed>,
 }
+
+/// How long an OS build's ingredient URLs last (OS builds have no deadline).
+const OS_INGREDIENTS_TTL: std::time::Duration = std::time::Duration::from_secs(4 * 3600);
 
 /// Which OS images a dispatch pass builds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,10 +87,13 @@ pub async fn dispatch(
     };
     let mut dispatched = Vec::new();
     for p in planned {
+        let ingredients =
+            crate::ingredients::fetches(state, &p.ingredients, OS_INGREDIENTS_TTL).await?;
         let request = BuildRequest {
             dest: p.dest.clone(),
             containerfile: p.containerfile.clone(),
             context: Context::Containerfile,
+            ingredients,
             deadline: None,
             if_built,
         };
@@ -98,6 +105,8 @@ pub async fn dispatch(
             Outcome::Skipped => {}
             Outcome::Created | Outcome::Retried => {
                 let run = db::builds::start_run(&state.pool, &p.os_id, &p.hash, &p.dest).await?;
+                let sums = crate::ingredients::checksums(&p.ingredients);
+                db::builds::record_run_ingredients(&state.pool, run, &sums).await?;
                 spawn_build(state, run, p.os_id.clone(), p.hash, p.dest);
                 dispatched.push(p.os_id);
             }
@@ -148,6 +157,7 @@ async fn plan_builds(
             os_id: id,
             hash,
             dest: format!("{registry}/{image}"),
+            ingredients: spec.needed_ingredients(FromSource::Standalone),
             containerfile,
         });
     }
@@ -215,7 +225,7 @@ async fn finalize(pool: &PgPool, run: i64, os_id: &str, hash: &str, dest: &str, 
     }
 }
 
-fn load_store(dir: &Path) -> anyhow::Result<RecipeStore> {
+pub(crate) fn load_store(dir: &Path) -> anyhow::Result<RecipeStore> {
     RecipeStore::load(&[dir.to_path_buf()]).map_err(|errs| {
         anyhow!(
             "failed to load recipes from {}: {} error(s)",

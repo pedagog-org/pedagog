@@ -9,7 +9,7 @@ use std::time::Duration;
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::path::Path;
 use object_store::signer::{Method, Signer};
-use object_store::{ObjectStoreExt, PutPayload};
+use object_store::{ObjectStore, ObjectStoreExt, PutPayload, WriteMultipart};
 
 pub use object_store::signer::Url;
 pub use object_store::{Error, Result};
@@ -98,11 +98,63 @@ impl Objects {
             .await
     }
 
+    /// Write `key` in parts as they come, so a large file is never held whole.
+    pub async fn upload(&self, key: &str) -> Result<Upload> {
+        let parts = self.store.put_multipart(&Path::from(key)).await?;
+        Ok(Upload(WriteMultipart::new(parts)))
+    }
+
+    pub async fn exists(&self, key: &str) -> Result<bool> {
+        match self.store.head(&Path::from(key)).await {
+            Ok(_) => Ok(true),
+            Err(Error::NotFound { .. }) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The keys directly under `prefix` (one level, as ingredients are kept).
+    pub async fn keys_under(&self, prefix: &str) -> Result<Vec<String>> {
+        let listed = self
+            .store
+            .list_with_delimiter(Some(&Path::from(prefix)))
+            .await?;
+        Ok(listed
+            .objects
+            .into_iter()
+            .map(|o| o.location.to_string())
+            .collect())
+    }
+
+    pub async fn delete(&self, key: &str) -> Result<()> {
+        self.store.delete(&Path::from(key)).await
+    }
+
     /// A URL a pod can PUT `key` to without credentials, valid for `ttl`.
     pub async fn presign_put(&self, key: &str, ttl: Duration) -> Result<Url> {
         self.store
             .signed_url(Method::PUT, &Path::from(key), ttl)
             .await
+    }
+}
+
+/// An object being written in parts ([`Objects::upload`]); nothing is stored
+/// unless it's finished.
+pub struct Upload(WriteMultipart);
+
+impl Upload {
+    /// Add `bytes`, waiting while too many parts are in flight (bounded memory).
+    pub async fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        self.0.wait_for_capacity(4).await?;
+        self.0.write(bytes);
+        Ok(())
+    }
+
+    pub async fn finish(self) -> Result<()> {
+        self.0.finish().await.map(|_| ())
+    }
+
+    pub async fn abort(self) -> Result<()> {
+        self.0.abort().await
     }
 }
 
@@ -114,6 +166,14 @@ pub fn archive_key(course: &str, slug: &str, sha256: &str) -> String {
 /// Object key for a submission's normalized tree, by content hash.
 pub fn submission_key(course: &str, slug: &str, tree_hash: &str) -> String {
     format!("submissions/{course}/{slug}/{tree_hash}.tgz")
+}
+
+/// Where ingredients are kept: once per content, shared by every recipe.
+pub const INGREDIENTS_PREFIX: &str = "ingredients/sha256";
+
+/// Object key for an ingredient, by its SHA-256.
+pub fn ingredient_key(sha256: &str) -> String {
+    format!("{INGREDIENTS_PREFIX}/{sha256}")
 }
 
 /// Object key a grading run uploads its `results.yaml` to.

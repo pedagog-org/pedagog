@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT unnest(ingredients) AS \"sha256!\"\n             FROM assignment_builds WHERE build_status = 'running'\n           UNION\n           SELECT DISTINCT unnest(ingredients)\n             FROM build_runs WHERE status = 'running'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sha256!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ad4ffa7ddbcab541c70d4722a3d263760bfed336615c368b431aed80981aadf0"
+}

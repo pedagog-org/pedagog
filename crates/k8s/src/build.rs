@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::api::core::v1::{
-    ConfigMap, ConfigMapVolumeSource, Container, EmptyDirVolumeSource, HostPathVolumeSource,
-    PodSpec, PodTemplateSpec, ResourceRequirements, Volume, VolumeMount,
+    ConfigMap, ConfigMapVolumeSource, Container, EmptyDirVolumeSource, PodSpec, PodTemplateSpec,
+    ResourceRequirements, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
@@ -30,7 +30,9 @@ use crate::KubeClient;
 
 const KANIKO_IMAGE: &str = "gcr.io/kaniko-project/executor:v1.24.0";
 const RECIPES_PATH: &str = "/pedagog/recipes";
-const RECIPES_SRC: &str = "/opt/pedagog/recipes"; // baked path inside the jobs image
+/// Where the OS layer's init step installs `vend` from.
+const VEND_PATH: &str = "/pedagog/recipes/lib/vend";
+const VEND_KEY: &str = "vend";
 const INGREDIENTS_PATH: &str = "/pedagog/ingredients";
 const DOCKERFILE_DIR: &str = "/kaniko/dockerfile";
 const DOCKERFILE_NAME: &str = "Containerfile";
@@ -45,12 +47,11 @@ const WAIT_GRACE: Duration = Duration::from_secs(60);
 #[derive(Clone)]
 pub struct BuildEnv {
     pub kind: Env,
-    /// prod: image whose baked recipes the initContainer stages.
-    pub jobs_image: String,
-    /// The small image (`pedagog/jobs-init`) that runs `fetch-context`.
+    /// The small image (`pedagog/jobs-init`) that runs `fetch-context` and
+    /// `fetch-ingredients`.
     pub init_image: String,
-    /// dev: node path to the recipes checkout mounted straight into kaniko.
-    pub recipes_hostpath: Option<String>,
+    /// The recipes' `lib/vend` script, which the OS layer installs.
+    pub vend_script: String,
     /// Repository for Kaniko's layer cache (e.g. `<registry>/pedagog/cache`);
     /// `None` builds without a cache.
     pub cache_repo: Option<String>,
@@ -157,12 +158,23 @@ pub enum Context {
     Archive { url: String, tree_hash: String },
 }
 
+/// An ingredient a build `vend`s: where under `/pedagog/ingredients`, which file,
+/// and a presigned GET for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IngredientFetch {
+    pub path: String,
+    pub sha256: String,
+    pub url: String,
+}
+
 /// Everything `ensure` needs to create a build Job.
 #[derive(Clone, Debug)]
 pub struct BuildRequest {
     pub dest: String,
     pub containerfile: String,
     pub context: Context,
+    /// Fetched (and checked) before the build; nothing else is there to `vend`.
+    pub ingredients: Vec<IngredientFetch>,
     /// The Job's `activeDeadlineSeconds`; `None` for no limit.
     pub deadline: Option<Duration>,
     pub if_built: IfBuilt,
@@ -394,7 +406,7 @@ impl Builder {
         kind: JobKind,
         containerfile: &str,
     ) -> kube::Result<()> {
-        let cm = build_configmap(name, kind, containerfile);
+        let cm = build_configmap(name, kind, containerfile, &self.env.vend_script);
         // server-side apply is idempotent across retries (Containerfile may change)
         self.client
             .configmaps()
@@ -478,47 +490,15 @@ fn configmap_name(job_name: &str) -> String {
     format!("{base}-cf")
 }
 
-fn build_configmap(name: &str, kind: JobKind, containerfile: &str) -> ConfigMap {
-    let data = BTreeMap::from([(DOCKERFILE_NAME.to_string(), containerfile.to_string())]);
+fn build_configmap(name: &str, kind: JobKind, containerfile: &str, vend: &str) -> ConfigMap {
+    let data = BTreeMap::from([
+        (DOCKERFILE_NAME.to_string(), containerfile.to_string()),
+        (VEND_KEY.to_string(), vend.to_string()),
+    ]);
     ConfigMap {
         metadata: meta(name, kind),
         data: Some(data),
         ..Default::default()
-    }
-}
-
-/// dev: recipes checkout mounted straight in (no init); prod: emptyDir staged from the jobs image.
-fn recipes_volume(env: &BuildEnv) -> (Volume, Vec<Container>) {
-    match (env.kind, &env.recipes_hostpath) {
-        (Env::Dev, Some(hostpath)) => (
-            Volume {
-                name: "recipes".into(),
-                host_path: Some(HostPathVolumeSource {
-                    path: hostpath.clone(),
-                    type_: Some("Directory".into()),
-                }),
-                ..Default::default()
-            },
-            vec![],
-        ),
-        _ => (
-            Volume {
-                name: "recipes".into(),
-                empty_dir: Some(EmptyDirVolumeSource::default()),
-                ..Default::default()
-            },
-            vec![Container {
-                name: "stage-recipes".into(),
-                image: Some(env.jobs_image.clone()),
-                command: Some(vec![
-                    "sh".into(),
-                    "-c".into(),
-                    format!("cp -a {RECIPES_SRC}/. {RECIPES_PATH}/"),
-                ]),
-                volume_mounts: Some(vec![volume_mount("recipes", RECIPES_PATH, false)]),
-                ..Default::default()
-            }],
-        ),
     }
 }
 
@@ -533,16 +513,41 @@ fn disk_resources(disk: &crate::Disk) -> ResourceRequirements {
 }
 
 fn kaniko_job(env: &BuildEnv, name: &str, kind: JobKind, req: &BuildRequest, cm: &str) -> Job {
-    let (recipes_vol, mut init) = recipes_volume(env);
-    let mut volumes = vec![recipes_vol, configmap_volume("dockerfile", cm)];
-    let mut mounts = vec![
-        volume_mount("recipes", RECIPES_PATH, true),
-        VolumeMount {
-            sub_path: Some("ingredients".into()),
-            ..volume_mount("recipes", INGREDIENTS_PATH, true)
+    let mut init = Vec::new();
+    let mut volumes = vec![
+        configmap_volume("dockerfile", cm),
+        Volume {
+            name: "ingredients".into(),
+            empty_dir: Some(EmptyDirVolumeSource::default()),
+            ..Default::default()
         },
-        volume_mount("dockerfile", DOCKERFILE_DIR, true),
     ];
+    let mut mounts = vec![
+        volume_mount("dockerfile", DOCKERFILE_DIR, true),
+        VolumeMount {
+            sub_path: Some(VEND_KEY.into()),
+            ..volume_mount("dockerfile", VEND_PATH, true)
+        },
+        volume_mount("ingredients", INGREDIENTS_PATH, true),
+    ];
+    // Exactly the files its recipes pin, fetched by checksum: nothing else is
+    // there to `vend`, and nothing comes from the internet.
+    if !req.ingredients.is_empty() {
+        let mut args = vec![
+            "fetch-ingredients".to_string(),
+            INGREDIENTS_PATH.to_string(),
+        ];
+        for i in &req.ingredients {
+            args.extend([i.sha256.clone(), i.path.clone(), i.url.clone()]);
+        }
+        init.push(Container {
+            name: "fetch-ingredients".into(),
+            image: Some(env.init_image.clone()),
+            args: Some(args),
+            volume_mounts: Some(vec![volume_mount("ingredients", INGREDIENTS_PATH, false)]),
+            ..Default::default()
+        });
+    }
     let context_dir = match &req.context {
         Context::Containerfile => DOCKERFILE_DIR,
         Context::Archive { url, tree_hash } => {
@@ -672,9 +677,8 @@ mod tests {
     fn dev_env() -> BuildEnv {
         BuildEnv {
             kind: Env::Dev,
-            jobs_image: "unused".into(),
             init_image: "unused-init".into(),
-            recipes_hostpath: Some("/srv/recipes".into()),
+            vend_script: "#!/bin/sh\n".into(),
             cache_repo: None,
             disk: crate::Disk {
                 request: "2Gi".into(),
@@ -686,9 +690,8 @@ mod tests {
     fn prod_env() -> BuildEnv {
         BuildEnv {
             kind: Env::Prod,
-            jobs_image: "registry/pedagog/jobs:1".into(),
             init_image: "registry/pedagog/jobs-init:1".into(),
-            recipes_hostpath: None,
+            vend_script: "#!/bin/sh\n".into(),
             cache_repo: Some("registry:5000/pedagog/cache".into()),
             disk: crate::Disk {
                 request: "2Gi".into(),
@@ -702,6 +705,7 @@ mod tests {
             dest: dest.into(),
             containerfile: "FROM scratch\n".into(),
             context: Context::Containerfile,
+            ingredients: Vec::new(),
             deadline: None,
             if_built: IfBuilt::Skip,
         }
@@ -715,6 +719,11 @@ mod tests {
                 url: "http://garage/presigned".into(),
                 tree_hash: "d36ae4fe".into(),
             },
+            ingredients: vec![IngredientFetch {
+                path: "toolchain/pedagog-pytest/2/pedagog-pytest-bundle.tar.gz".into(),
+                sha256: "fef3".into(),
+                url: "http://garage/ingredient".into(),
+            }],
             deadline: Some(Duration::from_secs(1800)),
             if_built: IfBuilt::Skip,
         }
@@ -750,33 +759,68 @@ mod tests {
     }
 
     #[test]
-    fn dev_mounts_hostpath_no_init() {
-        let job = os_job(&dev_env(), "reg/x:1");
+    fn a_build_without_ingredients_needs_no_init() {
+        let job = os_job(&prod_env(), "reg/x:1");
         let pod = job.spec.unwrap().template.spec.unwrap();
-        assert!(pod.init_containers.is_none());
-        let recipes = pod
-            .volumes
-            .unwrap()
-            .into_iter()
-            .find(|v| v.name == "recipes")
-            .unwrap();
-        assert_eq!(recipes.host_path.unwrap().path, "/srv/recipes");
+        assert!(
+            pod.init_containers.is_none(),
+            "nothing staged from the jobs image"
+        );
     }
 
     #[test]
-    fn prod_stages_recipes_via_init_from_jobs_image() {
-        let job = os_job(&prod_env(), "reg/x:1");
-        let pod = job.spec.unwrap().template.spec.unwrap();
-        let init = pod.init_containers.expect("prod has an initContainer");
-        assert_eq!(init[0].image.as_deref(), Some("registry/pedagog/jobs:1"));
-        let recipes = pod
-            .volumes
+    fn builds_fetch_exactly_their_ingredients_by_checksum() {
+        let job = kaniko_job(
+            &prod_env(),
+            "j",
+            JobKind::AssignmentBuild,
+            &assignment_req(),
+            "j-cf",
+        );
+        let init = job
+            .spec
             .unwrap()
-            .into_iter()
-            .find(|v| v.name == "recipes")
+            .template
+            .spec
+            .unwrap()
+            .init_containers
             .unwrap();
-        assert!(recipes.empty_dir.is_some());
-        assert!(recipes.host_path.is_none());
+        let fetch = init.iter().find(|c| c.name == "fetch-ingredients").unwrap();
+        assert_eq!(fetch.image.as_deref(), Some("registry/pedagog/jobs-init:1"));
+        assert_eq!(
+            fetch.args.clone().unwrap(),
+            [
+                "fetch-ingredients",
+                "/pedagog/ingredients",
+                "fef3",
+                "toolchain/pedagog-pytest/2/pedagog-pytest-bundle.tar.gz",
+                "http://garage/ingredient"
+            ]
+        );
+    }
+
+    #[test]
+    fn vend_comes_with_the_containerfile() {
+        let cm = build_configmap(
+            "j-cf",
+            JobKind::OsBuild,
+            "FROM scratch\n",
+            "#!/bin/sh\necho x\n",
+        );
+        assert_eq!(cm.data.unwrap()["vend"], "#!/bin/sh\necho x\n");
+        let job = os_job(&prod_env(), "reg/x:1");
+        let kaniko = &job.spec.unwrap().template.spec.unwrap().containers[0];
+        let vend = kaniko
+            .volume_mounts
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|m| m.mount_path == "/pedagog/recipes/lib/vend")
+            .expect("vend where the OS layer installs it from");
+        assert_eq!(
+            (vend.name.as_str(), vend.sub_path.as_deref()),
+            ("dockerfile", Some("vend"))
+        );
     }
 
     #[test]
@@ -807,8 +851,7 @@ mod tests {
                 .iter()
                 .find(|m| m.mount_path == "/pedagog/ingredients")
                 .expect("ingredients mount");
-            assert_eq!(mount.name, "recipes");
-            assert_eq!(mount.sub_path.as_deref(), Some("ingredients"));
+            assert_eq!(mount.name, "ingredients");
             assert_eq!(mount.read_only, Some(true));
         }
     }
@@ -861,8 +904,7 @@ mod tests {
             assert_eq!(spec.active_deadline_seconds, Some(1800));
             let pod = spec.template.spec.unwrap();
             let init = pod.init_containers.unwrap();
-            // fetch-context runs last, after prod's recipe staging
-            let fetch = init.last().unwrap();
+            let fetch = init.iter().find(|c| c.name == "fetch-context").unwrap();
             assert_eq!(fetch.name, "fetch-context");
             assert_eq!(fetch.image.as_deref(), Some(env.init_image.as_str()));
             assert_eq!(
@@ -896,7 +938,7 @@ mod tests {
 
     #[test]
     fn configmap_carries_containerfile() {
-        let cm = build_configmap("j-cf", JobKind::OsBuild, "FROM scratch\n");
+        let cm = build_configmap("j-cf", JobKind::OsBuild, "FROM scratch\n", "");
         assert_eq!(cm.data.unwrap()["Containerfile"], "FROM scratch\n");
     }
 }

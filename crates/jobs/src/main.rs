@@ -14,6 +14,7 @@ mod egress;
 mod fetch;
 mod grading;
 mod http;
+mod ingredients;
 mod intake;
 mod registry;
 mod runs;
@@ -54,6 +55,12 @@ fn main() -> anyhow::Result<()> {
         };
         return fetch::fetch_context(url, std::path::Path::new(dir), tree);
     }
+    if args.get(1).map(String::as_str) == Some("fetch-ingredients") {
+        let Some(dir) = args.get(2) else {
+            anyhow::bail!("usage: pedagog-jobs fetch-ingredients <dir> (<sha256> <path> <url>)...");
+        };
+        return fetch::fetch_ingredients(std::path::Path::new(dir), &args[3..]);
+    }
     if args.get(1).map(String::as_str) == Some("await-egress") {
         let [_, _, target, seconds] = args.as_slice() else {
             anyhow::bail!("usage: pedagog-jobs await-egress <host:port> <seconds>");
@@ -89,7 +96,7 @@ async fn serve() -> anyhow::Result<()> {
     let kube = KubeClient::connect(&config.namespace).await?;
     let runs = kube.in_namespace(&config.run_namespace);
     let maintenance = Arc::new(Maintenance::new(kube.in_namespace(&config.data_namespace)));
-    let builder = Arc::new(Builder::new(kube, runs, config.build_env()));
+    let builder = Arc::new(Builder::new(kube, runs, config.build_env()?));
     let objects = Objects::connect(&config.objects)?;
 
     let state = AppState {
@@ -131,6 +138,7 @@ async fn serve() -> anyhow::Result<()> {
     background.spawn(runs::watch(state.clone()));
     background.spawn(runs::sweep(state.clone()));
     background.spawn(registry::run(state.clone()));
+    background.spawn(ingredients::run(state.clone()));
 
     let addr = state.config.listen_addr.clone();
     let listener = TcpListener::bind(&addr).await?;
