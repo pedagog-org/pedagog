@@ -1,15 +1,17 @@
-//! `POST /internal/courses/{course}/assignments`: accept an
-//! assignment archive for a course, check it, store it in Garage, and dispatch
-//! its build.
+//! `POST /internal/courses/{course}/assignments`: accept an assignment for a
+//! course (a `.tgz` or `.zip`, or its files as multipart), check it, store it
+//! in Garage, and dispatch its build.
 //! `GET /internal/courses/{course}/assignments/{slug}/builds/{build}`: an
 //! attempt's progress and outcome.
 
 use std::path::Path;
 use std::str::FromStr;
 
+use std::collections::BTreeMap;
+
 use axum::body::Bytes;
-use axum::extract::{Path as UrlPath, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{FromRequest, Multipart, Path as UrlPath, Query, Request, State};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use pedagog_core::recipe::assignment::{AssignmentYaml, Isolation};
 use pedagog_core::recipe::render::containerfile::Containerfile;
@@ -22,11 +24,12 @@ use pedagog_store::objects::archive_key;
 use pedagog_store::{Assignment, Notify};
 use serde::{Deserialize, Serialize};
 
-use crate::archive::{self, ArchiveError, Limits};
+use crate::archive::{self, ArchiveError, Limits, TreeFile};
 use crate::assignments::{self, Decision, Plan};
 use crate::http::error::{Refused, internal, refused};
 use crate::settings::RunSettings;
 use crate::state::AppState;
+use crate::submissions::{Part, SubmissionLimits, read_parts, untar, unzip, wrapping_folder};
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct Uploaded {
@@ -51,6 +54,97 @@ pub struct UploadQuery {
     /// Clear the course's date edits once this build becomes current.
     #[serde(default)]
     take_dates: bool,
+    /// The uploader's user id.
+    by: Option<i64>,
+}
+
+/// An assignment as it arrives.
+#[derive(Debug)]
+pub enum Upload {
+    /// Its files (a folder from the browser), or one archive of them.
+    Parts(Vec<Part>),
+    Archive(Vec<u8>),
+}
+
+const PART_ARCHIVES: [&str; 3] = [".zip", ".tar.gz", ".tgz"];
+
+/// Any upload as the archive that's stored: unpacked to its files (junk
+/// dropped, a single folder around the assignment stripped) and packed
+/// deterministically, so the same files give the same tree in any format.
+pub fn packed(upload: Upload, limits: &Limits) -> Result<Vec<u8>, Refused> {
+    let bad = |m: String| refused(StatusCode::BAD_REQUEST, m);
+    let too_large = |m: String| refused(StatusCode::PAYLOAD_TOO_LARGE, m);
+    let unpack_limits = SubmissionLimits {
+        max_bytes: limits.max_unpacked_bytes,
+        max_files: limits.max_files,
+    };
+    let unpack = |bytes: &[u8]| {
+        if bytes.len() > limits.max_compressed_bytes {
+            return Err(too_large(format!(
+                "archive is {} bytes; the limit is {}",
+                bytes.len(),
+                limits.max_compressed_bytes
+            )));
+        }
+        if bytes.starts_with(b"PK") {
+            unzip(bytes, &unpack_limits)
+        } else {
+            untar(bytes, &unpack_limits)
+        }
+    };
+    let mut tree = match upload {
+        Upload::Archive(bytes) => unpack(&bytes)?,
+        Upload::Parts(parts) => match parts.as_slice() {
+            [only]
+                if PART_ARCHIVES
+                    .iter()
+                    .any(|s| only.name.to_ascii_lowercase().ends_with(s)) =>
+            {
+                unpack(&only.bytes)?
+            }
+            _ => {
+                if parts.len() > limits.max_files {
+                    return Err(too_large(format!(
+                        "more than {} files uploaded",
+                        limits.max_files
+                    )));
+                }
+                let total: u64 = parts.iter().map(|p| p.bytes.len() as u64).sum();
+                if total > limits.max_unpacked_bytes {
+                    return Err(too_large(format!(
+                        "the files are {total} bytes; the limit is {}",
+                        limits.max_unpacked_bytes
+                    )));
+                }
+                let mut tree = BTreeMap::new();
+                for part in parts {
+                    let path = archive::normalize(Path::new(&part.name))
+                        .filter(|p| !p.is_empty())
+                        .ok_or_else(|| bad(format!("unsafe file name: {:?}", part.name)))?;
+                    let file = TreeFile {
+                        executable: false,
+                        content: part.bytes,
+                    };
+                    if tree.insert(path.clone(), file).is_some() {
+                        return Err(bad(format!("{path} was uploaded twice")));
+                    }
+                }
+                tree
+            }
+        },
+    };
+    tree.retain(|path, _| !pedagog_core::recipe::submission::is_junk(path));
+    if !tree.contains_key(archive::ASSIGNMENT_FILE)
+        && let Some(folder) = wrapping_folder(&tree)
+    {
+        let prefix = format!("{folder}/");
+        tree = tree
+            .into_iter()
+            .map(|(p, f)| (p[prefix.len()..].to_owned(), f))
+            .collect();
+    }
+    let (bytes, _) = archive::pack(&tree).map_err(|e| internal("packing the upload", e))?;
+    Ok(bytes)
 }
 
 /// An upload that passed every check and is ready to store.
@@ -163,7 +257,7 @@ pub async fn upload(
     State(state): State<AppState>,
     UrlPath(course): UrlPath<String>,
     Query(query): Query<UploadQuery>,
-    body: Bytes,
+    request: Request,
 ) -> Result<Response, Refused> {
     if pedagog_store::db::accounts::course(&state.pool, &course)
         .await
@@ -187,20 +281,39 @@ pub async fn upload(
             })
         })
         .transpose()?;
+    let bad = |m: String| refused(StatusCode::BAD_REQUEST, m);
+    let multipart = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|t| t.to_ascii_lowercase().starts_with("multipart/form-data"));
+    let upload = if multipart {
+        let parts = Multipart::from_request(request, &state)
+            .await
+            .map_err(|e| bad(format!("unreadable upload: {e}")))?;
+        Upload::Parts(read_parts(parts).await?)
+    } else {
+        let body = Bytes::from_request(request, &state)
+            .await
+            .map_err(|e| bad(format!("unreadable upload: {e}")))?;
+        Upload::Archive(body.to_vec())
+    };
     let limits = state.config.limits;
     let recipes = state.config.recipes_dir.clone();
     let registry = state.config.registry.clone();
-    let bytes = body.clone();
-    let checked =
-        tokio::task::spawn_blocking(move || check_upload(&bytes, &limits, &recipes, &registry))
-            .await
-            .map_err(|e| internal("checking the upload", e))??;
+    let (body, checked) = tokio::task::spawn_blocking(move || {
+        let body = packed(upload, &limits)?;
+        let checked = check_upload(&body, &limits, &recipes, &registry)?;
+        Ok::<_, Refused>((body, checked))
+    })
+    .await
+    .map_err(|e| internal("checking the upload", e))??;
 
     let slug = checked.assignment.id.to_string();
     let key = archive_key(&course, &slug, &checked.tree_hash);
     state
         .objects
-        .put(&key, body.to_vec())
+        .put(&key, body.clone())
         .await
         .map_err(|e| internal("storing the archive", e))?;
     let assignment = db::upsert_assignment(&state.pool, &course, &slug, &checked.assignment.name)
@@ -216,8 +329,9 @@ pub async fn upload(
     let warnings = checked.warnings.clone();
     let policy = serde_json::to_value(&checked.assignment.assignment)
         .map_err(|e| internal("reading the policy", e))?;
-    let plan = Plan::from_checked(checked, &assignment, upload.id, key)
+    let mut plan = Plan::from_checked(checked, &assignment, upload.id, key)
         .map_err(|e| internal("planning the build", e))?;
+    plan.uploaded_by = query.by;
     let build = assignments::dispatch(&state, plan)
         .await
         .map_err(|e| internal("dispatching the build", e))?;
@@ -315,6 +429,8 @@ impl Plan {
             has_solution: checked.has_solution,
             settings: RunSettings::of(&checked.assignment),
             policy: serde_json::to_string(&checked.assignment.assignment)?,
+            uploaded_by: None,
+            rebuild_of: None,
         })
     }
 }
@@ -335,6 +451,12 @@ mod tests {
 
     /// The real example assignment, as hammer would pack it.
     fn example(extra: &[(&str, &[u8])], yml: Option<&str>) -> Vec<u8> {
+        let owned = example_files(extra, yml);
+        let items: Vec<Item<'_>> = owned.iter().map(|(p, c)| Item::File(p, c, 0o644)).collect();
+        tgz(&items)
+    }
+
+    fn example_files(extra: &[(&str, &[u8])], yml: Option<&str>) -> Vec<(String, Vec<u8>)> {
         let root = recipes().join("examples/linked-list-python");
         let original = std::fs::read(root.join("assignment.yml")).unwrap();
         let mut owned: Vec<(String, Vec<u8>)> = vec![(
@@ -349,8 +471,102 @@ mod tests {
             }
         }
         owned.extend(extra.iter().map(|(p, c)| ((*p).to_owned(), c.to_vec())));
-        let items: Vec<Item<'_>> = owned.iter().map(|(p, c)| Item::File(p, c, 0o644)).collect();
-        tgz(&items)
+        owned
+    }
+
+    fn zip_of(files: &[(String, Vec<u8>)]) -> Vec<u8> {
+        use std::io::Write;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, content) in files {
+            w.start_file(name.as_str(), zip::write::SimpleFileOptions::default())
+                .unwrap();
+            w.write_all(content).unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    }
+
+    fn tree_of(upload: Upload) -> String {
+        let bytes = packed(upload, &LIMITS).unwrap();
+        check_upload(&bytes, &LIMITS, &recipes(), REGISTRY)
+            .unwrap()
+            .tree_hash
+    }
+
+    fn parts(files: &[(String, Vec<u8>)]) -> Upload {
+        Upload::Parts(
+            files
+                .iter()
+                .map(|(name, bytes)| Part {
+                    name: name.clone(),
+                    bytes: bytes.clone(),
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn every_format_of_the_same_files_is_the_same_tree() {
+        let files = example_files(&[], None);
+        let in_folder: Vec<(String, Vec<u8>)> = files
+            .iter()
+            .map(|(p, c)| (format!("linked-list/{p}"), c.clone()))
+            .chain([("linked-list/.DS_Store".to_owned(), b"junk".to_vec())])
+            .collect();
+        let hammer = tree_of(Upload::Archive(example(&[], None)));
+        assert_eq!(tree_of(Upload::Archive(zip_of(&files))), hammer);
+        assert_eq!(
+            tree_of(Upload::Archive(zip_of(&in_folder))),
+            hammer,
+            "folder stripped, junk dropped"
+        );
+        assert_eq!(tree_of(parts(&files)), hammer, "a folder from the browser");
+        assert_eq!(tree_of(parts(&in_folder)), hammer);
+        assert_eq!(
+            tree_of(parts(&[("linked-list.zip".to_owned(), zip_of(&in_folder))])),
+            hammer,
+            "one archive as a part"
+        );
+    }
+
+    #[test]
+    fn a_folder_with_more_than_the_assignment_keeps_its_shape() {
+        let mut files = example_files(&[], None);
+        files.push(("notes.txt".to_owned(), b"x".to_vec()));
+        let in_folder: Vec<(String, Vec<u8>)> = files
+            .iter()
+            .map(|(p, c)| (format!("hw/{p}"), c.clone()))
+            .collect();
+        let bytes = packed(parts(&in_folder), &LIMITS).unwrap();
+        assert!(check_upload(&bytes, &LIMITS, &recipes(), REGISTRY).is_ok());
+
+        let mut two_folders = in_folder.clone();
+        two_folders.push(("other/x.txt".to_owned(), b"x".to_vec()));
+        let bytes = packed(parts(&two_folders), &LIMITS).unwrap();
+        let refused = check_upload(&bytes, &LIMITS, &recipes(), REGISTRY).unwrap_err();
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{}", refused.error);
+    }
+
+    #[test]
+    fn unsafe_or_oversized_uploads_are_refused() {
+        let escape = parts(&[("../x".to_owned(), b"x".to_vec())]);
+        assert_eq!(
+            packed(escape, &LIMITS).unwrap_err().status,
+            StatusCode::BAD_REQUEST
+        );
+        let tiny = Limits {
+            max_unpacked_bytes: 10,
+            ..LIMITS
+        };
+        let big = parts(&[("a".to_owned(), vec![0; 11])]);
+        assert_eq!(
+            packed(big, &tiny).unwrap_err().status,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        let twice = parts(&[("a".to_owned(), vec![]), ("./a".to_owned(), vec![])]);
+        assert_eq!(
+            packed(twice, &LIMITS).unwrap_err().status,
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[test]

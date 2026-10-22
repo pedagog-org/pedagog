@@ -50,6 +50,10 @@ pub struct Plan {
     pub settings: RunSettings,
     /// The file's `assignment:` policy as JSON.
     pub policy: String,
+    /// Who started this attempt.
+    pub uploaded_by: Option<i64>,
+    /// The build whose upload this builds again.
+    pub rebuild_of: Option<i64>,
 }
 
 impl Plan {
@@ -106,8 +110,8 @@ pub async fn dispatch(state: &AppState, plan: Plan) -> anyhow::Result<Decision> 
             image_ref: &image_ref,
             settings: &plan.settings.to_stored()?,
             policy: &plan.policy,
-            uploaded_by: None,
-            rebuild_of: None,
+            uploaded_by: plan.uploaded_by,
+            rebuild_of: plan.rebuild_of,
         },
     )
     .await?;
@@ -513,6 +517,8 @@ mod tests {
                 submission: Default::default(),
             },
             policy: "{}".into(),
+            uploaded_by: None,
+            rebuild_of: None,
         }
     }
 
