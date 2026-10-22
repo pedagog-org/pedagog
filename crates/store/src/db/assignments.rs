@@ -610,12 +610,13 @@ pub enum MadeCurrent {
 /// flight, then switch, and queue a regrade if asked, atomically. Dates and
 /// visibility don't change. `None` if the assignment has no such build.
 pub async fn make_current(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     assignment_id: i64,
     build: i64,
     regrade: Option<Notify>,
 ) -> sqlx::Result<Option<MadeCurrent>> {
-    let mut tx = pool.begin().await?;
+    // A savepoint when the caller is already in a transaction.
+    let mut tx = sqlx::Connection::begin(conn).await?;
     let current = sqlx::query_scalar!(
         "SELECT current_build_id FROM assignments WHERE id = $1 FOR UPDATE",
         assignment_id
@@ -1391,7 +1392,13 @@ mod tests {
         assert_eq!(current_build_id(&pool, a.id).await?, Some(second));
 
         assert_eq!(
-            make_current(&pool, a.id, first, Some(Notify::Changed)).await?,
+            make_current(
+                &mut *pool.acquire().await?,
+                a.id,
+                first,
+                Some(Notify::Changed)
+            )
+            .await?,
             Some(MadeCurrent::Current {
                 cancelled: Some(flying)
             })
@@ -1411,19 +1418,22 @@ mod tests {
         assert_eq!((batch.notify.as_str(), batch.runs), ("changed", 1));
 
         assert_eq!(
-            make_current(&pool, a.id, first, None).await?,
+            make_current(&mut *pool.acquire().await?, a.id, first, None).await?,
             Some(MadeCurrent::AlreadyCurrent)
         );
         assert_eq!(
-            make_current(&pool, a.id, failed, None).await?,
+            make_current(&mut *pool.acquire().await?, a.id, failed, None).await?,
             Some(MadeCurrent::NotUsable)
         );
         assert_eq!(
-            make_current(&pool, a.id, second, None).await?,
+            make_current(&mut *pool.acquire().await?, a.id, second, None).await?,
             Some(MadeCurrent::Current { cancelled: None }),
             "nothing in flight now; no regrade asked"
         );
-        assert_eq!(make_current(&pool, a.id, 999_999, None).await?, None);
+        assert_eq!(
+            make_current(&mut *pool.acquire().await?, a.id, 999_999, None).await?,
+            None
+        );
         Ok(())
     }
 
@@ -1436,7 +1446,7 @@ mod tests {
         images_deleted(&pool, &["img-a".to_owned()]).await?;
 
         assert_eq!(
-            make_current(&pool, up.assignment_id, old, None).await?,
+            make_current(&mut *pool.acquire().await?, up.assignment_id, old, None).await?,
             Some(MadeCurrent::NeedsRebuild { upload_id: up.id })
         );
         assert_eq!(

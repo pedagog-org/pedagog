@@ -36,6 +36,10 @@ pub fn router(state: AppState) -> Router {
             get(intake::build_status),
         )
         .route(
+            "/internal/courses/{course}/assignments/{slug}/builds/{build}/current",
+            post(intake::make_current),
+        )
+        .route(
             "/internal/courses/{course}/assignments/{slug}/submissions",
             post(submissions::submit).layer(DefaultBodyLimit::max(max_submission)),
         )

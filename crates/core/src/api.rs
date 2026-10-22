@@ -266,3 +266,14 @@ mod tests {
         assert_eq!(serde_json::from_str::<Me>(&json).unwrap(), me);
     }
 }
+
+/// `POST …/builds/{id}/current`: what making an earlier build current did.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum MadeCurrent {
+    /// It's current now; `cancelled` is the build that was in flight.
+    Current { cancelled: Option<i64> },
+    /// Its image was cleaned up, so it's building again as `build`, which
+    /// becomes current once it validates.
+    Rebuilding { build: i64, cancelled: Option<i64> },
+}

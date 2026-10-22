@@ -269,18 +269,7 @@ pub async fn upload(
             format!("no course {course}"),
         ));
     }
-    let regrade = query
-        .regrade
-        .as_deref()
-        .map(|n| {
-            Notify::from_str(n).map_err(|_| {
-                refused(
-                    StatusCode::BAD_REQUEST,
-                    format!("regrade must be never, changed or always, not {n:?}"),
-                )
-            })
-        })
-        .transpose()?;
+    let regrade = query.regrade.as_deref().map(parse_regrade).transpose()?;
     let bad = |m: String| refused(StatusCode::BAD_REQUEST, m);
     let multipart = request
         .headers()
@@ -408,6 +397,51 @@ pub async fn build_status(
         results: row.results.and_then(|r| serde_json::from_str(&r).ok()),
     };
     Ok(Json(reply).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct CurrentQuery {
+    /// As for an upload: regrade every student's latest submission with it.
+    regrade: Option<String>,
+    /// Who asked (the uploader of a rebuild).
+    by: Option<i64>,
+}
+
+/// `POST /internal/courses/{course}/assignments/{slug}/builds/{build}/current`.
+pub async fn make_current(
+    State(state): State<AppState>,
+    UrlPath((course, slug, build)): UrlPath<(String, String, i64)>,
+    Query(query): Query<CurrentQuery>,
+) -> Result<Response, Refused> {
+    let assignment = find_assignment(&state, &course, &slug).await?;
+    let regrade = query.regrade.as_deref().map(parse_regrade).transpose()?;
+    let made = assignments::make_current(&state, assignment.id, build, regrade, query.by)
+        .await
+        .map_err(|e| internal("making the build current", e))?;
+    match made {
+        Ok(made) => Ok(Json(made).into_response()),
+        Err(assignments::NotMade::NoSuchBuild) => Err(refused(
+            StatusCode::NOT_FOUND,
+            format!("{course}/{slug} has no build {build}"),
+        )),
+        Err(assignments::NotMade::AlreadyCurrent) => Err(refused(
+            StatusCode::CONFLICT,
+            format!("build {build} is already current"),
+        )),
+        Err(assignments::NotMade::NotUsable) => Err(refused(
+            StatusCode::CONFLICT,
+            format!("build {build} didn't build and validate, so it can't be made current"),
+        )),
+    }
+}
+
+fn parse_regrade(n: &str) -> Result<Notify, Refused> {
+    Notify::from_str(n).map_err(|_| {
+        refused(
+            StatusCode::BAD_REQUEST,
+            format!("regrade must be never, changed or always, not {n:?}"),
+        )
+    })
 }
 
 impl Plan {

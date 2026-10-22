@@ -110,7 +110,8 @@ mod tests {
         let mut listener = PgListener::connect_with(&pool).await?;
         listener.listen(CHANNEL).await?;
 
-        crate::db::assignments::make_current(&pool, a.id, first, None).await?;
+        crate::db::assignments::make_current(&mut *pool.acquire().await?, a.id, first, None)
+            .await?;
         let made = next(&mut listener).await;
         assert!(
             made.contains(r#""kind" : "current""#)
