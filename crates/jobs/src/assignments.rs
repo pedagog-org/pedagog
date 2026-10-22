@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use pedagog_core::recipe::render::Needed;
 use pedagog_core::results::Results;
+use pedagog_core::text::tail;
 use pedagog_k8s::build::{BuildRequest, Context, IfBuilt, JobKey, JobState, Waited};
 use pedagog_k8s::validate::ValidationRequest;
 use pedagog_store::db::queue;
@@ -261,7 +262,7 @@ pub async fn settle_validation(
                 build_id,
             ))
             .await;
-        let tail = &logs[logs.len().saturating_sub(LOG_TAIL)..];
+        let tail = tail(&logs, LOG_TAIL);
         verdict
             .problems
             .push(format!("validation pod log (tail):\n{tail}"));
