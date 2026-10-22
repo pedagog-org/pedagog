@@ -61,6 +61,8 @@ pages, read-only.
   - **A build in flight:** always cancelled (superseded, as a new upload is), its pods
     stopped, and its regrade request dropped; the instructor uploads that version again
     if they still want it.
+  - **Regrades already queued** against the build being replaced still run (and may
+    tell students); only builds are cancelled.
   - **Image present:** one transaction supersedes the build in flight, sets
     `current_build_id`, queues regrades if
     asked, and the trigger announces it. Dates and visibility don't change
