@@ -16,6 +16,7 @@ use pedagog_core::recipe::render::containerfile::Containerfile;
 use pedagog_core::recipe::render::{AssignmentFiles, FromSource, Needed, Render, RenderOptions};
 use pedagog_core::recipe::resolve::resolve;
 use pedagog_core::recipe::store::RecipeStore;
+use pedagog_core::text::tail;
 use pedagog_store::db::assignments as db;
 use pedagog_store::objects::archive_key;
 use pedagog_store::{Assignment, Notify};
@@ -288,9 +289,7 @@ pub async fn build_status(
         build_status: row.build_status.to_string(),
         validation_status: row.validation_status.to_string(),
         finished: row.finished,
-        error: row
-            .error
-            .map(|e| e[e.len().saturating_sub(ERROR_TAIL)..].to_owned()),
+        error: row.error.map(|e| tail(&e, ERROR_TAIL).to_owned()),
         validation_problems: row.validation_problems,
         results: row.results.and_then(|r| serde_json::from_str(&r).ok()),
     };

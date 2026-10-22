@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use pedagog_core::changes::compare;
 use pedagog_core::results::Results;
+use pedagog_core::text::tail;
 use pedagog_k8s::build::JobKey;
 use pedagog_k8s::grade::GradingRequest;
 use pedagog_k8s::runs::Stopped;
@@ -109,7 +110,7 @@ pub async fn settle(
             .builder
             .logs(&JobKey::grading(&job_id(&ctx.course_id, &ctx.slug), run))
             .await;
-        log_tail = Some(logs[logs.len().saturating_sub(LOG_TAIL)..].to_owned());
+        log_tail = Some(tail(&logs, LOG_TAIL).to_owned());
         let (kind, error) = match stopped {
             Some(Stopped::Deadline) => (ErrorKind::Timeout, "the run passed its time limit"),
             Some(Stopped::OutOfMemory) => (ErrorKind::OutOfMemory, "the run ran out of memory"),

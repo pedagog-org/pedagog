@@ -8,6 +8,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use pedagog_core::results::Results;
+use pedagog_core::text::tail;
 use pedagog_store::db::assignments as db;
 use pedagog_store::{Assignment, AssignmentBuild};
 use serde::{Deserialize, Serialize};
@@ -251,7 +252,7 @@ pub async fn build(
         "validation_status": b.validation_status.to_string(),
         "finished": b.finished,
         "current": a.current_build_id == Some(b.id),
-        "error": b.error.map(|e| e[e.len().saturating_sub(ERROR_TAIL)..].to_owned()),
+        "error": b.error.map(|e| tail(&e, ERROR_TAIL).to_owned()),
         "validation_problems": b.validation_problems,
         "validation_warnings": results.as_ref().map(Results::warnings).unwrap_or_default(),
         "results": b.results.and_then(|r| serde_json::from_str::<serde_json::Value>(&r).ok()),
