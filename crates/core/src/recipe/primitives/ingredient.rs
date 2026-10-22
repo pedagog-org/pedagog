@@ -10,6 +10,27 @@ pub struct Ingredient {
     pub source: IngredientSource,
 }
 
+impl Ingredient {
+    /// What pins the file: its checksum, else where it comes from.
+    pub fn pin(&self) -> String {
+        match (&self.sha256, &self.source) {
+            (Some(hex), _) => format!("sha256:{hex}"),
+            (None, IngredientSource::Github(g)) => {
+                format!("github:{}@{}/{}", g.repo, g.tag, g.asset)
+            }
+            (None, IngredientSource::Url(u)) => u.to_string(),
+        }
+    }
+}
+
+/// `file=pin` for each ingredient, as a layer's Containerfile records them.
+pub fn pins(ingredients: &[Ingredient]) -> Vec<String> {
+    ingredients
+        .iter()
+        .map(|i| format!("{}={}", i.output, i.pin()))
+        .collect()
+}
+
 fn sha256_hex<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
     let Some(hex) = Option::<String>::deserialize(d)? else {
         return Ok(None);
@@ -39,6 +60,22 @@ pub struct GithubSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pins_are_the_checksum_else_the_source() {
+        let pinned: Ingredient = serde_yaml::from_str(&format!(
+            "output: a.deb\nurl: 'https://example.com/a.deb'\nsha256: {}\n",
+            "A".repeat(64)
+        ))
+        .unwrap();
+        assert_eq!(pinned.pin(), format!("sha256:{}", "a".repeat(64)));
+        let tagged: Ingredient = serde_yaml::from_str(
+            "output: cs.deb\ngithub:\n  repo: org/cs\n  asset: '*.deb'\n  tag: v1\n",
+        )
+        .unwrap();
+        assert_eq!(tagged.pin(), "github:org/cs@v1/*.deb");
+        assert_eq!(pins(&[tagged]), ["cs.deb=github:org/cs@v1/*.deb"]);
+    }
 
     #[test]
     fn ingredient_github_source() {

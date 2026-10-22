@@ -8,6 +8,7 @@ use std::num::NonZeroU16;
 use crate::recipe::assignment::{AssignmentYaml, Testing, ToolchainPick, ToolchainSelection};
 use crate::recipe::os::PkgArg;
 use crate::recipe::platform::{PlatformKind, PlatformSpec, check_submission_dir};
+use crate::recipe::primitives::ingredient::pins;
 use crate::recipe::primitives::{
     ArgHook, Command, OsId, ParamVal, PkgName, Step, ToolchainId, ToolchainRef,
 };
@@ -49,6 +50,7 @@ pub fn resolve(
     let assignment_layer = Layer {
         source: LayerSource::Assignment(assignment.id.clone()),
         steps: resolve_steps(&env.steps, os.pkg_install, &Params::new())?,
+        ingredients: Vec::new(),
     };
 
     Ok(ImageSpec::Full {
@@ -97,10 +99,12 @@ fn os_artifact<'a>(os_id: &OsId, store: &'a RecipeStore) -> Result<OsArtifact<'a
         init: Layer {
             source: LayerSource::Os(os.id.clone()),
             steps: resolve_steps(&os.hooks.build.init, pkg_install, &empty)?,
+            ingredients: pins(&os.ingredients),
         },
         cleanup: Layer {
             source: LayerSource::OsCleanup(os.id.clone()),
             steps: resolve_steps(&os.hooks.build.cleanup, pkg_install, &empty)?,
+            ingredients: pins(&os.ingredients),
         },
     })
 }
@@ -139,6 +143,7 @@ fn platform_artifact(
         layer: Layer {
             source: LayerSource::Platform(spec.kind.clone()),
             steps: resolve_steps(&platform.hooks.build.steps, os.pkg_install, &params)?,
+            ingredients: pins(&platform.ingredients),
         },
         entrypoint,
         ports,
@@ -158,6 +163,7 @@ fn toolchain_layers(
         .map(|p| {
             Ok(Layer {
                 steps: resolve_steps(&p.recipe.steps, os.pkg_install, &p.recipe.params)?,
+                ingredients: pins(&p.recipe.ingredients),
                 source: LayerSource::Toolchain {
                     tc: p.tc,
                     origins: p.origins,

@@ -287,6 +287,7 @@ mod tests {
                     commands: vec![Command("true".to_owned())],
                 })
                 .collect(),
+            ingredients: Vec::new(),
         }
     }
 
