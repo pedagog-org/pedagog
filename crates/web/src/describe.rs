@@ -105,14 +105,22 @@ pub fn mine_badge(a: &StudentAssignment) -> Badge {
     }
 }
 
+/// A graded score: green with a check only at full marks on what's shown;
+/// otherwise neutral (a low score isn't an error; red is for runs that failed).
+fn graded(s: Shown, text: String) -> Badge {
+    if s.total > 0.0 && s.score >= s.total {
+        badge("b-pass", "✓", text)
+    } else {
+        badge("", "", text)
+    }
+}
+
 fn run_badge(m: &Mine) -> Badge {
     match (m.status, m.shown) {
         (RunState::Queued | RunState::Grading, _) => badge("b-info", "●", "Grading"),
         (RunState::Error, _) => badge("b-fail", "✕", "Couldn’t be graded"),
-        (RunState::Graded, Some(s)) => {
-            badge("b-pass", "✓", format!("{} on the tests shown", score(s)))
-        }
-        (RunState::Graded, None) => badge("b-pass", "✓", "Graded"),
+        (RunState::Graded, Some(s)) => graded(s, format!("{} on the tests shown", score(s))),
+        (RunState::Graded, None) => badge("", "", "Graded"),
     }
 }
 
@@ -122,8 +130,8 @@ pub fn history_badge(status: Option<RunState>, shown: Option<Shown>) -> Badge {
         (None | Some(RunState::Queued), _) => badge("b-info", "●", "Queued"),
         (Some(RunState::Grading), _) => badge("b-info", "●", "Grading"),
         (Some(RunState::Error), _) => badge("b-fail", "✕", "Couldn’t be graded"),
-        (Some(RunState::Graded), Some(s)) => badge("b-pass", "✓", format!("{} shown", score(s))),
-        (Some(RunState::Graded), None) => badge("b-pass", "✓", "Graded"),
+        (Some(RunState::Graded), Some(s)) => graded(s, format!("{} shown", score(s))),
+        (Some(RunState::Graded), None) => badge("", "", "Graded"),
     }
 }
 
@@ -244,17 +252,34 @@ mod tests {
             mine_badge(&assignment(Window::Open, mine(RunState::Error, None))).class,
             "b-fail"
         );
-        assert_eq!(
-            history_badge(
-                Some(RunState::Graded),
-                Some(Shown {
-                    score: 7.5,
-                    total: 10.0
-                })
-            )
-            .text,
-            "7.5/10 shown"
+        let partial = history_badge(
+            Some(RunState::Graded),
+            Some(Shown {
+                score: 7.5,
+                total: 10.0,
+            }),
         );
+        assert_eq!(
+            (partial.text.as_str(), partial.class),
+            ("7.5/10 shown", ""),
+            "neutral below full marks"
+        );
+        let full = history_badge(
+            Some(RunState::Graded),
+            Some(Shown {
+                score: 3.0,
+                total: 3.0,
+            }),
+        );
+        assert_eq!((full.class, full.glyph), ("b-pass", "✓"));
+        let none = history_badge(
+            Some(RunState::Graded),
+            Some(Shown {
+                score: 0.0,
+                total: 0.0,
+            }),
+        );
+        assert_eq!(none.class, "", "nothing shown yet isn't full marks");
     }
 
     #[test]
