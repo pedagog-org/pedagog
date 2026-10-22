@@ -31,9 +31,11 @@ impl SubmissionRules {
     }
 }
 
-/// Whether a relative path is OS clutter, or lies inside it.
+/// Whether a relative path is OS clutter, or lies inside it: including the
+/// `._name` AppleDouble files macOS tar and zip write beside every file.
 pub fn is_junk(path: &str) -> bool {
-    path.split('/').any(|seg| JUNK.contains(&seg))
+    path.split('/')
+        .any(|seg| JUNK.contains(&seg) || seg.starts_with("._"))
 }
 
 /// Serialized back to the `submission:` form it was read from, so a parsed
@@ -424,6 +426,9 @@ mod tests {
     fn junk_is_recognized_at_any_depth() {
         assert!(is_junk("__MACOSX/src/._a.py"));
         assert!(is_junk("src/.DS_Store"));
+        assert!(is_junk("._hw1"), "macOS tar's AppleDouble files");
+        assert!(is_junk("hw1/src/._a.py"));
+        assert!(!is_junk("src/.a.py"));
         assert!(!is_junk("src/a.py"));
     }
 }

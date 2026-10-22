@@ -560,6 +560,19 @@ mod tests {
             hammer,
             "one archive as a part"
         );
+        // As macOS tar writes it: an AppleDouble file beside every entry.
+        let apple = b"\x00\x05\x16\x07".to_vec();
+        let mac: Vec<(String, Vec<u8>)> =
+            std::iter::once(("._linked-list".to_owned(), apple.clone()))
+                .chain(in_folder.iter().cloned())
+                .chain([("linked-list/tests/._test_linked_list.py".to_owned(), apple)])
+                .collect();
+        let items: Vec<Item<'_>> = mac.iter().map(|(p, c)| Item::File(p, c, 0o644)).collect();
+        assert_eq!(
+            tree_of(parts(&[("linked-list.tar.gz".to_owned(), tgz(&items))])),
+            hammer,
+            "a macOS .tar.gz of the folder as a part"
+        );
     }
 
     #[test]
