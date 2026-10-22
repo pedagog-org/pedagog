@@ -241,6 +241,7 @@ fn Outcome(
                         <span class="badge b-fail"><span class="gl" aria-hidden="true">"✕"</span>"Couldn’t be graded"</span>
                     </div>
                     <p style="font-size: 16px; font-weight: 500">{capitalized(mine.why.as_deref().unwrap_or("it couldn’t be graded"))}"."</p>
+                    {mine.detail.clone().map(|d| view! { <pre class="code" style="color: var(--fail)">{d}</pre> })}
                     <p class="muted">{capitalized(mine.next.as_deref().unwrap_or_default())}"."</p>
                     {counts.then(|| view! { <p class="small faint">"This is the submission that counts until you submit again."</p> })}
                 </section>
@@ -792,6 +793,8 @@ mod browser {
             why: (status == RunState::Error)
                 .then(|| "the tests couldn't run with your code".into()),
             next: (status == RunState::Error).then(|| "check your files and submit again".into()),
+            detail: (status == RunState::Error)
+                .then(|| "linked_list.py, line 2: SyntaxError: expected ':'".into()),
             results,
         }
     }
@@ -807,6 +810,7 @@ mod browser {
             feedback: None,
             stdout: None,
             error: Some("AttributeError".into()).filter(|_| status == Status::Fail),
+            error_sanitized: false,
         };
         StudentView {
             tests: vec![
@@ -838,6 +842,23 @@ mod browser {
     }
 
     #[wasm_bindgen_test]
+    fn a_sanitized_error_shows_its_summary_and_folds_the_chain() {
+        let mut view = graded();
+        view.tests[1].error = Some(
+            "linked_list.py:42: AttributeError: oops\n\ntest_ll.py:70, in test_find\n    items.find(3)".into(),
+        );
+        view.tests[1].error_sanitized = true;
+        let page = outcome(mine(RunState::Graded, Some(view)));
+        let blocks = all(&page, ".part pre.code");
+        assert_eq!(
+            blocks[0].text_content().unwrap_or_default(),
+            "linked_list.py:42: AttributeError: oops"
+        );
+        assert_eq!(all(&page, "details.chain").len(), 1);
+        assert_eq!(all(&page, "details.chain[open]").len(), 0, "folded");
+    }
+
+    #[wasm_bindgen_test]
     fn a_queued_run_shows_its_place_and_an_error_what_to_do() {
         let page = outcome(mine(RunState::Queued, None));
         assert_eq!(text(&page, ".step.now .lbl"), "Queued");
@@ -845,6 +866,10 @@ mod browser {
         let page = outcome(mine(RunState::Error, None));
         assert!(text(&page, "p").starts_with("The tests couldn't run"));
         assert_eq!(all(&page, ".badge.b-fail").len(), 1);
+        assert!(
+            text(&page, "pre.code").contains("SyntaxError"),
+            "what stopped it"
+        );
     }
 
     #[wasm_bindgen_test]

@@ -123,7 +123,14 @@ pub async fn settle(
         verdict.error = Some(error.to_owned());
     }
     let (changes, notify) = match ctx.regrade_batch_id {
-        Some(batch) => regrade_changes(state, &ctx, batch, verdict.results.as_deref()).await?,
+        // An error's kept results (a run that couldn't load) aren't a grade to compare.
+        Some(batch) => {
+            let graded = verdict
+                .results
+                .as_deref()
+                .filter(|_| verdict.kind.is_none());
+            regrade_changes(state, &ctx, batch, graded).await?
+        }
         None => (None, false),
     };
     let outcome = RunOutcome {
@@ -184,7 +191,8 @@ pub struct Verdict {
 }
 
 /// Results that parse and pass the format checks are graded (failing tests
-/// included); anything else is an error, and nothing from it is kept.
+/// included); anything else is an error, and nothing from it is kept but the
+/// results of a run that couldn't load the code.
 pub fn judge(uploaded: Option<&[u8]>) -> Verdict {
     let error = |kind: ErrorKind, problems: Vec<String>| Verdict {
         results: None,
@@ -214,14 +222,19 @@ pub fn judge(uploaded: Option<&[u8]>) -> Verdict {
     }
     // Tests that couldn't even run (e.g. a syntax error in the submission):
     // the run is an error, not a 0 out of 0.
+    // The results are kept: their run's sanitized output tells the student what
+    // stopped it.
     if let Some(output) = results.run_error() {
-        return error(
-            ErrorKind::Load,
-            vec![format!(
-                "the tests couldn't all run:\n{}",
-                tail_lines(&output, ERROR_LINES)
-            )],
-        );
+        return Verdict {
+            results: serde_json::to_string(&results).ok(),
+            ..error(
+                ErrorKind::Load,
+                vec![format!(
+                    "the tests couldn't all run:\n{}",
+                    tail_lines(&output, ERROR_LINES)
+                )],
+            )
+        };
     }
     Verdict {
         score: Some((results.summary.score, results.summary.total)),
@@ -278,9 +291,10 @@ mod tests {
             }]
         }"#;
         let v = judge(Some(broken.as_bytes()));
-        assert_eq!(
-            (v.results, v.score, v.kind),
-            (None, None, Some(ErrorKind::Load))
+        assert_eq!((v.score, v.kind), (None, Some(ErrorKind::Load)));
+        assert!(
+            v.results.is_some(),
+            "kept for the student's sanitized report"
         );
         assert!(
             v.problems[0].starts_with("the tests couldn't all run:\ntest_linked_list.py:"),

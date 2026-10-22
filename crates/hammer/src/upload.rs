@@ -83,6 +83,9 @@ pub struct Status {
     pub error: Option<String>,
     #[serde(default)]
     pub validation_problems: Vec<String>,
+    /// What staff should know before students see results from this build.
+    #[serde(default)]
+    pub validation_warnings: Vec<String>,
     pub results: Option<serde_json::Value>,
 }
 
@@ -334,6 +337,7 @@ mod tests {
             image_ref: "reg/x:1".into(),
             error: None,
             validation_problems: vec![],
+            validation_warnings: vec![],
             results,
         }
     }

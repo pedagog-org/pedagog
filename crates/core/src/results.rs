@@ -24,6 +24,9 @@ pub struct Results {
     pub tests: Vec<TestResult>,
     #[serde(default)]
     pub artifacts: Vec<Artifact>,
+    /// The helper fills `error-sanitized` (and `output-sanitized`) for students.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sanitizes_errors: bool,
 }
 
 /// Whether the tests could all run, and what stopped them if not (for staff).
@@ -32,6 +35,13 @@ pub struct Run {
     pub status: RunStatus,
     #[serde(default)]
     pub output: String,
+    /// What stopped the run, for students: where and what, without internals.
+    #[serde(
+        default,
+        rename = "output-sanitized",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub output_sanitized: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +80,10 @@ pub struct TestResult {
     /// (version 1 helpers called it `output`).
     #[serde(default, alias = "output")]
     pub error: String,
+    /// The error for students: where and what, then the call chain, without the
+    /// test's source, values' addresses, absolute paths or internals.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error_sanitized: String,
     /// What the test printed.
     #[serde(default)]
     pub stdout: String,
@@ -169,6 +183,15 @@ impl RubricItem {
 }
 
 impl TestResult {
+    /// The error students get: the sanitized one when the helper wrote it.
+    pub fn error_for_students(&self) -> &str {
+        if self.error_sanitized.is_empty() {
+            &self.error
+        } else {
+            &self.error_sanitized
+        }
+    }
+
     /// What the test could add, when it's only extra credit (every item is,
     /// or a version 1 test says so): its declared points.
     pub fn extra_credit_worth(&self) -> Option<f64> {
@@ -364,6 +387,28 @@ impl Results {
             .collect()
     }
 
+    /// What staff should know before students see these results.
+    pub fn warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if !self.sanitizes_errors {
+            warnings.push(
+                "this test helper doesn't sanitize errors: students who can see a test's \
+                 error get the framework's raw report, test source included"
+                    .to_owned(),
+            );
+        }
+        warnings
+    }
+
+    /// What stopped the run, for students: the sanitized report, if the helper
+    /// wrote one.
+    pub fn run_error_for_students(&self) -> Option<&str> {
+        self.run
+            .as_ref()
+            .filter(|r| r.status == RunStatus::Error && !r.output_sanitized.is_empty())
+            .map(|r| r.output_sanitized.as_str())
+    }
+
     /// What stopped the tests from all running, if anything: the run's own
     /// report (version 2), or version 1's collection entries.
     pub fn run_error(&self) -> Option<String> {
@@ -531,8 +576,15 @@ mod tests {
         r.run = Some(Run {
             status: RunStatus::Error,
             output: "SyntaxError".into(),
+            output_sanitized: String::new(),
         });
         assert_eq!(r.run_error().as_deref(), Some("SyntaxError"));
+        assert_eq!(r.run_error_for_students(), None, "nothing sanitized");
+        r.run.as_mut().unwrap().output_sanitized = "linked_list.py, line 2: SyntaxError".into();
+        assert_eq!(
+            r.run_error_for_students(),
+            Some("linked_list.py, line 2: SyntaxError")
+        );
 
         let v1: Results = serde_json::from_value(serde_json::json!({
             "summary": {"score": 0.0, "total": 0.0},
@@ -720,6 +772,42 @@ visibility:
         let counted: Vec<f64> = items.iter().map(RubricItem::counted_max).collect();
         assert_eq!(counted, [2.0, 0.0, 2.0, 0.0, 0.0]);
         assert_eq!(r.tests[3].clamp, Some((Some(0.0), None)));
+    }
+
+    #[test]
+    fn students_get_the_sanitized_error_when_there_is_one() {
+        let r: Results = serde_json::from_value(serde_json::json!({
+            "summary": {"score": 0.0, "total": 0.0},
+            "tests": [{"node": "t.py::test_a", "name": "a", "status": "fail", "score": 0.0,
+                       "max": 0.0, "error": "def test_a():\n>  assert 2 == 3",
+                       "visibility": {"score": "visible", "feedback": "visible", "stdout": "visible", "error": "visible"}}]
+        }))
+        .unwrap();
+        assert_eq!(
+            r.tests[0].error_for_students(),
+            "def test_a():\n>  assert 2 == 3"
+        );
+        assert_eq!(r.warnings().len(), 1, "raw reports reach students");
+
+        let sanitized: Results = serde_json::from_value(serde_json::json!({
+            "sanitizes-errors": true,
+            "summary": {"score": 0.0, "total": 0.0},
+            "tests": [{"node": "t.py::test_a", "name": "a", "status": "fail", "score": 0.0,
+                       "max": 0.0, "error": "raw", "error-sanitized": "t.py:2: assert 2 == 3",
+                       "visibility": {"score": "visible", "feedback": "visible", "stdout": "visible", "error": "visible"}}]
+        }))
+        .unwrap();
+        assert_eq!(
+            sanitized.tests[0].error_for_students(),
+            "t.py:2: assert 2 == 3"
+        );
+        assert!(sanitized.warnings().is_empty());
+        let round = serde_json::to_string(&sanitized).unwrap();
+        assert!(
+            round.contains(r#""error-sanitized":"t.py:2: assert 2 == 3""#),
+            "{round}"
+        );
+        assert!(round.contains(r#""sanitizes-errors":true"#), "{round}");
     }
 
     #[test]

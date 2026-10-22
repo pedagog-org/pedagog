@@ -309,6 +309,16 @@ pub async fn show(
                     },
                     "items": t.items, "feedback": t.feedback,
                     "stdout": t.stdout, "error": t.error, "trace": t.trace,
+                    "error_sanitized": t.error_sanitized,
+                    // Which error students get (when they may see it): `raw` is
+                    // the framework's report, test source included.
+                    "students_get": if t.error.is_empty() && t.error_sanitized.is_empty() {
+                        None
+                    } else if t.error_sanitized.is_empty() {
+                        Some("raw")
+                    } else {
+                        Some("sanitized")
+                    },
                 })
             })
             .collect::<Vec<_>>()
@@ -332,6 +342,8 @@ pub async fn show(
             "error": r.error, "problems": r.problems, "log_tail": r.log_tail,
         })),
         "run_output": results.as_ref().and_then(|r| r.run.as_ref()).map(|r| r.output.clone()),
+        "run_output_sanitized": results.as_ref().and_then(|r| r.run_error_for_students()),
+        "warnings": results.as_ref().map(Results::warnings).unwrap_or_default(),
         "stages": results.as_ref().map(|r| stages_json(&p, r)),
         "student_is_told": told,
         "tests": tests,
@@ -388,6 +400,11 @@ pub async fn mine(
         queue_position,
         why: why.map(str::to_owned),
         next: why.map(|_| NEXT_STEP.to_owned()),
+        detail: run
+            .as_ref()
+            .filter(|r| r.status == RunStatus::Error)
+            .and_then(parsed)
+            .and_then(|r| r.run_error_for_students().map(str::to_owned)),
         results: view,
     })
     .into_response())
@@ -650,6 +667,11 @@ mod tests {
             (mine["status"].as_str(), mine["why"].as_str()),
             (Some("error"), Some("the tests couldn't run with your code"))
         );
+        assert_eq!(
+            mine["detail"],
+            serde_json::Value::Null,
+            "nothing sanitized to show"
+        );
         assert!(
             !mine.to_string().contains("SyntaxError"),
             "problems stay with staff"
@@ -808,6 +830,13 @@ mod tests {
             (Some(first), Some("ta@ufl.edu"))
         );
         let stress = &full["tests"][1];
+        assert_eq!(stress["students_get"], "raw", "the helper didn't sanitize");
+        assert_eq!(
+            full["tests"][0]["students_get"],
+            serde_json::Value::Null,
+            "no error"
+        );
+        assert_eq!(full["warnings"].as_array().map(Vec::len), Some(1));
         assert_eq!(
             stress["visibility"]["score"]["why"],
             "not yet: until results are released"

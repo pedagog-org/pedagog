@@ -587,9 +587,11 @@ The platform writes (and reads) a standard results file at `/pedagog/results/res
 ```yaml
 submission-id: ~           # UUID, or null for test runs
 run-id: ~                  # UUID, or null for test runs
+sanitizes-errors: true     # the helper fills error-sanitized and output-sanitized
 run:
   status: complete         # complete | error (tests couldn't all run, e.g. the code doesn't load)
-  output: ""               # what stopped them; staff only
+  output: ""               # what stopped them, the framework's report; staff only
+  output-sanitized: ""     # the same for students: "linked_list.py, line 2: SyntaxError: ..."
 summary:
   score: 12                # sum of the tests' scores
   total: 32                # sum of the tests' maxes
@@ -615,7 +617,12 @@ tests:
               message: "sort() lost an element" }   # the check's assert message
           - { points: -1, reason: "one global" }    # an award: no result
     stdout: "after sort(): [1, 2]\n"   # what the test printed
-    error: "test_sort.py:9: AssertionError ... assert 2 == 3"   # what went wrong
+    error: "..."           # what went wrong: the framework's raw report (optional)
+    error-sanitized: |     # the same for students (optional): a summary, then the call chain
+      sort.py:9: assert 2 == 3
+
+      test_sort.py:12, in test_sort
+          sort(values)
     trace: "..."           # how the score was calculated; staff only
     visibility: { score: visible, feedback: visible, stdout: visible, error: after_end }
 artifacts:
@@ -629,6 +636,7 @@ Default per-test visibility is defined in the test suite source code. The `visib
 - **Version 1** (pedagog-pytest 1) is still read: `output` as `error`; text `feedback` (on the test or its items) as written; two-part visibility with `output` standing for feedback, stdout and error; `<file>::<collection>` entries as a run error.
 - **Rubric scoring:** each item's score lies within its `clamp`. A test's score is the sum of its item scores; its max sums the items that count: `none` items, plus `attempted-work` items once attempted. `bonus` items never count in the max. With unbounded clamps or extra credit, a score can fall below 0 or exceed its max; the summary is always the plain sum of the tests.
 - **Checks the platform runs:** unique `node`s, declared `id`s and item ids; scores within their bounds (tests with neither items nor a clamp must lie in 0..=max); tests and the summary that add up. A run whose tests couldn't all run is an error (`load`), and so is a validation whose reference solution couldn't run its tests.
+- **Errors for students:** `error` is the framework's raw report (test source, values, internals); `error-sanitized` is the helper's version for students: where and what (the student's line when the failure is in their code), a blank line, then the frames that matter with one line of code each, without the test's source, object addresses, absolute paths or helper internals. Students get `error-sanitized` when it's there, else `error`, when the test's `error` visibility allows; staff get both. A helper that sanitizes says so (`sanitizes-errors`); without it, validation warns staff (`hammer upload`, the build's status) and the staff results mark tests whose error reaches students raw. A run that couldn't load the code keeps its results, so students see `run.output-sanitized` (e.g. a syntax error's file, line and message) under "the tests couldn't run with your code".
 - **Error kinds** (`grading_runs.error_kind`): `load`, `timeout` (the Job's deadline), `out_of_memory`, `crash`, `no_results`, `invalid` (results that don't parse or add up), `internal` (couldn't start).
 
 ---

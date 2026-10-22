@@ -235,6 +235,10 @@ pub struct MyResults {
     /// Why it couldn't be graded, and what to do.
     pub why: Option<String>,
     pub next: Option<String>,
+    /// What stopped it, sanitized, when the helper says (e.g. a syntax error's
+    /// file, line and message).
+    #[serde(default)]
+    pub detail: Option<String>,
     /// When graded.
     pub results: Option<crate::view::StudentView>,
 }

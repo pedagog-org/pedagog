@@ -46,6 +46,15 @@ pub fn test_badge(t: &ShownTest) -> Words {
     }
 }
 
+/// A sanitized error's summary and the rest (the call chain), split at the
+/// first blank line.
+pub fn split_error(error: &str) -> (&str, Option<&str>) {
+    match error.split_once("\n\n") {
+        Some((summary, rest)) if !rest.trim().is_empty() => (summary, Some(rest.trim_end())),
+        _ => (error.trim_end(), None),
+    }
+}
+
 /// A rubric step: its class (`pass`, `fail`, `award`), glyph, screen-reader
 /// word and points (`+2`, `0 / 1`).
 pub fn step_parts(s: &Step) -> (&'static str, &'static str, &'static str, String) {
@@ -126,6 +135,7 @@ fn Test(test: ShownTest) -> impl IntoView {
     let feedback = test.feedback.unwrap_or_default();
     let stdout = test.stdout.filter(|s| !s.is_empty());
     let error = test.error.filter(|s| !s.is_empty());
+    let sanitized = test.error_sanitized;
     let nothing = feedback.is_empty() && stdout.is_none() && error.is_none();
     view! {
         <details class="test" open=failed>
@@ -164,8 +174,24 @@ fn Test(test: ShownTest) -> impl IntoView {
                 {stdout.map(|out| view! {
                     <div class="part"><div class="part-h">"Printed output"</div><div class="codewrap"><pre class="code">{out.clone()}</pre><Copy text=out/></div></div>
                 })}
-                {error.map(|err| view! {
-                    <div class="part"><div class="part-h">"Error"</div><pre class="code" style="color: var(--fail)">{err}</pre></div>
+                {error.map(|err| if sanitized {
+                    let (summary, chain) = split_error(&err);
+                    let (summary, chain) = (summary.to_owned(), chain.map(str::to_owned));
+                    view! {
+                        <div class="part">
+                            <div class="part-h">"Error"</div>
+                            <pre class="code" style="color: var(--fail)">{summary}</pre>
+                            {chain.map(|c| view! {
+                                <details class="chain">
+                                    <summary class="small muted" style="cursor: pointer; margin-top: 6px">"How it got there"</summary>
+                                    <pre class="code">{c}</pre>
+                                </details>
+                            })}
+                        </div>
+                    }
+                    .into_any()
+                } else {
+                    view! { <div class="part"><div class="part-h">"Error"</div><pre class="code" style="color: var(--fail)">{err}</pre></div> }.into_any()
                 })}
                 {nothing.then(|| view! { <p class="small faint">"No details for this test."</p> })}
             </div>
@@ -229,11 +255,25 @@ mod tests {
             feedback: None,
             stdout: None,
             error: None,
+            error_sanitized: false,
         };
         assert_eq!(test_badge(&test(Some(1.0))).text, "Extra credit");
         assert_eq!(test_badge(&test(None)).text, "Fail");
         assert_eq!(extra_points(0.0, 1.0), "+0 of 1");
         assert_eq!(extra_points(1.0, 1.0), "+1 extra");
+    }
+
+    #[test]
+    fn a_sanitized_error_splits_into_summary_and_chain() {
+        let err = "linked_list.py:42: AttributeError: oops\n\ntest.py:70, in test_find\n    items.find(3)\n";
+        assert_eq!(
+            split_error(err),
+            (
+                "linked_list.py:42: AttributeError: oops",
+                Some("test.py:70, in test_find\n    items.find(3)")
+            )
+        );
+        assert_eq!(split_error("just this\n"), ("just this", None));
     }
 
     #[test]
