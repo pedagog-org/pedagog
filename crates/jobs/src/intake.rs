@@ -1,4 +1,4 @@
-//! `POST /internal/courses/{course}/assignments[?force=true]`: accept an
+//! `POST /internal/courses/{course}/assignments`: accept an
 //! assignment archive for a course, check it, store it in Garage, and dispatch
 //! its build.
 //! `GET /internal/courses/{course}/assignments/{slug}/builds/{build}`: an
@@ -44,9 +44,6 @@ pub struct Uploaded {
 
 #[derive(Deserialize)]
 pub struct UploadQuery {
-    /// Rebuild even if this exact image was already built and validated.
-    #[serde(default)]
-    force: bool,
     /// Regrade every student's latest submission once this build becomes
     /// current, telling students `never`, when their results `changed`, or `always`.
     regrade: Option<String>,
@@ -211,48 +208,24 @@ pub async fn upload(
     tracing::info!(%course, assignment = %slug, upload = upload.id, tree = %checked.tree_hash, "upload stored");
 
     let tree_hash = checked.tree_hash.clone();
-    let mut warnings = checked.warnings.clone();
+    let warnings = checked.warnings.clone();
     let policy = serde_json::to_value(&checked.assignment.assignment)
         .map_err(|e| internal("reading the policy", e))?;
-    let plan = Plan::from_checked(checked, &assignment, upload.id, key, query.force)
+    let plan = Plan::from_checked(checked, &assignment, upload.id, key)
         .map_err(|e| internal("planning the build", e))?;
     let build = assignments::dispatch(&state, plan)
         .await
         .map_err(|e| internal("dispatching the build", e))?;
+    let Decision::Dispatched { build_id } = build;
     if let Some(notify) = regrade {
-        match build {
-            Decision::Dispatched { build_id } => {
-                db::request_regrade(&state.pool, build_id, notify)
-                    .await
-                    .map_err(|e| internal("requesting the regrade", e))?;
-            }
-            Decision::AlreadyBuilt { .. } => warnings.push(
-                "nothing to regrade: this exact image is already built (--force rebuilds it and regrades)".to_owned(),
-            ),
-        }
+        db::request_regrade(&state.pool, build_id, notify)
+            .await
+            .map_err(|e| internal("requesting the regrade", e))?;
     }
-
     if query.take_dates {
-        match build {
-            Decision::Dispatched { build_id } => {
-                db::request_take_dates(&state.pool, build_id)
-                    .await
-                    .map_err(|e| internal("taking the file's dates", e))?;
-            }
-            // This exact upload is already built: if it's current, its dates
-            // apply now.
-            Decision::AlreadyBuilt { build_id } if assignment.current_build_id == Some(build_id) => {
-                db::edit_overrides(&state.pool, assignment.id, db::Overrides::Dates, |_| {
-                    Ok::<_, std::convert::Infallible>("{}".to_owned())
-                })
-                .await
-                .map_err(|e| internal("taking the file's dates", e))?
-                .unwrap_or_else(|never| match never {});
-            }
-            Decision::AlreadyBuilt { .. } => warnings.push(
-                "the file's dates weren't taken: this exact upload is already built but isn't current (--force rebuilds it)".to_owned(),
-            ),
-        }
+        db::request_take_dates(&state.pool, build_id)
+            .await
+            .map_err(|e| internal("taking the file's dates", e))?;
     }
 
     let reply = Uploaded {
@@ -326,7 +299,6 @@ impl Plan {
         assignment: &Assignment,
         upload_id: i64,
         object_key: String,
-        force: bool,
     ) -> anyhow::Result<Self> {
         Ok(Plan {
             assignment_id: assignment.id,
@@ -339,7 +311,6 @@ impl Plan {
             has_solution: checked.has_solution,
             settings: RunSettings::of(&checked.assignment),
             policy: serde_json::to_string(&checked.assignment.assignment)?,
-            force,
         })
     }
 }

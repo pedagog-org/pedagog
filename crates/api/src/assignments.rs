@@ -24,8 +24,6 @@ const ERROR_TAIL: usize = 4000;
 
 #[derive(Deserialize)]
 pub struct UploadQuery {
-    #[serde(default)]
-    force: bool,
     regrade: Option<String>,
     /// Adopt the file's dates (clearing the course's edits) once the build is current.
     #[serde(default)]
@@ -43,9 +41,6 @@ pub async fn upload(
 ) -> Result<Response, ApiError> {
     let access = require(&state, &course, &current, Need::Manage).await?;
     let mut params = vec![];
-    if q.force {
-        params.push("force=true".to_owned());
-    }
     if let Some(r) = q.regrade {
         if !matches!(r.as_str(), "never" | "changed" | "always") {
             return Err(refused(
@@ -312,7 +307,7 @@ mod tests {
         assert!(jobs.lock().unwrap().is_empty());
 
         let prof = login(&url, &outbox, "prof@ufl.edu").await;
-        let r = send(prof, "?force=true&regrade=changed&junk=1").await;
+        let r = send(prof, "?regrade=changed&junk=1").await;
         assert_eq!(r.status(), 201);
         assert_eq!(
             json(r).await["course"],
@@ -323,7 +318,7 @@ mod tests {
         assert_eq!(
             seen,
             [(
-                "/internal/courses/cop3502-f26/assignments?force=true&regrade=changed".to_owned(),
+                "/internal/courses/cop3502-f26/assignments?regrade=changed".to_owned(),
                 3
             )]
         );

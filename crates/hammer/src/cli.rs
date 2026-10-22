@@ -162,9 +162,9 @@ What gets uploaded: every regular file under the directory, except VCS metadata
 jobs refuses an archive over 50 MiB compressed, 200 MiB unpacked, or 10 000
 files (its configured defaults), and identifies uploads by their files' paths,
 executable bits and contents: uploading identical files again is recognized,
-however they were packed. An upload whose image (its rendered Containerfile and
-files) was already built and validated isn't rebuilt unless --force is given; a
-newer upload supersedes a build still in progress."
+however they were packed. Every upload builds a new image, identical files
+included (its base image or pinned ingredients may have moved); a newer upload
+supersedes a build still in progress."
 )]
 pub struct UploadArgs {
     /// Assignment directory (contains assignment.yml).
@@ -173,10 +173,6 @@ pub struct UploadArgs {
     /// The course [default: the nearest course.yml at or above DIR, else `hammer use`].
     #[arg(short = 'c', long)]
     pub course: Option<String>,
-
-    /// Rebuild even if this exact image was already built and validated.
-    #[arg(long)]
-    pub force: bool,
 
     /// Once this upload's build validates and becomes current, regrade every
     /// student's latest submission against it (earlier results are kept).

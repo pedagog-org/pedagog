@@ -68,8 +68,6 @@ pub struct DateDiff {
 /// What jobs did about building the upload.
 #[derive(Debug, Deserialize)]
 pub struct Build {
-    /// `dispatched` or `already_built`.
-    pub status: String,
     pub build_id: i64,
 }
 
@@ -242,14 +240,10 @@ pub fn send(
     to: &Endpoint,
     course: &str,
     archive: Vec<u8>,
-    force: bool,
     regrade: Option<Notify>,
     take_dates: bool,
 ) -> Result<Uploaded, String> {
     let mut params = Vec::new();
-    if force {
-        params.push(("force", "true"));
-    }
     if take_dates {
         params.push(("take_dates", "true"));
     }

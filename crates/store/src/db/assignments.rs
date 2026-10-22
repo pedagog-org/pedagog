@@ -257,28 +257,6 @@ pub async fn record_upload(
     })
 }
 
-/// The latest attempt for this image hash that succeeded with a usable
-/// validation (passed or skipped): an upload that needs no rebuild.
-pub async fn usable_build_for<'e>(
-    db: impl sqlx::PgExecutor<'e>,
-    assignment_id: i64,
-    image_hash: &str,
-) -> sqlx::Result<Option<i64>> {
-    let row = sqlx::query!(
-        "SELECT id FROM assignment_builds
-          WHERE assignment_id = $1 AND image_hash = $2
-            AND build_status = 'succeeded' AND validation_status IN ('passed', 'skipped')
-            AND image_deleted_at IS NULL
-          ORDER BY id DESC
-          LIMIT 1",
-        assignment_id,
-        image_hash
-    )
-    .fetch_optional(db)
-    .await?;
-    Ok(row.map(|r| r.id))
-}
-
 /// Images something still needs: each assignment's current build, builds in
 /// flight, and builds with test runs waiting or running.
 pub async fn image_refs_in_use(pool: &PgPool) -> sqlx::Result<Vec<String>> {
@@ -859,10 +837,6 @@ mod tests {
             current_build_id(&pool, up.assignment_id).await?,
             Some(build)
         );
-        assert_eq!(
-            usable_build_for(&pool, up.assignment_id, "img-a").await?,
-            Some(build)
-        );
         assert!(in_flight(&pool).await?.is_empty());
         Ok(())
     }
@@ -881,10 +855,6 @@ mod tests {
         finish_validation(&pool, bad, ValidationStatus::Failed, Some("{}"), &problems).await?;
         let row = get_build(&pool, up.assignment_id, bad).await?.unwrap();
         assert_eq!(row.validation_problems, problems);
-        assert_eq!(
-            usable_build_for(&pool, up.assignment_id, "img-b").await?,
-            None
-        );
 
         // A failed image build ends the attempt without validating.
         let broken = start_build(&pool, &crate::db::test_build(&up, "img-c", "reg/a:3")).await?;
@@ -927,9 +897,7 @@ mod tests {
     }
 
     #[sqlx::test]
-    async fn images_in_use_are_kept_and_deleted_ones_never_reused(
-        pool: PgPool,
-    ) -> sqlx::Result<()> {
+    async fn images_in_use_are_kept_and_deletions_recorded_once(pool: PgPool) -> sqlx::Result<()> {
         let up = uploaded(&pool, "ll", "tree-a").await?;
         let old = start_build(&pool, &crate::db::test_build(&up, "img-a", "reg/a:1")).await?;
         finish_build(&pool, old, true, None).await?;
@@ -953,16 +921,14 @@ mod tests {
         in_use.sort();
         assert_eq!(in_use, ["reg/a:1", "reg/a:2"], "and a queued run's");
 
-        assert_eq!(
-            usable_build_for(&pool, up.assignment_id, "img-a").await?,
-            Some(old)
-        );
         assert_eq!(images_deleted(&pool, &["a:1".into()]).await?, 1);
-        assert_eq!(
-            usable_build_for(&pool, up.assignment_id, "img-a").await?,
-            None,
-            "rebuilds"
-        );
+        let deleted: bool = sqlx::query_scalar(
+            "SELECT image_deleted_at IS NOT NULL FROM assignment_builds WHERE id = $1",
+        )
+        .bind(old)
+        .fetch_one(&pool)
+        .await?;
+        assert!(deleted);
         assert_eq!(images_deleted(&pool, &["a:1".into()]).await?, 0);
         Ok(())
     }

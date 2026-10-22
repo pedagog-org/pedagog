@@ -56,7 +56,7 @@ enum Task {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Rebuild the OS images through jobs' endpoint, e.g. `kind-rebuild force=true`.
+    /// Rebuild every OS image through jobs' endpoint (`kind-rebuild os=ubuntu-22` for one).
     KindRebuild {
         query: Option<String>,
         /// Wait until no OS build is running, and fail if the latest failed.

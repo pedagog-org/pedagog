@@ -103,7 +103,7 @@ async fn serve() -> anyhow::Result<()> {
     // prod builds the pinned recipes at startup; dev waits for the endpoint
     // (recipes are a live checkout being edited).
     if state.config.env == Env::Prod {
-        match dispatch::dispatch(&state, false, None).await {
+        match dispatch::dispatch(&state, dispatch::Pass::Changed, None).await {
             Ok(d) => tracing::info!(dispatched = ?d.dispatched, "startup dispatch complete"),
             Err(e) => tracing::error!(error = %e, "startup dispatch failed"),
         }

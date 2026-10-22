@@ -30,11 +30,20 @@ struct Planned {
     containerfile: String,
 }
 
-/// Reconcile orphans, then dispatch changed/not-in-flight recipes. Returns as soon
-/// as work is dispatched; the short lock covers only detect → ensure → start_run.
+/// Which OS images a dispatch pass builds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pass {
+    /// Those whose recipe changed since their last build (jobs' startup).
+    Changed,
+    /// All of them, replacing finished Jobs (the rebuild endpoint).
+    All,
+}
+
+/// Reconcile orphans, then dispatch the pass's not-in-flight recipes. Returns as
+/// soon as work is dispatched; the short lock covers only detect → ensure → start_run.
 pub async fn dispatch(
     state: &AppState,
-    force: bool,
+    pass: Pass,
     only: Option<&str>,
 ) -> anyhow::Result<Dispatched> {
     // One OS dispatch pass at a time, across replicas; held until `_lock`
@@ -59,15 +68,15 @@ pub async fn dispatch(
         &state.pool,
         &store,
         &state.config.registry,
-        force,
+        pass,
         only,
         &in_flight,
     )
     .await?;
 
-    // A forced pass also replaces Jobs that already succeeded for this hash;
-    // otherwise the lingering Job would make `force` a no-op until its TTL.
-    let if_built = if force {
+    // Rebuilding all also replaces Jobs that already succeeded for this hash;
+    // otherwise a lingering Job would leave the image as it was until its TTL.
+    let if_built = if pass == Pass::All {
         IfBuilt::Rebuild
     } else {
         IfBuilt::Skip
@@ -105,7 +114,7 @@ async fn plan_builds(
     pool: &PgPool,
     store: &RecipeStore,
     registry: &str,
-    force: bool,
+    pass: Pass,
     only: Option<&str>,
     in_flight: &HashSet<String>,
 ) -> anyhow::Result<Vec<Planned>> {
@@ -129,7 +138,7 @@ async fn plan_builds(
         .to_string();
         let hash = blake3::hash(containerfile.as_bytes()).to_hex().to_string();
         if !needs_build(
-            force,
+            pass,
             db::builds::last_hash(pool, &id).await?.as_deref(),
             &hash,
         ) {
@@ -145,8 +154,8 @@ async fn plan_builds(
     Ok(out)
 }
 
-fn needs_build(force: bool, recorded: Option<&str>, current: &str) -> bool {
-    force || recorded != Some(current)
+fn needs_build(pass: Pass, recorded: Option<&str>, current: &str) -> bool {
+    pass == Pass::All || recorded != Some(current)
 }
 
 fn spawn_build(state: &AppState, run: i64, os_id: String, hash: String, dest: String) {
@@ -222,10 +231,10 @@ mod tests {
 
     #[test]
     fn needs_build_logic() {
-        assert!(needs_build(false, None, "h")); // empty DB → build
-        assert!(!needs_build(false, Some("h"), "h")); // unchanged → skip
-        assert!(needs_build(false, Some("old"), "h")); // changed → build
-        assert!(needs_build(true, Some("h"), "h")); // force → build regardless
+        assert!(needs_build(Pass::Changed, None, "h")); // empty DB → build
+        assert!(!needs_build(Pass::Changed, Some("h"), "h")); // unchanged → skip
+        assert!(needs_build(Pass::Changed, Some("old"), "h")); // changed → build
+        assert!(needs_build(Pass::All, Some("h"), "h")); // rebuild all → build regardless
     }
 
     const RECIPES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../recipes");
@@ -236,7 +245,7 @@ mod tests {
         let none = HashSet::new();
 
         // empty DB → ubuntu-22 is planned
-        let planned = plan_builds(&pool, &store, "reg", false, None, &none).await?;
+        let planned = plan_builds(&pool, &store, "reg", Pass::Changed, None, &none).await?;
         let ubuntu = planned
             .iter()
             .find(|p| p.os_id == "ubuntu-22")
@@ -246,24 +255,24 @@ mod tests {
         // record its hash → no longer planned
         db::builds::record_build(&pool, "ubuntu-22", &hash, &dest).await?;
         assert!(
-            plan_builds(&pool, &store, "reg", false, None, &none)
+            plan_builds(&pool, &store, "reg", Pass::Changed, None, &none)
                 .await?
                 .iter()
                 .all(|p| p.os_id != "ubuntu-22")
         );
 
-        // force → planned again despite matching hash
+        // rebuilding all → planned again despite matching hash
         assert!(
-            plan_builds(&pool, &store, "reg", true, None, &none)
+            plan_builds(&pool, &store, "reg", Pass::All, None, &none)
                 .await?
                 .iter()
                 .any(|p| p.os_id == "ubuntu-22")
         );
 
-        // in-flight → skipped even with force
+        // in-flight → skipped even when rebuilding all
         let inflight = HashSet::from(["ubuntu-22".to_string()]);
         assert!(
-            plan_builds(&pool, &store, "reg", true, None, &inflight)
+            plan_builds(&pool, &store, "reg", Pass::All, None, &inflight)
                 .await?
                 .iter()
                 .all(|p| p.os_id != "ubuntu-22")

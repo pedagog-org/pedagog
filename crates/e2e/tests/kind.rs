@@ -200,7 +200,7 @@ fn personas(e: &mut Env) -> Result<String> {
 }
 
 fn example_validates(e: &mut Env) -> Result<String> {
-    let (_, out) = e.upload(&path(EXAMPLE), &["--force", "--wait"])?;
+    let (_, out) = e.upload(&path(EXAMPLE), &["--wait"])?;
     require(out.contains("validation passed: 10.0 / 10.0"), || {
         out.clone()
     })?;
@@ -211,10 +211,22 @@ fn example_validates(e: &mut Env) -> Result<String> {
     Ok("example validates (10/10)".into())
 }
 
-fn reupload_is_recognized(e: &mut Env) -> Result<String> {
-    let (_, out) = e.upload(&path(EXAMPLE), &[])?;
-    require(out.contains("already built and validated"), || out.clone())?;
-    Ok("identical content dispatches nothing".into())
+fn reupload_rebuilds(e: &mut Env) -> Result<String> {
+    let current = || {
+        sql(&format!(
+            "SELECT a.current_build_id FROM assignments a WHERE a.course_id = '{}' AND a.slug = '{EXAMPLE_ID}'",
+            e.course
+        ))
+    };
+    let before = current()?;
+    let (_, out) = e.upload(&path(EXAMPLE), &["--wait"])?;
+    let after = current()?;
+    require(out.contains("validation passed") && after != before, || {
+        format!("current build {before} -> {after}: {out}")
+    })?;
+    Ok(format!(
+        "identical content builds again (build {before} -> {after})"
+    ))
 }
 
 fn buggy_solution_fails(e: &mut Env) -> Result<String> {
@@ -243,8 +255,8 @@ fn buggy_solution_fails(e: &mut Env) -> Result<String> {
 
 fn newer_upload_supersedes(e: &mut Env) -> Result<String> {
     let build = |out: String| first_number_after(&out, "build ").map(str::to_owned);
-    let first = build(e.upload(&path(EXAMPLE), &["--force"])?.1).ok_or("no first build")?;
-    let second = build(e.upload(&path(EXAMPLE), &["--force"])?.1).ok_or("no second build")?;
+    let first = build(e.upload(&path(EXAMPLE), &[])?.1).ok_or("no first build")?;
+    let second = build(e.upload(&path(EXAMPLE), &[])?.1).ok_or("no second build")?;
     let status = sql(&format!(
         "SELECT build_status FROM assignment_builds WHERE id = {first}"
     ))?;
@@ -401,7 +413,7 @@ nc -z -w 3 {node} 10250 && echo node-open || echo node-blocked"
 }
 
 fn upload_example_validates(e: &mut Env) -> Result<String> {
-    let (_, out) = e.upload(&path(UPLOAD_EXAMPLE), &["--force", "--wait"])?;
+    let (_, out) = e.upload(&path(UPLOAD_EXAMPLE), &["--wait"])?;
     let (dated, dates) = e.prof.says(&[
         "dates", "set", UPLOAD_ID, "--open", "always", "-c", &e.course,
     ])?;
@@ -685,7 +697,7 @@ def test_pop_shrinks(score: Score):
     let before = latest_mail(&good.email, "results updated")?;
     let (_, out) = e.upload(
         &v2.display().to_string(),
-        &["--force", "--regrade", "--notify", "changed", "--wait"],
+        &["--regrade", "--notify", "changed", "--wait"],
     )?;
     let build = first_number_after(&out, "build ")
         .ok_or_else(|| out.clone())?
@@ -978,7 +990,7 @@ fn web_submit(e: &mut Env) -> Result<String> {
         require(of.starts_with(&format!("/ {got} ")), || {
             format!("the score shown is {got} {of}")
         })?;
-        let history = element(&c, Duration::from_secs(30), "#hist-h + ul li").await?;
+        let history = element(&c, Duration::from_secs(30), "#hist-h + .card li").await?;
         let row = history.text().await.map_err(cmd)?;
         require(
             row.contains(&format!("{got}/{got} shown")) && row.contains("Counts"),
@@ -996,8 +1008,8 @@ type Check = fn(&mut Env) -> Result<String>;
 const CHECKS: &[(&str, Check, &[&str])] = &[
     ("example_validates", example_validates, &[]),
     (
-        "reupload_is_recognized",
-        reupload_is_recognized,
+        "reupload_rebuilds",
+        reupload_rebuilds,
         &["example_validates"],
     ),
     (

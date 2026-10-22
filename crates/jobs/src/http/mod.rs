@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
 use serde::Deserialize;
 
-use crate::dispatch::dispatch;
+use crate::dispatch::{Pass, dispatch};
 use crate::intake;
 use crate::state::AppState;
 use crate::submissions;
@@ -52,8 +52,6 @@ pub fn router(state: AppState) -> Router {
 
 #[derive(Deserialize)]
 struct RebuildQuery {
-    #[serde(default)]
-    force: bool,
     os: Option<String>,
 }
 
@@ -75,7 +73,7 @@ async fn rebuild(
     State(state): State<AppState>,
     Query(q): Query<RebuildQuery>,
 ) -> impl IntoResponse {
-    match dispatch(&state, q.force, q.os.as_deref()).await {
+    match dispatch(&state, Pass::All, q.os.as_deref()).await {
         Ok(d) => (StatusCode::ACCEPTED, Json(d)).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "dispatch failed");
