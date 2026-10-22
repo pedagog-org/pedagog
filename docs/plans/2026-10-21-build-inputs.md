@@ -22,8 +22,9 @@ Previewing pedagog-pytest 2.2.0 found three problems with how images are built:
 ## Decisions
 
 1. **Every upload rebuilds.** No "already built": an upload always starts a build (and
-   supersedes one in flight). `--force` stays accepted and does nothing extra
-   (deprecated in the help). Regrades and `--take-dates` always follow the new build.
+   supersedes one in flight). `--force` is removed (hammer's flag, the `force` query on
+   the api and jobs, and the OS rebuild's): nothing is ever reused, so there's nothing to
+   force. Regrades and `--take-dates` always follow the new build.
 2. **Steps carry their ingredients' checksums.** Each recipe layer that declares
    ingredients renders `ENV PEDAGOG_INGREDIENTS="<file>=<sha256> ..."` after its
    `PEDAGOG_TYPE`/`PEDAGOG_ID`, so a changed pin changes the image hash and every later
@@ -41,9 +42,11 @@ Previewing pedagog-pytest 2.2.0 found three problems with how images are built:
      init (the jobs image copying everything) goes away; the rendered Containerfile
      doesn't need the recipes folder at build time (the OS init step that installs
      `vend` reads `/pedagog/recipes/lib/vend`: that one file is fetched too, or inlined).
-   - **Cleanup:** the nightly maintenance deletes `ingredients/sha256/*` that no recipe
-     pins and no image in use was built from (like registry cleanup), after a grace
-     period.
+   - **Cleanup, at once:** an ingredient no recipe pins any more is deleted by the
+     startup sync that finds it unpinned (images are already built, so nothing needs it
+     again), except while a build in flight still declares it (a jobs replica on the
+     old recipes during a rollout); those go at the next sync. The nightly maintenance
+     repeats the check as a backstop.
    - **Dev:** kind uses the same Garage path; no hostPath recipes for ingredients, so
      nothing to vend by hand.
    - The jobs image drops its vend stage (~200 MB smaller).
@@ -63,11 +66,9 @@ Previewing pedagog-pytest 2.2.0 found three problems with how images are built:
 
 ## Open questions
 
-- **Grace period for cleanup:** keep unpinned ingredients 14 days (as cached registry
-  images)?
 - **Startup with GitHub down:** jobs starts anyway, logs and reports missing ingredients
   (GlitchTip), and builds needing one fail with "ingredient X isn't available yet"; it
-  retries the sync every 10 minutes. (Proposed.)
+  retries the sync every 10 minutes. (Agreed.)
 - **The `kind` hostPath for recipes:** with ingredients in Garage, is the hostPath still
   needed in dev (recipes are rendered by jobs, not read by builds)? Drop it if not.
 
@@ -84,15 +85,17 @@ own. Step 3 keeps the old `stage-recipes` path behind a config switch for one re
    the rendered text (and so the image hash); ARCHITECTURE.
 2. **Always rebuild** (`feat/always-rebuild`): jobs' dispatch drops the `usable_build_for`
    short cut; regrade and take-dates always attach to the new build; hammer's "already
-   built" message goes; `--force` deprecated; the e2e `reupload_is_recognized` check
-   becomes "a re-upload rebuilds"; ARCHITECTURE.
+   built" message goes; `--force` removed everywhere (hammer, api, jobs, the OS rebuild
+   and xtask's `kind-rebuild`, which always rebuilds); the e2e checks stop passing it,
+   and `reupload_is_recognized` becomes "a re-upload rebuilds"; ARCHITECTURE.
 3. **Ingredients in Garage** (`feat/garage-ingredients`):
    - move the vend download code (GitHub API, URL, sha256 check) from hammer into core
      so jobs can use it; `objects::ingredient_key(sha256)`;
    - jobs' startup sync (and a retry loop), reported in its health and logs;
    - `kaniko_job` adds per-ingredient fetches to `fetch-context` (a list of
      `<sha256> <dest>`), drops `stage-recipes`, keeps a switch for the old path;
-   - nightly cleanup of unpinned ingredients;
+   - deleting unpinned ingredients in the sync (skipping ones a build in flight
+     declares), with the nightly maintenance as a backstop;
    - the jobs image without the vend stage; xtask stops mounting recipes for kind
      builds if the open question allows;
    - tests: core (key, render), jobs (sync with a fake source; cleanup), k8s (the job
