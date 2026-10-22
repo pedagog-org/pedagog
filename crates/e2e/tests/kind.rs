@@ -1145,6 +1145,189 @@ fn web_submit(e: &Env) -> Result<String> {
     })
 }
 
+/// The staff checks' assignment: the upload example under another id, so its
+/// builds don't disturb the upload lane's.
+const STAFF_ID: &str = "linked-list-staff";
+
+/// A copy of the upload example as `STAFF_ID`, in a folder named for it.
+fn staff_copy(e: &Env) -> Result<PathBuf> {
+    let dir = e.file(STAFF_ID);
+    if !dir.exists() {
+        copy_dir(&root().join(UPLOAD_EXAMPLE), &dir)?;
+        replace_in(
+            &dir.join("assignment.yml"),
+            &format!("id: {UPLOAD_ID}"),
+            &format!("id: {STAFF_ID}"),
+        )?;
+    }
+    Ok(dir)
+}
+
+fn staff_builds(e: &Env) -> Result<Vec<i64>> {
+    let ids = sql(&format!(
+        "SELECT b.id FROM assignment_builds b JOIN assignments a ON a.id = b.assignment_id
+          WHERE a.course_id = '{}' AND a.slug = '{STAFF_ID}' ORDER BY b.id",
+        e.course
+    ))?;
+    Ok(ids.lines().filter_map(|l| l.trim().parse().ok()).collect())
+}
+
+fn staff_current(e: &Env) -> Result<Option<i64>> {
+    Ok(sql(&format!(
+        "SELECT current_build_id FROM assignments WHERE course_id = '{}' AND slug = '{STAFF_ID}'",
+        e.course
+    ))?
+    .trim()
+    .parse()
+    .ok())
+}
+
+/// An instructor uploads an assignment in the browser (an archive with the
+/// folder inside), follows its build live to current, and opens its page.
+fn staff_web_upload(e: &Env) -> Result<String> {
+    staff_copy(e)?;
+    let archive = e.file(&format!("{STAFF_ID}.tar.gz"));
+    ok(std::process::Command::new("tar")
+        .arg("-czf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(e.work.as_path())
+        .arg(STAFF_ID))?;
+    let (course, prof) = (e.course.clone(), Persona::new("prof", &e.prof.email));
+    let archive = archive.display().to_string();
+    in_browser("staff-upload", |c| async move {
+        log_in(&c, &prof).await?;
+        c.goto(&format!("{}/courses/{course}/upload", base()))
+            .await
+            .map_err(cmd)?;
+        element(&c, Duration::from_secs(30), "input[accept]")
+            .await?
+            .send_keys(&archive)
+            .await
+            .map_err(cmd)?;
+        element(
+            &c,
+            Duration::from_secs(10),
+            "button[type=submit]:not([disabled])",
+        )
+        .await?
+        .click()
+        .await
+        .map_err(cmd)?;
+        let started = element(&c, Duration::from_secs(60), "#pr-h")
+            .await?
+            .text()
+            .await
+            .map_err(cmd)?;
+        let build = first_number_after(&started, "Build")
+            .ok_or_else(|| format!("the upload page says {started:?}"))?
+            .to_owned();
+        // Built, validated and current, live: the last step is done.
+        element(&c, Duration::from_secs(900), ".steps li:last-child.done").await?;
+        c.goto(&format!(
+            "{}/courses/{course}/assignments/{STAFF_ID}/builds/{build}",
+            base()
+        ))
+        .await
+        .map_err(cmd)?;
+        let kv = element(&c, Duration::from_secs(30), "dl.kv")
+            .await?
+            .text()
+            .await
+            .map_err(cmd)?;
+        require(kv.contains(&prof.email), || {
+            format!("the build page doesn't say who uploaded: {kv:?}")
+        })?;
+        let page = c.source().await.map_err(cmd)?;
+        require(
+            page.contains("Build log ·")
+                && page.contains("Validation log ·")
+                && page.contains("As expected"),
+            || "the build page lacks its logs or the reference results".into(),
+        )?;
+        Ok(format!(
+            "an instructor uploads an archive in the browser; build {build} goes current live; its page has who, both logs and the reference results"
+        ))
+    })
+}
+
+/// An instructor makes the earlier build current in the browser, then one
+/// whose image was cleaned up, which is built again and becomes current.
+fn staff_make_current(e: &Env) -> Result<String> {
+    let dir = staff_copy(e)?;
+    let (_, out) = e.upload(&dir.display().to_string(), &["--wait"])?;
+    require(out.contains("validation passed"), || out.clone())?;
+    let builds = staff_builds(e)?;
+    let (first, second) = match builds.as_slice() {
+        [.., a, b] => (*a, *b),
+        _ => return Err(format!("expected two builds, got {builds:?}")),
+    };
+    require(staff_current(e)? == Some(second), || {
+        format!("build {second} should be current after the second upload")
+    })?;
+    let make = |build: i64| {
+        let (course, prof) = (e.course.clone(), Persona::new("prof", &e.prof.email));
+        move |c: fantoccini::Client| async move {
+            log_in(&c, &prof).await?;
+            c.goto(&format!(
+                "{}/courses/{course}/assignments/{STAFF_ID}",
+                base()
+            ))
+            .await
+            .map_err(cmd)?;
+            c.wait()
+                .at_most(Duration::from_secs(30))
+                .for_element(fantoccini::Locator::XPath(&format!(
+                    "//tr[.//a[text()='build {build}']]//button"
+                )))
+                .await
+                .map_err(|x| format!("waiting for build {build}'s make current button: {x}"))?
+                .click()
+                .await
+                .map_err(cmd)?;
+            element(&c, Duration::from_secs(10), ".dialog-f .btn-primary")
+                .await?
+                .click()
+                .await
+                .map_err(cmd)?;
+            element(&c, Duration::from_secs(60), ".dialog-b [role=status]")
+                .await?
+                .text()
+                .await
+                .map_err(cmd)
+        }
+    };
+    let said = in_browser("staff-make-current", make(first))?;
+    require(
+        said.contains(&format!("Build {first} is current now")),
+        || said.clone(),
+    )?;
+    require(staff_current(e)? == Some(first), || {
+        format!("build {first} isn't current: {:?}", staff_current(e))
+    })?;
+
+    // As if the nightly cleanup deleted build `second`'s image.
+    sql(&format!(
+        "UPDATE assignment_builds SET image_deleted_at = now() WHERE id = {second}"
+    ))?;
+    let said = in_browser("staff-rebuild", make(second))?;
+    let rebuild: i64 = first_number_after(&said, "as build")
+        .and_then(|n| n.parse().ok())
+        .ok_or_else(|| format!("the dialog says {said:?}"))?;
+    let became = wait_for(Duration::from_secs(900), || {
+        staff_current(e).ok().flatten() == Some(rebuild)
+    });
+    let of = sql(&format!(
+        "SELECT rebuild_of FROM assignment_builds WHERE id = {rebuild}"
+    ))?;
+    require(became && of.trim() == second.to_string(), || {
+        format!("rebuild {rebuild} (of {of}) didn't become current")
+    })?;
+    Ok(format!(
+        "build {first} made current in the browser; build {second}, its image gone, rebuilt as {rebuild} and current"
+    ))
+}
+
 type Check = fn(&Env) -> Result<String>;
 
 /// A check: what it builds on, its lane (checks in a lane share state, such as
@@ -1189,6 +1372,7 @@ const WORKSPACE: &str = "workspace";
 const NETWORK: &str = "network";
 const UPLOAD: &str = "upload";
 const BROWSER: &str = "browser";
+const STAFF: &str = "staff";
 
 const CHECKS: &[Spec] = &[
     spec("example_validates", example_validates, &[], WORKSPACE),
@@ -1302,6 +1486,13 @@ const CHECKS: &[Spec] = &[
         web_login,
         &["upload_example_validates"],
         BROWSER,
+    ),
+    spec("staff_web_upload", staff_web_upload, &[], STAFF),
+    spec(
+        "staff_make_current",
+        staff_make_current,
+        &["staff_web_upload"],
+        STAFF,
     ),
 ];
 
