@@ -433,7 +433,7 @@ pub async fn submission_status(
     Ok(Json(status_of(&state, submission).await?).into_response())
 }
 
-/// A submission's files as stored and graded: a gzipped tar.
+/// A submission's files as graded, dated when they were uploaded: a gzipped tar.
 pub async fn submission_archive(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<i64>,
@@ -447,6 +447,15 @@ pub async fn submission_archive(
         .get(&submission.object_key)
         .await
         .map_err(|e| internal("reading the submission's files", e))?;
+    // Dated when they were uploaded (stored archives have no times).
+    let uploaded = time::OffsetDateTime::parse(
+        &submission.created_at,
+        &time::format_description::well_known::Rfc3339,
+    )
+    .map(|t| u64::try_from(t.unix_timestamp()).unwrap_or(0))
+    .unwrap_or(0);
+    let bytes = crate::archive::restamp(&bytes, uploaded)
+        .map_err(|e| internal("dating the submission's files", e))?;
     Ok((
         [(axum::http::header::CONTENT_TYPE, "application/gzip")],
         bytes,

@@ -164,6 +164,24 @@ pub fn pack(files: &BTreeMap<String, TreeFile>) -> std::io::Result<(Vec<u8>, Str
     Ok((bytes, tree_hash(&hashes)))
 }
 
+/// A packed archive with every file dated `mtime` (Unix seconds): stored
+/// archives have no times (so identical files pack identically), and a
+/// download should show when the files were uploaded, not 1970.
+pub fn restamp(packed: &[u8], mtime: u64) -> std::io::Result<Vec<u8>> {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    let mut archive = Archive::new(GzDecoder::new(packed));
+    let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+    for entry in archive.entries()? {
+        let entry = entry?;
+        let mut header = entry.header().clone();
+        header.set_mtime(mtime);
+        header.set_cksum();
+        builder.append(&header, entry)?;
+    }
+    builder.into_inner()?.finish()
+}
+
 fn tree_hash(files: &BTreeMap<String, (bool, String)>) -> String {
     let mut tree = blake3::Hasher::new();
     for (path, (executable, digest)) in files {
@@ -269,6 +287,40 @@ pub mod tests {
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use tar::{Builder, Header};
+
+    #[test]
+    fn a_restamped_archive_has_the_same_files_dated_as_asked() {
+        let files = BTreeMap::from([
+            (
+                "a.py".to_owned(),
+                TreeFile {
+                    executable: false,
+                    content: b"print(1)".to_vec(),
+                },
+            ),
+            (
+                "bin/run".to_owned(),
+                TreeFile {
+                    executable: true,
+                    content: b"#!/bin/sh".to_vec(),
+                },
+            ),
+        ]);
+        let (packed, tree) = pack(&files).unwrap();
+        let stamped = restamp(&packed, 1_792_600_000).unwrap();
+        let mut archive = Archive::new(GzDecoder::new(stamped.as_slice()));
+        for entry in archive.entries().unwrap() {
+            assert_eq!(entry.unwrap().header().mtime().unwrap(), 1_792_600_000);
+        }
+        let dir = std::env::temp_dir().join(format!("restamp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            extract(&stamped, &LIMITS, &dir).unwrap(),
+            tree,
+            "the same files"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     pub const LIMITS: Limits = Limits {
         max_compressed_bytes: 1 << 20,
