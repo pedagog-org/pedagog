@@ -26,6 +26,8 @@ pub enum Live {
         build_status: String,
         validation_status: String,
     },
+    /// Staff only: the assignment's current build changed.
+    Current { current: Option<i64> },
 }
 
 /// Seconds until the next poll, `elapsed` seconds after polling started:
@@ -57,7 +59,7 @@ pub fn watch(
     match gloo_net::eventsource::futures::EventSource::new(&url) {
         Ok(mut source) => {
             let mut streams = Vec::new();
-            for name in ["run", "position", "build", "resync"] {
+            for name in ["run", "position", "build", "current", "resync"] {
                 if let Ok(s) = source.subscribe(name) {
                     streams.push(s);
                 }

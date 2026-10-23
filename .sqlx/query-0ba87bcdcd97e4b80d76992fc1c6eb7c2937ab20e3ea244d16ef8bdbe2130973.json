@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id FROM assignment_builds\n          WHERE finished_at < now() - make_interval(days => $1)\n            AND (build_log_lines IS NOT NULL OR validation_log_lines IS NOT NULL)\n          ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0ba87bcdcd97e4b80d76992fc1c6eb7c2937ab20e3ea244d16ef8bdbe2130973"
+}

@@ -84,7 +84,11 @@ pub struct Status {
     /// What staff should know before students see results from this build.
     #[serde(default)]
     pub validation_warnings: Vec<String>,
-    pub results: Option<serde_json::Value>,
+    /// The reference solution's score, once validated.
+    pub score: Option<f64>,
+    pub total: Option<f64>,
+    #[serde(default)]
+    pub tests: Vec<serde_json::Value>,
 }
 
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
@@ -134,19 +138,12 @@ pub fn wait(
 
 /// One line for a finished attempt, and whether it succeeded.
 pub fn outcome(status: &Status) -> (bool, String) {
-    let summary = status
-        .results
-        .as_ref()
-        .and_then(|r| {
-            let s = r.get("summary")?;
-            let tests = r.get("tests")?.as_array()?.len();
-            Some(format!(
-                "{} / {} ({tests} tests)",
-                s.get("score")?,
-                s.get("total")?
-            ))
-        })
-        .unwrap_or_default();
+    let summary = match (status.score, status.total) {
+        (Some(score), Some(total)) => {
+            format!("{score:?} / {total:?} ({} tests)", status.tests.len())
+        }
+        _ => String::new(),
+    };
     match (
         status.build_status.as_str(),
         status.validation_status.as_str(),
@@ -324,6 +321,7 @@ mod tests {
     }
 
     fn status(build: &str, validation: &str, results: Option<serde_json::Value>) -> Status {
+        let of = |field: &str| results.as_ref().and_then(|r| r["summary"][field].as_f64());
         Status {
             build_status: build.into(),
             validation_status: validation.into(),
@@ -332,7 +330,12 @@ mod tests {
             error: None,
             validation_problems: vec![],
             validation_warnings: vec![],
-            results,
+            score: of("score"),
+            total: of("total"),
+            tests: results
+                .as_ref()
+                .and_then(|r| r["tests"].as_array().cloned())
+                .unwrap_or_default(),
         }
     }
 

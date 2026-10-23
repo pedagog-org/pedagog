@@ -319,7 +319,7 @@ textarea.input { height: auto; min-height: 88px; padding: 10px 12px; line-height
 .isteps .sg { font-weight: 700; font-size: 12px; text-align: center; }
 .isteps .sg.pass { color: var(--pass); } .isteps .sg.fail { color: var(--fail); } .isteps .sg.award { color: var(--accent-text); }
 .isteps .sp { font-variant-numeric: tabular-nums; font-family: var(--font-mono); font-size: 12px; }
-.isteps .msg { display: block; margin-top: 2px; color: var(--text); font-family: var(--font-mono); font-size: 12px; }
+.isteps .msg { display: block; margin-top: 2px; color: var(--text); font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .hidden-note { display: flex; gap: 10px; align-items: center; padding: 11px 16px; background: var(--surface-2); color: var(--text-2); font-size: 13.5px; border-top: 1px solid var(--border); }
 @media (max-width: 640px) {
   .tests-head { display: none; }

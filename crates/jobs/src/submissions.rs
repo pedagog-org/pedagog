@@ -175,7 +175,7 @@ pub fn normalize(
 }
 
 /// The single top-level folder every file sits in, if there is one.
-fn wrapping_folder(tree: &BTreeMap<String, TreeFile>) -> Option<String> {
+pub(crate) fn wrapping_folder(tree: &BTreeMap<String, TreeFile>) -> Option<String> {
     let mut folder: Option<&str> = None;
     for path in tree.keys() {
         let (first, _) = path.split_once('/')?;
@@ -188,7 +188,10 @@ fn wrapping_folder(tree: &BTreeMap<String, TreeFile>) -> Option<String> {
     folder.map(str::to_owned)
 }
 
-fn untar(bytes: &[u8], limits: &SubmissionLimits) -> Result<BTreeMap<String, TreeFile>, Refused> {
+pub(crate) fn untar(
+    bytes: &[u8],
+    limits: &SubmissionLimits,
+) -> Result<BTreeMap<String, TreeFile>, Refused> {
     let walk_limits = Limits {
         max_compressed_bytes: usize::MAX,
         max_unpacked_bytes: limits.max_bytes,
@@ -215,7 +218,10 @@ fn untar(bytes: &[u8], limits: &SubmissionLimits) -> Result<BTreeMap<String, Tre
     Ok(tree)
 }
 
-fn unzip(bytes: &[u8], limits: &SubmissionLimits) -> Result<BTreeMap<String, TreeFile>, Refused> {
+pub(crate) fn unzip(
+    bytes: &[u8],
+    limits: &SubmissionLimits,
+) -> Result<BTreeMap<String, TreeFile>, Refused> {
     let bad = |m: String| refused(StatusCode::BAD_REQUEST, m);
     let too_large = |m: String| refused(StatusCode::PAYLOAD_TOO_LARGE, m);
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes))
@@ -544,7 +550,7 @@ async fn current_settings(
     Ok((build_id, settings))
 }
 
-async fn read_parts(mut multipart: Multipart) -> Result<Vec<Part>, Refused> {
+pub(crate) async fn read_parts(mut multipart: Multipart) -> Result<Vec<Part>, Refused> {
     let bad = |m: String| refused(StatusCode::BAD_REQUEST, m);
     let mut parts = Vec::new();
     while let Some(field) = multipart

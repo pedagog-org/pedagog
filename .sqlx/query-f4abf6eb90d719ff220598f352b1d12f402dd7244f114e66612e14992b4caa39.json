@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE assignment_builds SET build_log_lines = NULL, validation_log_lines = NULL\n          WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f4abf6eb90d719ff220598f352b1d12f402dd7244f114e66612e14992b4caa39"
+}

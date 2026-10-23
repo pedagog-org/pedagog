@@ -400,6 +400,18 @@ pub async fn courses_for(pool: &PgPool, user: i64) -> sqlx::Result<Vec<(Course, 
 }
 
 /// A user's active role in a course.
+/// The course's active students (not dropped).
+pub async fn active_students(pool: &PgPool, course: &str) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar!(
+        "SELECT user_id FROM memberships
+          WHERE course_id = $1 AND role = 'student' AND dropped_at IS NULL
+          ORDER BY user_id",
+        course
+    )
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn role_in(pool: &PgPool, course: &str, user: i64) -> sqlx::Result<Option<CourseRole>> {
     sqlx::query_scalar!(
         "SELECT role FROM memberships

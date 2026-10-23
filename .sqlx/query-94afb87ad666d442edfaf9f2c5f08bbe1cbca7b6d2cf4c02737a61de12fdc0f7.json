@@ -1,0 +1,281 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, assignment_id,\n                      (SELECT a.course_id FROM assignments a WHERE a.id = assignment_id) AS \"course_id!\",\n                      (SELECT a.slug FROM assignments a WHERE a.id = assignment_id) AS \"slug!\",\n                      upload_id, image_hash, image_ref, build_status,\n                      validation_status, results::text AS \"results?\", validation_problems,\n                      error, finished_at IS NOT NULL AS \"finished!\", platform, isolation,\n                      egress::text AS \"egress?\", submission::text AS \"submission?\",\n                      policy::text AS \"policy?\", uploaded_by,\n                      (SELECT u.email FROM users u WHERE u.id = uploaded_by) AS uploaded_by_email,\n                      rebuild_of,\n                      to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS \"started_at!\",\n                      (EXTRACT(EPOCH FROM built_at - started_at) * 1000)::bigint AS build_ms,\n                      (EXTRACT(EPOCH FROM finished_at - validation_started_at) * 1000)::bigint AS validation_ms,\n                      image_deleted_at IS NOT NULL AS \"image_deleted!\",\n                      build_log_lines, validation_log_lines\n                 FROM assignment_builds WHERE assignment_id = $1 ORDER BY id DESC LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "assignment_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "assignment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "course_id!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "slug!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "upload_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "upload_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "image_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "image_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "image_ref",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "image_ref"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "build_status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "build_status"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "validation_status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "validation_status"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "results?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "validation_problems",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "validation_problems"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "error"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "finished!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 13,
+        "name": "platform",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "platform"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "isolation",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "isolation"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "egress?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 16,
+        "name": "submission?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 17,
+        "name": "policy?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 18,
+        "name": "uploaded_by",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "uploaded_by"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "uploaded_by_email",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 20,
+        "name": "rebuild_of",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "rebuild_of"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "started_at!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 22,
+        "name": "build_ms",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 23,
+        "name": "validation_ms",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 24,
+        "name": "image_deleted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 25,
+        "name": "build_log_lines",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "build_log_lines"
+          }
+        }
+      },
+      {
+        "ordinal": 26,
+        "name": "validation_log_lines",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "assignment_builds",
+            "name": "validation_log_lines"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      true,
+      null,
+      true,
+      true,
+      null,
+      null,
+      null,
+      true,
+      null,
+      true,
+      null,
+      null,
+      null,
+      null,
+      true,
+      true
+    ]
+  },
+  "hash": "94afb87ad666d442edfaf9f2c5f08bbe1cbca7b6d2cf4c02737a61de12fdc0f7"
+}

@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT b.runs::bigint AS \"total!\",\n                  (SELECT count(*) FROM grading_runs g\n                    WHERE g.regrade_batch_id = b.id AND g.status IN ('graded', 'error')) AS \"done!\"\n             FROM regrade_batches b WHERE b.assignment_id = $1\n            ORDER BY b.id DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "done!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "1b1364f62cab4c5fa0f0533ccfc7f805f46b2cf1df5e5cdaf072b154e4f3bb7f"
+}

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO assignment_builds\n           (assignment_id, upload_id, image_hash, image_ref, build_status,\n            platform, isolation, egress, submission, policy)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::jsonb, $9::text::jsonb, $10::text::jsonb)\n         RETURNING id",
+  "query": "INSERT INTO assignment_builds\n           (assignment_id, upload_id, image_hash, image_ref, build_status,\n            platform, isolation, egress, submission, policy, uploaded_by, rebuild_of)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::jsonb, $9::text::jsonb, $10::text::jsonb,\n                 $11, $12)\n         RETURNING id",
   "describe": {
     "columns": [
       {
@@ -26,12 +26,14 @@
         "Text",
         "Text",
         "Text",
-        "Text"
+        "Text",
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "14222aea32a6c1fd1a2b477b3963eb6caf33cdff268d0adbf0e219dd6eba8a1d"
+  "hash": "c8940ec22f85cf8dba4655cd90595bea703a211c9e0d1067d71ce1e656ce7004"
 }

@@ -32,7 +32,14 @@ macro_rules! select_builds {
                       validation_status, results::text AS "results?", validation_problems,
                       error, finished_at IS NOT NULL AS "finished!", platform, isolation,
                       egress::text AS "egress?", submission::text AS "submission?",
-                      policy::text AS "policy?"
+                      policy::text AS "policy?", uploaded_by,
+                      (SELECT u.email FROM users u WHERE u.id = uploaded_by) AS uploaded_by_email,
+                      rebuild_of,
+                      to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "started_at!",
+                      (EXTRACT(EPOCH FROM built_at - started_at) * 1000)::bigint AS build_ms,
+                      (EXTRACT(EPOCH FROM finished_at - validation_started_at) * 1000)::bigint AS validation_ms,
+                      image_deleted_at IS NOT NULL AS "image_deleted!",
+                      build_log_lines, validation_log_lines
                  FROM assignment_builds "# + $tail
             $(, $arg)*
         )
@@ -296,6 +303,10 @@ pub struct NewBuild<'a> {
     pub settings: &'a BuildSettings,
     /// The file's `assignment:` policy as JSON text.
     pub policy: &'a str,
+    /// Who started it (an upload, or making an old build current).
+    pub uploaded_by: Option<i64>,
+    /// The build whose upload this builds again (its image was cleaned up).
+    pub rebuild_of: Option<i64>,
 }
 
 /// Open a build attempt (`build_status = running`, validation pending), with
@@ -307,8 +318,9 @@ pub async fn start_build<'e>(db: impl sqlx::PgExecutor<'e>, b: &NewBuild<'_>) ->
     let row = sqlx::query!(
         "INSERT INTO assignment_builds
            (assignment_id, upload_id, image_hash, image_ref, build_status,
-            platform, isolation, egress, submission, policy)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::jsonb, $9::text::jsonb, $10::text::jsonb)
+            platform, isolation, egress, submission, policy, uploaded_by, rebuild_of)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::jsonb, $9::text::jsonb, $10::text::jsonb,
+                 $11, $12)
          RETURNING id",
         b.assignment_id,
         b.upload_id,
@@ -319,7 +331,9 @@ pub async fn start_build<'e>(db: impl sqlx::PgExecutor<'e>, b: &NewBuild<'_>) ->
         b.settings.isolation.to_string(),
         b.settings.egress,
         b.settings.submission,
-        b.policy
+        b.policy,
+        b.uploaded_by,
+        b.rebuild_of
     )
     .fetch_one(db)
     .await?;
@@ -372,7 +386,7 @@ pub async fn finish_build(
     };
     let done = sqlx::query!(
         "UPDATE assignment_builds
-            SET build_status = $2, error = $3,
+            SET build_status = $2, error = $3, built_at = now(),
                 finished_at = CASE WHEN $4 THEN NULL ELSE now() END
           WHERE id = $1 AND finished_at IS NULL AND build_status = 'running'",
         build,
@@ -410,7 +424,7 @@ pub async fn set_build_settings(
 /// transaction). Returns false if the attempt is no longer in flight.
 pub async fn start_validation<'e>(db: impl sqlx::PgExecutor<'e>, build: i64) -> sqlx::Result<bool> {
     let done = sqlx::query!(
-        "UPDATE assignment_builds SET validation_status = $2
+        "UPDATE assignment_builds SET validation_status = $2, validation_started_at = now()
           WHERE id = $1 AND finished_at IS NULL AND build_status = 'succeeded'",
         build,
         ValidationStatus::Running.to_string()
@@ -461,7 +475,7 @@ pub async fn finish_validation(
     if status.is_usable() {
         sqlx::query!(
             "UPDATE assignments
-                SET current_build_id = $2, updated_at = now(),
+                SET current_build_id = $2, current_since = now(), updated_at = now(),
                     date_overrides = CASE WHEN $3 THEN '{}'::jsonb ELSE date_overrides END
               WHERE id = $1",
             row.assignment_id,
@@ -575,6 +589,175 @@ pub async fn supersede(conn: &mut sqlx::PgConnection, build: i64) -> sqlx::Resul
     Ok(done.rows_affected() == 1)
 }
 
+/// What making a build current did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MadeCurrent {
+    /// It's current now; `cancelled` is the attempt that was in flight.
+    Current {
+        cancelled: Option<i64>,
+    },
+    AlreadyCurrent,
+    /// Its image was cleaned up: its upload has to be built again (which
+    /// supersedes whatever is in flight).
+    NeedsRebuild {
+        upload_id: i64,
+    },
+    /// It didn't build, or didn't pass (or skip) validation.
+    NotUsable,
+}
+
+/// Make one of an assignment's earlier builds current: cancel any attempt in
+/// flight, then switch, and queue a regrade if asked, atomically. Dates and
+/// visibility don't change. `None` if the assignment has no such build.
+pub async fn make_current(
+    conn: &mut sqlx::PgConnection,
+    assignment_id: i64,
+    build: i64,
+    regrade: Option<Notify>,
+) -> sqlx::Result<Option<MadeCurrent>> {
+    // A savepoint when the caller is already in a transaction.
+    let mut tx = sqlx::Connection::begin(conn).await?;
+    let current = sqlx::query_scalar!(
+        "SELECT current_build_id FROM assignments WHERE id = $1 FOR UPDATE",
+        assignment_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(current) = current else {
+        return Ok(None);
+    };
+    let Some(b) = select_builds!("WHERE assignment_id = $1 AND id = $2", assignment_id, build)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(AssignmentBuild::try_from)
+        .transpose()?
+    else {
+        return Ok(None);
+    };
+    if !(b.finished
+        && b.build_status == AssignmentBuildStatus::Succeeded
+        && b.validation_status.is_usable())
+    {
+        return Ok(Some(MadeCurrent::NotUsable));
+    }
+    if current == Some(build) {
+        return Ok(Some(MadeCurrent::AlreadyCurrent));
+    }
+    if b.image_deleted {
+        return Ok(Some(MadeCurrent::NeedsRebuild {
+            upload_id: b.upload_id,
+        }));
+    }
+    let cancelled = match in_flight_for(&mut *tx, assignment_id).await? {
+        Some(flying) => supersede(&mut tx, flying.id).await?.then_some(flying.id),
+        None => None,
+    };
+    sqlx::query!(
+        "UPDATE assignments SET current_build_id = $2, current_since = now(), updated_at = now()
+          WHERE id = $1",
+        assignment_id,
+        build
+    )
+    .execute(&mut *tx)
+    .await?;
+    if let Some(notify) = regrade {
+        queue_regrades(&mut tx, assignment_id, build, &notify.to_string()).await?;
+    }
+    tx.commit().await?;
+    Ok(Some(MadeCurrent::Current { cancelled }))
+}
+
+/// An assignment's attempts, latest first, older than `before` when given.
+pub async fn builds_before(
+    pool: &PgPool,
+    assignment_id: i64,
+    before: Option<i64>,
+    limit: i64,
+) -> sqlx::Result<Vec<AssignmentBuild>> {
+    select_builds!(
+        "WHERE assignment_id = $1 AND ($2::bigint IS NULL OR id < $2) ORDER BY id DESC LIMIT $3",
+        assignment_id,
+        before,
+        limit
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(AssignmentBuild::try_from)
+    .collect()
+}
+
+/// A build attempt's two phases, each with its own log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogPhase {
+    Build,
+    Validation,
+}
+
+impl LogPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Build => "build",
+            Self::Validation => "validation",
+        }
+    }
+}
+
+/// Record that a phase's log is stored, and how many lines it has.
+pub async fn log_stored(
+    pool: &PgPool,
+    build: i64,
+    phase: LogPhase,
+    lines: i32,
+) -> sqlx::Result<()> {
+    match phase {
+        LogPhase::Build => {
+            sqlx::query!(
+                "UPDATE assignment_builds SET build_log_lines = $2 WHERE id = $1",
+                build,
+                lines
+            )
+            .execute(pool)
+            .await?
+        }
+        LogPhase::Validation => {
+            sqlx::query!(
+                "UPDATE assignment_builds SET validation_log_lines = $2 WHERE id = $1",
+                build,
+                lines
+            )
+            .execute(pool)
+            .await?
+        }
+    };
+    Ok(())
+}
+
+/// Builds that finished more than `days` ago and still have a log kept.
+pub async fn expired_logs(pool: &PgPool, days: i32) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar!(
+        "SELECT id FROM assignment_builds
+          WHERE finished_at < now() - make_interval(days => $1)
+            AND (build_log_lines IS NOT NULL OR validation_log_lines IS NOT NULL)
+          ORDER BY id",
+        days
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Record that a build's logs were deleted.
+pub async fn logs_forgotten(pool: &PgPool, build: i64) -> sqlx::Result<()> {
+    sqlx::query!(
+        "UPDATE assignment_builds SET build_log_lines = NULL, validation_log_lines = NULL
+          WHERE id = $1",
+        build
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// The assignment's attempt in flight, if any.
 pub async fn in_flight_for<'e>(
     db: impl sqlx::PgExecutor<'e>,
@@ -651,6 +834,33 @@ pub async fn current_build_id(pool: &PgPool, assignment_id: i64) -> sqlx::Result
     Ok(row.and_then(|r| r.current_build_id))
 }
 
+/// When the current build became current (RFC 3339).
+pub async fn current_since(pool: &PgPool, assignment_id: i64) -> sqlx::Result<Option<String>> {
+    sqlx::query_scalar!(
+        r#"SELECT to_char(current_since AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+             FROM assignments WHERE id = $1"#,
+        assignment_id
+    )
+    .fetch_optional(pool)
+    .await
+    .map(Option::flatten)
+}
+
+/// The latest regrade's runs done and in all, while some are still to run.
+pub async fn regrading(pool: &PgPool, assignment_id: i64) -> sqlx::Result<Option<(i64, i64)>> {
+    let row = sqlx::query!(
+        r#"SELECT b.runs::bigint AS "total!",
+                  (SELECT count(*) FROM grading_runs g
+                    WHERE g.regrade_batch_id = b.id AND g.status IN ('graded', 'error')) AS "done!"
+             FROM regrade_batches b WHERE b.assignment_id = $1
+            ORDER BY b.id DESC LIMIT 1"#,
+        assignment_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.filter(|r| r.done < r.total).map(|r| (r.done, r.total)))
+}
+
 /// `assignment_builds` as stored; statuses are parsed into their enums.
 struct BuildRow {
     id: i64,
@@ -671,6 +881,15 @@ struct BuildRow {
     egress: Option<String>,
     submission: Option<String>,
     policy: Option<String>,
+    uploaded_by: Option<i64>,
+    uploaded_by_email: Option<String>,
+    rebuild_of: Option<i64>,
+    started_at: String,
+    build_ms: Option<i64>,
+    validation_ms: Option<i64>,
+    image_deleted: bool,
+    build_log_lines: Option<i32>,
+    validation_log_lines: Option<i32>,
 }
 
 impl TryFrom<BuildRow> for AssignmentBuild {
@@ -706,6 +925,15 @@ impl TryFrom<BuildRow> for AssignmentBuild {
                 _ => None,
             },
             policy: row.policy,
+            uploaded_by: row.uploaded_by,
+            uploaded_by_email: row.uploaded_by_email,
+            rebuild_of: row.rebuild_of,
+            started_at: row.started_at,
+            build_ms: row.build_ms,
+            validation_ms: row.validation_ms,
+            image_deleted: row.image_deleted,
+            build_log_lines: row.build_log_lines,
+            validation_log_lines: row.validation_log_lines,
         })
     }
 }
@@ -1160,6 +1388,187 @@ mod tests {
     /// JSONB normalizes spacing: compare without it.
     fn serde_json_like(text: &str) -> String {
         text.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    /// A build of `up` that passed validation (and so became current).
+    async fn passed(pool: &PgPool, up: &AssignmentUpload, image: &str) -> sqlx::Result<i64> {
+        let build = start_build(
+            pool,
+            &crate::db::test_build(up, image, &format!("reg/{image}")),
+        )
+        .await?;
+        finish_build(pool, build, true, None).await?;
+        start_validation(pool, build).await?;
+        finish_validation(pool, build, ValidationStatus::Passed, Some("{}"), &[]).await?;
+        Ok(build)
+    }
+
+    #[sqlx::test]
+    async fn making_an_earlier_build_current_cancels_the_one_in_flight(
+        pool: PgPool,
+    ) -> sqlx::Result<()> {
+        use crate::db::submissions::tests::{current_build, submit};
+
+        let first = current_build(&pool, "ll", "img-a").await?;
+        submit(&pool, "s1", first).await?;
+        let a = assignment(&pool, "c", "ll").await?.unwrap();
+        let up = uploaded(&pool, "ll", "tree-b").await?;
+        let second = passed(&pool, &up, "img-b").await?;
+        let failed = start_build(&pool, &crate::db::test_build(&up, "img-c", "reg/img-c")).await?;
+        finish_build(&pool, failed, false, Some("exit status 1")).await?;
+        let flying = start_build(&pool, &crate::db::test_build(&up, "img-d", "reg/img-d")).await?;
+        assert_eq!(current_build_id(&pool, a.id).await?, Some(second));
+
+        assert_eq!(
+            make_current(
+                &mut *pool.acquire().await?,
+                a.id,
+                first,
+                Some(Notify::Changed)
+            )
+            .await?,
+            Some(MadeCurrent::Current {
+                cancelled: Some(flying)
+            })
+        );
+        assert_eq!(current_build_id(&pool, a.id).await?, Some(first));
+        let cancelled = get_build(&pool, a.id, flying).await?.unwrap();
+        assert_eq!(
+            (cancelled.build_status, cancelled.finished),
+            (AssignmentBuildStatus::Superseded, true)
+        );
+        let batch = sqlx::query!(
+            "SELECT notify, runs FROM regrade_batches WHERE build_id = $1",
+            first
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!((batch.notify.as_str(), batch.runs), ("changed", 1));
+
+        assert_eq!(
+            make_current(&mut *pool.acquire().await?, a.id, first, None).await?,
+            Some(MadeCurrent::AlreadyCurrent)
+        );
+        assert_eq!(
+            make_current(&mut *pool.acquire().await?, a.id, failed, None).await?,
+            Some(MadeCurrent::NotUsable)
+        );
+        assert_eq!(
+            make_current(&mut *pool.acquire().await?, a.id, second, None).await?,
+            Some(MadeCurrent::Current { cancelled: None }),
+            "nothing in flight now; no regrade asked"
+        );
+        assert_eq!(
+            make_current(&mut *pool.acquire().await?, a.id, 999_999, None).await?,
+            None
+        );
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn a_build_whose_image_was_cleaned_up_needs_a_rebuild(pool: PgPool) -> sqlx::Result<()> {
+        let up = uploaded(&pool, "ll", "tree-a").await?;
+        let old = passed(&pool, &up, "img-a").await?;
+        let newer = passed(&pool, &up, "img-b").await?;
+        let flying = start_build(&pool, &crate::db::test_build(&up, "img-c", "reg/img-c")).await?;
+        images_deleted(&pool, &["img-a".to_owned()]).await?;
+
+        assert_eq!(
+            make_current(&mut *pool.acquire().await?, up.assignment_id, old, None).await?,
+            Some(MadeCurrent::NeedsRebuild { upload_id: up.id })
+        );
+        assert_eq!(
+            current_build_id(&pool, up.assignment_id).await?,
+            Some(newer),
+            "nothing changes until the rebuild passes"
+        );
+        assert!(
+            !get_build(&pool, up.assignment_id, flying)
+                .await?
+                .unwrap()
+                .finished
+        );
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn builds_say_who_when_and_how_long(pool: PgPool) -> sqlx::Result<()> {
+        let up = uploaded(&pool, "ll", "tree-a").await?;
+        let prof =
+            sqlx::query_scalar!("INSERT INTO users (email) VALUES ('prof@ufl.edu') RETURNING id")
+                .fetch_one(&pool)
+                .await?;
+        let first = passed(&pool, &up, "img-a").await?;
+        let rebuilt = start_build(
+            &pool,
+            &NewBuild {
+                uploaded_by: Some(prof),
+                rebuild_of: Some(first),
+                ..crate::db::test_build(&up, "img-b", "reg/img-b")
+            },
+        )
+        .await?;
+
+        let done = get_build(&pool, up.assignment_id, first).await?.unwrap();
+        assert!(done.build_ms.is_some_and(|ms| ms >= 0), "{done:?}");
+        assert!(done.validation_ms.is_some_and(|ms| ms >= 0), "{done:?}");
+        assert_eq!(done.started_at.len(), "2026-10-22T12:00:00Z".len());
+        assert_eq!((done.uploaded_by, done.rebuild_of), (None, None));
+
+        let again = get_build(&pool, up.assignment_id, rebuilt).await?.unwrap();
+        assert_eq!(
+            (
+                again.uploaded_by,
+                again.uploaded_by_email.as_deref(),
+                again.rebuild_of
+            ),
+            (Some(prof), Some("prof@ufl.edu"), Some(first))
+        );
+        assert_eq!((again.build_ms, again.validation_ms), (None, None));
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn builds_page_backwards(pool: PgPool) -> sqlx::Result<()> {
+        let up = uploaded(&pool, "ll", "tree-a").await?;
+        let mut ids = vec![];
+        for image in ["a", "b", "c"] {
+            ids.push(passed(&pool, &up, image).await?);
+        }
+        let page = |before, limit| builds_before(&pool, up.assignment_id, before, limit);
+        let ids_of = |builds: Vec<AssignmentBuild>| builds.iter().map(|b| b.id).collect::<Vec<_>>();
+        assert_eq!(ids_of(page(None, 2).await?), [ids[2], ids[1]]);
+        assert_eq!(ids_of(page(Some(ids[1]), 2).await?), [ids[0]]);
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn logs_are_counted_until_they_expire(pool: PgPool) -> sqlx::Result<()> {
+        let up = uploaded(&pool, "ll", "tree-a").await?;
+        let old = passed(&pool, &up, "img-a").await?;
+        let recent = passed(&pool, &up, "img-b").await?;
+        for build in [old, recent] {
+            log_stored(&pool, build, LogPhase::Build, 4812).await?;
+            log_stored(&pool, build, LogPhase::Validation, 30).await?;
+        }
+        sqlx::query!(
+            "UPDATE assignment_builds SET finished_at = now() - interval '181 days' WHERE id = $1",
+            old
+        )
+        .execute(&pool)
+        .await?;
+        let b = get_build(&pool, up.assignment_id, old).await?.unwrap();
+        assert_eq!(
+            (b.build_log_lines, b.validation_log_lines),
+            (Some(4812), Some(30))
+        );
+
+        assert_eq!(expired_logs(&pool, 180).await?, [old]);
+        logs_forgotten(&pool, old).await?;
+        assert!(expired_logs(&pool, 180).await?.is_empty());
+        let b = get_build(&pool, up.assignment_id, old).await?.unwrap();
+        assert_eq!((b.build_log_lines, b.validation_log_lines), (None, None));
+        Ok(())
     }
 
     #[sqlx::test]

@@ -176,6 +176,11 @@ pub fn ingredient_key(sha256: &str) -> String {
     format!("{INGREDIENTS_PREFIX}/{sha256}")
 }
 
+/// Object key for one phase's log of a build attempt (`build` or `validation`), gzipped.
+pub fn build_log_key(build: i64, phase: &str) -> String {
+    format!("logs/builds/{build}/{phase}.log.gz")
+}
+
 /// Object key a grading run uploads its `results.yaml` to.
 pub fn grading_results_key(run_id: i64) -> String {
     format!("results/grading/{run_id}/results.yaml")
@@ -197,6 +202,7 @@ mod tests {
             "assignments/cop3502-f26/pointers/ab12.tgz"
         );
         assert_eq!(results_key(42), "results/42/results.yaml");
+        assert_eq!(build_log_key(7, "build"), "logs/builds/7/build.log.gz");
     }
 
     #[test]

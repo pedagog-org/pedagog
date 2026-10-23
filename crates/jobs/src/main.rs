@@ -7,6 +7,7 @@
 mod admission;
 mod archive;
 mod assignments;
+mod build_logs;
 mod config;
 mod disk;
 mod dispatch;

@@ -84,6 +84,8 @@ pub(crate) fn test_build<'a>(
         image_ref,
         settings: &SETTINGS,
         policy: "{}",
+        uploaded_by: None,
+        rebuild_of: None,
     }
 }
 

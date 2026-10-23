@@ -545,6 +545,8 @@ mod tests {
                 image_ref: "r",
                 settings: &settings,
                 policy: r#"{"dates": {"open": "always"}}"#,
+                uploaded_by: None,
+                rebuild_of: None,
             },
         )
         .await?;

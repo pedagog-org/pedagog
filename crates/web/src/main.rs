@@ -11,6 +11,7 @@ mod pages;
 mod report;
 mod session;
 mod shell;
+mod staff;
 mod theme;
 mod time;
 mod upload;
@@ -41,7 +42,10 @@ fn App() -> impl IntoView {
                 <Route path=path!("/login") view=pages::login::Login/>
                 <Route path=path!("/") view=pages::home::Home/>
                 <Route path=path!("/courses/:course") view=pages::course::Course/>
+                <Route path=path!("/courses/:course/upload") view=staff::upload::Upload/>
                 <Route path=path!("/courses/:course/assignments/:assignment") view=pages::assignment::Assignment/>
+                <Route path=path!("/courses/:course/assignments/:assignment/upload") view=staff::upload::Upload/>
+                <Route path=path!("/courses/:course/assignments/:assignment/builds/:build") view=staff::build::Build/>
             </Routes>
         </Router>
     }

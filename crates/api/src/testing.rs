@@ -25,20 +25,55 @@ async fn stub_jobs() -> (String, JobsSeen) {
             axum::routing::post(
                 move |Path(course): Path<String>,
                       RawQuery(q): RawQuery,
+                      headers: axum::http::HeaderMap,
                       body: axum::body::Bytes| {
                     let recorded = recorded.clone();
                     async move {
                         let path = format!("/internal/courses/{course}/assignments");
                         let full = q.map(|q| format!("{path}?{q}")).unwrap_or(path);
-                        recorded.lock().unwrap().push((full, body.len()));
+                        let content_type = headers
+                            .get("content-type")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("");
+                        recorded
+                            .lock()
+                            .unwrap()
+                            .push((format!("{full} {content_type}"), body.len()));
                         (
                             axum::http::StatusCode::CREATED,
                             axum::Json(serde_json::json!({
-                                "course": course, "assignment": "linked-list",
+                                "course": course, "assignment": "linked-list", "upload_id": 1,
+                                "tree_hash": "t", "size_bytes": 3, "policy": {},
                                 "build": {"status": "dispatched", "build_id": 1}, "warnings": []
                             })),
                         )
                     }
+                },
+            ),
+        )
+        .route(
+            "/internal/courses/{course}/assignments/{slug}/builds/{build}/current",
+            axum::routing::post({
+                let recorded = seen.clone();
+                move |Path((course, slug, build)): Path<(String, String, i64)>,
+                      RawQuery(q): RawQuery| {
+                    let recorded = recorded.clone();
+                    async move {
+                        let path = format!(
+                            "/internal/courses/{course}/assignments/{slug}/builds/{build}/current"
+                        );
+                        let full = q.map(|q| format!("{path}?{q}")).unwrap_or(path);
+                        recorded.lock().unwrap().push((full, 0));
+                        axum::Json(pedagog_core::api::MadeCurrent::Current { cancelled: None })
+                    }
+                }
+            }),
+        )
+        .route(
+            "/internal/builds/{build}/log/{phase}",
+            axum::routing::get(
+                |Path((build, phase)): Path<(i64, String)>, RawQuery(q): RawQuery| async move {
+                    format!("{phase} log of {build} ({})\n", q.unwrap_or_default())
                 },
             ),
         )
@@ -284,6 +319,8 @@ pub async fn course(pool: &PgPool) -> sqlx::Result<(i64, i64)> {
             image_ref: "r",
             settings: &settings,
             policy: r#"{"dates": {"open": "always"}}"#,
+            uploaded_by: None,
+            rebuild_of: None,
         },
     )
     .await?;

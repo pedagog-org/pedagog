@@ -514,6 +514,8 @@ mod tests {
                 image_ref: "r",
                 settings: &settings,
                 policy,
+                uploaded_by: None,
+                rebuild_of: None,
             },
         )
         .await?;

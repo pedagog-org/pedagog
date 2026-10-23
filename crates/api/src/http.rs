@@ -71,8 +71,20 @@ fn api(state: AppState) -> Router {
             get(assignments::show),
         )
         .route(
+            "/courses/{course}/assignments/{slug}/builds",
+            get(assignments::builds),
+        )
+        .route(
             "/courses/{course}/assignments/{slug}/builds/{build}",
             get(assignments::build),
+        )
+        .route(
+            "/courses/{course}/assignments/{slug}/builds/{build}/log",
+            get(assignments::log),
+        )
+        .route(
+            "/courses/{course}/assignments/{slug}/builds/{build}/current",
+            post(assignments::make_current),
         )
         .route(
             "/courses/{course}/assignments/{slug}/submissions",

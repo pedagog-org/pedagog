@@ -209,9 +209,72 @@ pub fn student_view(
     view
 }
 
+/// A test with every part shown, its error as the framework reported it
+/// (staff, and the reference solution's results).
+pub fn full_test(t: &TestResult) -> ShownTest {
+    ShownTest {
+        name: t.name.clone(),
+        number: t.number.clone(),
+        status: t.status,
+        score: t.score,
+        max: t.max,
+        extra_credit: t.extra_credit_worth(),
+        feedback: Some(feedback_of(t)),
+        stdout: (!t.stdout.is_empty()).then(|| t.stdout.clone()),
+        error: (!t.error.is_empty()).then(|| t.error.clone()),
+        error_sanitized: false,
+    }
+}
+
+/// A validation's tests: each with what the reference solution was declared
+/// to do and whether it did.
+pub fn reference_tests(results: &Results) -> Vec<crate::api::ReferenceTest> {
+    let mismatched: std::collections::HashSet<String> = results
+        .solution_mismatches()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    results
+        .tests
+        .iter()
+        .map(|t| crate::api::ReferenceTest {
+            test: full_test(t),
+            expected: t.solution_expect.unwrap_or(crate::results::Expect::Pass),
+            as_expected: !mismatched.contains(t.key()),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reference_tests_say_which_went_as_declared() {
+        let r: Results = serde_json::from_value(serde_json::json!({
+            "summary": {"score": 2.0, "total": 4.0},
+            "tests": [
+                {"node": "a", "name": "append", "status": "pass", "score": 2.0, "max": 2.0, "visibility": {"score": "visible", "feedback": "visible", "stdout": "visible", "error": "visible"}},
+                {"node": "b", "name": "pop", "status": "fail", "score": 0.0, "max": 2.0,
+                 "error": "Traceback ...\nValueError: empty", "visibility": {"score": "visible", "feedback": "visible", "stdout": "visible", "error": "visible"}},
+                {"node": "c", "name": "reverse", "status": "fail", "score": 0.0, "max": 0.0,
+                 "solution-expect": "fail", "visibility": {"score": "visible", "feedback": "visible", "stdout": "visible", "error": "visible"}}
+            ]
+        }))
+        .unwrap();
+        let tests = reference_tests(&r);
+        let got: Vec<(&str, bool)> = tests
+            .iter()
+            .map(|t| (t.test.name.as_str(), t.as_expected))
+            .collect();
+        assert_eq!(got, [("append", true), ("pop", false), ("reverse", true)]);
+        assert_eq!(tests[2].expected, crate::results::Expect::Fail);
+        assert_eq!(
+            tests[1].test.error.as_deref(),
+            Some("Traceback ...\nValueError: empty"),
+            "the raw error, for staff"
+        );
+    }
 
     fn results() -> Results {
         serde_json::from_value(serde_json::json!({

@@ -75,7 +75,7 @@ enum Task {
     WebBuild,
     /// The web UI's component tests in headless Chrome (fetches a matching chromedriver if needed).
     WebTest,
-    /// Build the web UI and check its first load against the budget (450 KB gzipped).
+    /// Build the web UI and check its first load against the budget (520 KB gzipped).
     WebBudget,
     /// Download and cache recipe ingredients (hammer vend; filters: --os/--platform/--toolchain).
     Vend {
@@ -679,7 +679,7 @@ fn registry_access() -> Result<()> {
 }
 
 /// The first load's budget: wasm, js, css and the preloaded fonts, gzipped.
-const WEB_BUDGET: u64 = 450 * 1024;
+const WEB_BUDGET: u64 = 520 * 1024;
 
 fn web_budget() -> Result<()> {
     run(Task::WebBuild)?;

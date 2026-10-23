@@ -7,27 +7,29 @@
 
 use std::time::Duration;
 
+use pedagog_core::api::MadeCurrent;
 use pedagog_core::recipe::render::Needed;
 use pedagog_core::results::Results;
-use pedagog_core::text::tail;
 use pedagog_k8s::build::{BuildRequest, Context, IfBuilt, JobKey, JobState, Waited};
 use pedagog_k8s::validate::ValidationRequest;
+use pedagog_store::db::assignments::LogPhase;
 use pedagog_store::db::queue;
 use pedagog_store::db::{self as store_db, assignments as db};
 use pedagog_store::objects::results_key;
-use pedagog_store::{AssignmentBuild, AssignmentBuildStatus, AssignmentUpload, ValidationStatus};
+use pedagog_store::{
+    AssignmentBuild, AssignmentBuildStatus, AssignmentUpload, Notify, ValidationStatus,
+};
 use serde::Serialize;
 use sqlx::PgConnection;
 
 use crate::admission::Launch;
+use crate::build_logs;
 use crate::intake;
 use crate::settings::{RunSettings, settings_of};
 use crate::state::AppState;
 
 /// Extra validity for presigned URLs beyond their Job's deadline.
 const URL_MARGIN: Duration = Duration::from_secs(600);
-/// How much of a failed validation pod's log is kept with its problems.
-const LOG_TAIL: usize = 4000;
 
 /// The assignment part of its Jobs' names: course and slug.
 pub fn job_id(course: &str, slug: &str) -> String {
@@ -50,6 +52,10 @@ pub struct Plan {
     pub settings: RunSettings,
     /// The file's `assignment:` policy as JSON.
     pub policy: String,
+    /// Who started this attempt.
+    pub uploaded_by: Option<i64>,
+    /// The build whose upload this builds again.
+    pub rebuild_of: Option<i64>,
 }
 
 impl Plan {
@@ -106,6 +112,8 @@ pub async fn dispatch(state: &AppState, plan: Plan) -> anyhow::Result<Decision> 
             image_ref: &image_ref,
             settings: &plan.settings.to_stored()?,
             policy: &plan.policy,
+            uploaded_by: plan.uploaded_by,
+            rebuild_of: plan.rebuild_of,
         },
     )
     .await?;
@@ -130,6 +138,12 @@ async fn supersede(
     running: &AssignmentBuild,
 ) -> anyhow::Result<()> {
     db::supersede(conn, running.id).await?;
+    stop_jobs(state, running).await;
+    Ok(())
+}
+
+/// Stop a superseded attempt's build and validation Jobs.
+async fn stop_jobs(state: &AppState, running: &AssignmentBuild) {
     let id = job_id(&running.course_id, &running.slug);
     for key in [
         JobKey::assignment(&id, &running.image_hash),
@@ -140,7 +154,71 @@ async fn supersede(
         }
     }
     tracing::info!(course = %running.course_id, assignment = %running.slug, build = running.id, "superseded");
-    Ok(())
+}
+
+/// Why an earlier build can't be made current.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NotMade {
+    NoSuchBuild,
+    AlreadyCurrent,
+    NotUsable,
+}
+
+/// Make one of an assignment's earlier builds current, whatever is going on:
+/// cancel the attempt in flight, then switch to it, or, when its image was
+/// cleaned up, build its upload again (which becomes current once it
+/// validates).
+pub async fn make_current(
+    state: &AppState,
+    assignment_id: i64,
+    build: i64,
+    regrade: Option<Notify>,
+    by: Option<i64>,
+) -> anyhow::Result<Result<MadeCurrent, NotMade>> {
+    let mut tx = state.pool.begin().await?;
+    store_db::lock(&mut tx, &format!("dispatch:{assignment_id}")).await?;
+    let flying = db::in_flight_for(&mut *tx, assignment_id).await?;
+    let outcome = db::make_current(&mut tx, assignment_id, build, regrade).await?;
+    tx.commit().await?;
+    match outcome {
+        None => Ok(Err(NotMade::NoSuchBuild)),
+        Some(db::MadeCurrent::AlreadyCurrent) => Ok(Err(NotMade::AlreadyCurrent)),
+        Some(db::MadeCurrent::NotUsable) => Ok(Err(NotMade::NotUsable)),
+        Some(db::MadeCurrent::Current { cancelled }) => {
+            if let Some(running) = flying.filter(|f| Some(f.id) == cancelled) {
+                stop_jobs(state, &running).await;
+            }
+            tracing::info!(
+                assignment = assignment_id,
+                build,
+                ?cancelled,
+                "made current"
+            );
+            Ok(Ok(MadeCurrent::Current { cancelled }))
+        }
+        Some(db::MadeCurrent::NeedsRebuild { upload_id }) => {
+            let upload = db::get_upload(&state.pool, upload_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("build {build} has no upload {upload_id}"))?;
+            let mut plan = plan_for(state, &upload).await?;
+            plan.uploaded_by = by;
+            plan.rebuild_of = Some(build);
+            let Decision::Dispatched { build_id } = dispatch(state, plan).await?;
+            if let Some(notify) = regrade {
+                db::request_regrade(&state.pool, build_id, notify).await?;
+            }
+            tracing::info!(
+                assignment = assignment_id,
+                build,
+                rebuild = build_id,
+                "rebuilding to make current"
+            );
+            Ok(Ok(MadeCurrent::Rebuilding {
+                build: build_id,
+                cancelled: flying.map(|f| f.id),
+            }))
+        }
+    }
 }
 
 /// Where an attempt picks up.
@@ -214,10 +292,14 @@ async fn run(state: &AppState, build_id: i64, plan: &Plan, from: Resume) -> anyh
                     return Ok(()); // superseded meanwhile
                 }
                 tracing::info!(build = build_id, "image built");
+                let log = state.builder.logs(&build_key).await;
+                build_logs::keep(state, build_id, LogPhase::Build, &log).await;
             }
             Waited::Failed { logs } => {
-                if db::finish_build(&state.pool, build_id, false, Some(&logs)).await? {
-                    tracing::warn!(build = build_id, "image build failed");
+                let reason = build_logs::reason(&logs);
+                if db::finish_build(&state.pool, build_id, false, Some(&reason)).await? {
+                    tracing::warn!(build = build_id, %reason, "image build failed");
+                    build_logs::keep(state, build_id, LogPhase::Build, &logs).await;
                 }
                 return Ok(());
             }
@@ -254,19 +336,20 @@ pub async fn settle_validation(
     }
     let uploaded = state.objects.get(&results_key(build_id)).await.ok();
     let mut verdict = judge(uploaded.as_deref());
+    let log = state
+        .builder
+        .logs(&JobKey::validation(
+            &job_id(&build.course_id, &build.slug),
+            build_id,
+        ))
+        .await;
     if uploaded.is_none() && !succeeded {
-        let logs = state
-            .builder
-            .logs(&JobKey::validation(
-                &job_id(&build.course_id, &build.slug),
-                build_id,
-            ))
-            .await;
-        let tail = tail(&logs, LOG_TAIL);
-        verdict
-            .problems
-            .push(format!("validation pod log (tail):\n{tail}"));
+        verdict.problems.push(format!(
+            "the validation pod ended without results: {} (see the validation log)",
+            build_logs::reason(&log)
+        ));
     }
+    build_logs::keep(state, build_id, LogPhase::Validation, &log).await;
     if db::finish_validation(
         &state.pool,
         build_id,
@@ -511,6 +594,8 @@ mod tests {
                 submission: Default::default(),
             },
             policy: "{}".into(),
+            uploaded_by: None,
+            rebuild_of: None,
         }
     }
 

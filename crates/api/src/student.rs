@@ -6,7 +6,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use pedagog_core::api::{
-    DatesView, HomeCourse, Mine, MyCourses, StudentAssignment, SubmitRules, Window,
+    DatesView, HomeCourse, Mine, MyCourses, StaffItem, StudentAssignment, SubmitRules, Window,
 };
 use pedagog_core::recipe::policy::{Dates, Open};
 use pedagog_core::recipe::submission::SubmissionRules;
@@ -24,7 +24,7 @@ use crate::submissions::lateness;
 /// How far ahead Home looks for due dates and openings.
 const SOON: Duration = Duration::days(7);
 
-fn dates_view(d: &Dates) -> DatesView {
+pub(crate) fn dates_view(d: &Dates) -> DatesView {
     DatesView {
         open: d.open.map(String::from),
         due: d.due.map(String::from),
@@ -121,6 +121,80 @@ pub fn soon(dates: &Dates, a: &StudentAssignment, now: OffsetDateTime) -> Option
     }
 }
 
+/// What needs a course's staff: failed latest builds (instructors), students
+/// who couldn't be graded, builds and regrades under way, and what's due
+/// within a week with how many have submitted.
+async fn staff_items(
+    state: &AppState,
+    course: &str,
+    role: CourseRole,
+    now: OffsetDateTime,
+) -> Result<Vec<StaffItem>, ApiError> {
+    let mut urgent = Vec::new();
+    let mut due = Vec::new();
+    for a in builds_db::assignments_in(&state.pool, course)
+        .await
+        .map_err(|e| internal("reading the assignments", e))?
+    {
+        let (view, p) = crate::assignments::staff_assignment(state, &a).await?;
+        let (slug, name) = (a.slug.clone(), a.name.clone());
+        if let Some(b) = &view.latest_build {
+            if !b.finished {
+                urgent.push(StaffItem::Building {
+                    slug: slug.clone(),
+                    name: name.clone(),
+                    build: b.id,
+                    validating: b.build_status == "succeeded",
+                });
+            } else if role == CourseRole::Instructor
+                && !b.current
+                && (b.build_status == "failed"
+                    || matches!(b.validation_status.as_str(), "failed" | "invalid"))
+            {
+                urgent.push(StaffItem::BuildFailed {
+                    slug: slug.clone(),
+                    name: name.clone(),
+                    build: b.id,
+                    validation: b.build_status == "succeeded",
+                });
+            }
+        }
+        if view.counts.not_graded > 0 {
+            urgent.push(StaffItem::NotGraded {
+                slug: slug.clone(),
+                name: name.clone(),
+                count: view.counts.not_graded,
+            });
+        }
+        if let Some(r) = view.counts.regrading {
+            urgent.push(StaffItem::Regrading {
+                slug: slug.clone(),
+                name: name.clone(),
+                done: r.done,
+                total: r.total,
+            });
+        }
+        if let Some(at) = p.dates().due.map(|d| d.0)
+            && at > now
+            && at - now <= SOON
+        {
+            due.push((
+                at,
+                StaffItem::DueSoon {
+                    slug,
+                    name,
+                    due: view.dates.due.clone().unwrap_or_default(),
+                    submitted: view.counts.submitted,
+                    students: view.counts.students,
+                },
+            ));
+        }
+    }
+    due.sort_by_key(|(at, _)| *at);
+    urgent.extend(due.into_iter().map(|(_, item)| item));
+    Ok(urgent)
+}
+
 /// `GET /api/me/courses`: your courses, each with what needs you.
 pub async fn home(
     State(state): State<AppState>,
@@ -145,11 +219,17 @@ pub async fn home(
             }
         }
         items.sort_by_key(|(at, _)| *at);
+        let staff_items = if role == CourseRole::Student {
+            Vec::new()
+        } else {
+            staff_items(&state, &c.id, role, now).await?
+        };
         courses.push(HomeCourse {
             id: c.id,
             name: c.name,
             role: role.to_string(),
             items: items.into_iter().map(|(_, v)| v).collect(),
+            staff_items,
         });
     }
     Ok(Json(MyCourses { courses }).into_response())

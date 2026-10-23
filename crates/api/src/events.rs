@@ -55,6 +55,8 @@ pub enum Change {
         build_status: String,
         validation_status: String,
     },
+    /// The assignment's current build changed.
+    Current { assignment: i64, build: Option<i64> },
 }
 
 /// Fans changes out to every open stream in this replica.
@@ -108,7 +110,9 @@ struct Viewer {
 /// What `viewer` gets of `change`: an event name and its JSON, or nothing.
 fn shown(viewer: &Viewer, change: &Change) -> Option<(&'static str, serde_json::Value)> {
     match change {
-        Change::Run { assignment, .. } | Change::Build { assignment, .. }
+        Change::Run { assignment, .. }
+        | Change::Build { assignment, .. }
+        | Change::Current { assignment, .. }
             if *assignment != viewer.assignment =>
         {
             None
@@ -149,6 +153,9 @@ fn shown(viewer: &Viewer, change: &Change) -> Option<(&'static str, serde_json::
                 "validation_status": validation_status,
             }),
         )),
+        Change::Current { build, .. } if viewer.staff => {
+            Some(("current", serde_json::json!({ "current": build })))
+        }
         _ => None,
     }
 }
@@ -334,6 +341,15 @@ mod tests {
         assert_eq!(data["student"], "ana@ufl.edu");
         assert_eq!(data["score"], 9.0);
         assert_eq!(shown(&staff, &build).unwrap().0, "build");
+        let current = Change::Current {
+            assignment: 3,
+            build: Some(2),
+        };
+        assert_eq!(
+            shown(&staff, &current),
+            Some(("current", serde_json::json!({ "current": 2 })))
+        );
+        assert_eq!(shown(&student, &current), None);
         assert_eq!(shown(&staff, &run(4, 1, "graded")), None);
     }
 
@@ -351,6 +367,14 @@ mod tests {
             serde_json::from_str::<Change>(payload),
             Ok(Change::Build { .. })
         ));
+        let payload = r#"{"kind" : "current", "assignment" : 1, "build" : 2}"#;
+        assert_eq!(
+            serde_json::from_str::<Change>(payload).unwrap(),
+            Change::Current {
+                assignment: 1,
+                build: Some(2)
+            }
+        );
     }
 
     /// What arrives on `stream` within `wait`.
