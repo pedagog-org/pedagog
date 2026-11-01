@@ -860,6 +860,53 @@ mod browser {
     }
 
     #[wasm_bindgen_test]
+    fn nested_parts_open_where_they_failed_and_say_their_path_deep_down() {
+        let r: pedagog_core::results::Results = serde_json::from_str(include_str!(
+            "../../../core/testdata/pedagog-pytest-3-results.json"
+        ))
+        .unwrap();
+        let view = pedagog_core::view::student_view(&r, &r.visibilities(), true, true);
+        let page = mount(move || view! { <Results view=view deadline=None/> });
+        assert!(all(&page, "details.sub").len() > 10, "every part is a row");
+        let open: Vec<String> = all(&page, "details.sub[open] > summary span:nth-child(2)")
+            .iter()
+            .filter_map(|e| e.text_content())
+            .collect();
+        assert_eq!(
+            open,
+            ["Column space", "C spans col(A)", "each vector belongs"],
+            "A4's failing branch, down to the failing check"
+        );
+        assert!(
+            all(&page, ".subs.deep").is_empty(),
+            "four levels: all indented"
+        );
+
+        // Six levels: the fifth and sixth stop indenting and say their path.
+        let part =
+            |name: &str, parts: Vec<pedagog_core::view::ShownItem>| pedagog_core::view::ShownItem {
+                name: name.into(),
+                score: 1.0,
+                max: 2.0,
+                extra_credit: false,
+                steps: vec![],
+                text: String::new(),
+                parts,
+            };
+        let mut deep = part("Column 2", vec![]);
+        for name in ["Each column", "C spans col(A)", "Column space", "A4"] {
+            deep = part(name, vec![deep]);
+        }
+        let mut view = graded();
+        view.tests[0].feedback = Some(vec![deep]);
+        let page = mount(move || view! { <Results view=view deadline=None/> });
+        assert_eq!(
+            text(&page, ".subs.deep > .path"),
+            "A4 › Column space › C spans col(A) › Each column"
+        );
+    }
+
+    #[wasm_bindgen_test]
     fn a_sanitized_error_shows_its_summary_and_folds_the_chain() {
         let mut view = graded();
         view.tests[1].error = Some(

@@ -320,6 +320,18 @@ textarea.input { height: auto; min-height: 88px; padding: 10px 12px; line-height
 .isteps .sg.pass { color: var(--pass); } .isteps .sg.fail { color: var(--fail); } .isteps .sg.award { color: var(--accent-text); }
 .isteps .sp { font-variant-numeric: tabular-nums; font-family: var(--font-mono); font-size: 12px; }
 .isteps .msg { display: block; margin-top: 2px; color: var(--text); font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Nested parts (results format 3): a part is a row that opens, like an item's
+   header; its children hang off a guide line; past four levels they stop
+   indenting and say their path. */
+.sub > summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding: 4px 0; font-weight: 500; font-size: 13.5px; }
+.sub > summary::-webkit-details-marker { display: none; }
+.sub > summary .chev { color: var(--text-3); transition: transform .15s; }
+.sub[open] > summary .chev { transform: rotate(90deg); }
+.sub > summary .pts { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-2); }
+.subs { list-style: none; margin: 4px 0 0 6px; padding: 0 0 0 14px; border-left: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
+.subs.deep { margin-left: 0; padding-left: 0; border-left: 0; }
+.subs .isteps { margin: 2px 0 4px; }
+.subs .path { font-size: 11.5px; color: var(--text-3); margin: 4px 0 2px; overflow-wrap: anywhere; }
 .hidden-note { display: flex; gap: 10px; align-items: center; padding: 11px 16px; background: var(--surface-2); color: var(--text-2); font-size: 13.5px; border-top: 1px solid var(--border); }
 @media (max-width: 640px) {
   .tests-head { display: none; }

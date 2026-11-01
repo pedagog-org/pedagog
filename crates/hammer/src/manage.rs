@@ -599,6 +599,34 @@ fn steps_lines(steps: &serde_json::Value, indent: &str) -> Vec<String> {
     lines
 }
 
+/// How many levels of parts indent; deeper ones say their path instead.
+const INDENT_LEVELS: usize = 4;
+
+/// An item and its parts as nested lines (the staff's raw items, or what a
+/// student sees): indented up to [`INDENT_LEVELS`], then each says its path.
+fn part_lines(item: &serde_json::Value, depth: usize, path: &[String], out: &mut Vec<String>) {
+    let name = str_of(item, "name");
+    let indent = "  ".repeat(depth.min(INDENT_LEVELS) + 1);
+    if depth > INDENT_LEVELS {
+        out.push(format!("{indent}[{}]", path.join(" › ")));
+    }
+    out.push(format!(
+        "{indent}{name}  {}/{}",
+        num(&item["score"]),
+        num(&item["max"])
+    ));
+    out.extend(steps_lines(&item["steps"], &format!("{indent}  ")));
+    for key in ["text", "feedback"] {
+        if let Some(text) = item[key].as_str().filter(|x| !x.is_empty()) {
+            out.extend(text.lines().map(|l| format!("{indent}  {l}")));
+        }
+    }
+    let below: Vec<String> = [path, &[name]].concat();
+    for p in item["parts"].as_array().into_iter().flatten() {
+        part_lines(p, depth + 1, &below, out);
+    }
+}
+
 fn indented(label: &str, text: &str) -> Vec<String> {
     let mut lines = vec![format!("  {label}:")];
     lines.extend(text.lines().map(|l| format!("    {l}")));
@@ -734,11 +762,11 @@ pub fn results_staff(v: &serde_json::Value) -> Vec<String> {
     }
     for t in &tests {
         let mut detail = Vec::new();
-        for item in t["items"].as_array().into_iter().flatten() {
-            let steps = steps_lines(&item["steps"], "    ");
-            if !steps.is_empty() {
-                detail.push(format!("  feedback ({}):", str_of(item, "name")));
-                detail.extend(steps);
+        let items = t["items"].as_array().cloned().unwrap_or_default();
+        if !items.is_empty() {
+            detail.push("  feedback:".to_owned());
+            for item in &items {
+                part_lines(item, 1, &[], &mut detail);
             }
         }
         for (label, key) in [("stdout", "stdout"), ("error", "error"), ("trace", "trace")] {
@@ -812,10 +840,7 @@ pub fn results_mine(v: &serde_json::Value) -> Vec<String> {
     for t in &tests {
         let mut detail = Vec::new();
         for item in t["feedback"].as_array().into_iter().flatten() {
-            detail.extend(steps_lines(&item["steps"], "  "));
-            if let Some(text) = item["text"].as_str().filter(|x| !x.is_empty()) {
-                detail.extend(text.lines().map(|l| format!("  {l}")));
-            }
+            part_lines(item, 0, &[], &mut detail);
         }
         for key in ["stdout", "error"] {
             if let Some(text) = t[key].as_str().filter(|x| !x.is_empty()) {
@@ -1088,6 +1113,40 @@ mod tests {
     }
 
     #[test]
+    fn nested_parts_read_as_a_tree() {
+        let leaf = |name: &str, steps: serde_json::Value| json!({"name": name, "score": 1.0, "max": 2.0, "steps": steps});
+        let mut deepest = leaf(
+            "Column 2",
+            json!([{"result": "fail", "points": 0, "worth": 0.67, "reason": "is a pivot column", "message": "column 2 isn't"}]),
+        );
+        for name in [
+            "Each column",
+            "C spans col(A)",
+            "Column space",
+            "A4",
+            "Part B",
+        ] {
+            deepest =
+                json!({"name": name, "score": 1.0, "max": 2.0, "steps": [], "parts": [deepest]});
+        }
+        let mut out = Vec::new();
+        part_lines(&deepest, 0, &[], &mut out);
+        assert_eq!(out[0], "  Part B  1/2");
+        assert_eq!(out[1], "    A4  1/2");
+        assert_eq!(
+            out[4], "          Each column  1/2",
+            "level 4 still indents"
+        );
+        assert_eq!(
+            out[5], "          [Part B › A4 › Column space › C spans col(A) › Each column]",
+            "level 5 says its path"
+        );
+        assert_eq!(out[6], "          Column 2  1/2");
+        assert_eq!(out[7], "            ✗ +0 is a pivot column (worth 0.67)");
+        assert_eq!(out[8], "                column 2 isn't");
+    }
+
+    #[test]
     fn results_read_well() {
         let st = |score: f64, total: f64, passed: u32, tests: u32, sees: bool| json!({"score": score, "total": total, "passed": passed, "tests": tests, "student_sees": sees});
         let list = json!({"rows": [
@@ -1120,7 +1179,7 @@ mod tests {
         let mine = json!({"submission": 133, "counts": true, "late": "2 hours", "status": "graded",
             "results": {"score": 2.0, "total": 2.0, "hidden_until": ["release"], "hidden_never": false,
               "tests": [{"name": "push", "status": "pass", "score": 2.0, "max": 2.0,
-                         "feedback": [{"name": "push", "steps": [
+                         "feedback": [{"name": "push", "score": 2.0, "max": 3.0, "steps": [
                              {"result": "pass", "points": 2.0, "worth": 2.0, "reason": "pushes"},
                              {"result": "fail", "points": 0.0, "worth": 1.0, "reason": "pops", "message": "pop() lost it"}]}],
                          "stdout": "pushed 3\n"}]}});
@@ -1131,9 +1190,10 @@ mod tests {
                 "push  pass  2/2",
                 "some tests are hidden until release",
                 "--- push ---",
-                "  ✓ +2 pushes",
-                "  ✗ +0 pops (worth 1)",
-                "      pop() lost it",
+                "  push  2/3",
+                "    ✓ +2 pushes",
+                "    ✗ +0 pops (worth 1)",
+                "        pop() lost it",
                 "  stdout:",
                 "    pushed 3",
             ]

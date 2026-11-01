@@ -4,7 +4,7 @@
 
 use leptos::prelude::*;
 use pedagog_core::results::{Status, Step, StepResult};
-use pedagog_core::view::{ShownTest, StudentView};
+use pedagog_core::view::{ShownItem, ShownTest, StudentView};
 
 use crate::describe::{Badge as Words, points};
 
@@ -91,6 +91,82 @@ pub fn hidden_note(until: &[String], never: bool, deadline: Option<&str>) -> Opt
     }
 }
 
+/// How many levels of a test's items and parts indent; deeper ones show
+/// their path instead, so they stay readable on a phone.
+pub const INDENT_LEVELS: usize = 4;
+
+/// An item's or part's points: `1.5 / 2`, or extra credit's `+1 extra`.
+pub fn item_points(item: &ShownItem) -> String {
+    if item.extra_credit {
+        extra_points(item.score, item.max)
+    } else {
+        format!("{} / {}", points(item.score), points(item.max))
+    }
+}
+
+/// Whether a check failed here or below: a failing branch opens on load.
+pub fn has_failure(item: &ShownItem) -> bool {
+    item.steps
+        .iter()
+        .any(|s| s.result == Some(StepResult::Fail))
+        || item.parts.iter().any(has_failure)
+}
+
+fn steps_view(steps: Vec<Step>) -> AnyView {
+    if steps.is_empty() {
+        return ().into_any();
+    }
+    view! {
+        <ul class="isteps">
+            {steps.into_iter().map(|s| {
+                let (class, glyph, sr, pts) = step_parts(&s);
+                view! {
+                    <li>
+                        <span class=format!("sg {class}") role="img" aria-label=sr>{glyph}</span>
+                        <span class="sp">{pts}</span>
+                        <span>{s.reason.unwrap_or_default()}{s.message.map(|m| view! { <span class="msg">{m}</span> })}</span>
+                    </li>
+                }
+            }).collect_view()}
+        </ul>
+    }
+    .into_any()
+}
+
+/// The parts below an item, at `depth` (an item is 1): each a row that opens,
+/// failing branches open on load, guide lines up to [`INDENT_LEVELS`], then
+/// the path above the list instead.
+fn parts_view(parts: Vec<ShownItem>, depth: usize, path: Vec<String>) -> AnyView {
+    let deep = depth > INDENT_LEVELS;
+    let rows = parts
+        .into_iter()
+        .map(|p| {
+            let open = has_failure(&p);
+            let pts = item_points(&p);
+            let below = [path.clone(), vec![p.name.clone()]].concat();
+            let text = (!p.text.is_empty()).then(|| view! { <p class="small">{p.text.clone()}</p> });
+            let nested = (!p.parts.is_empty()).then(|| parts_view(p.parts, depth + 1, below));
+            view! {
+                <li>
+                    <details class="sub" open=open>
+                        <summary><span class="chev" aria-hidden="true">"›"</span><span>{p.name}</span><span class="pts">{pts}</span></summary>
+                        {text}
+                        {steps_view(p.steps)}
+                        {nested}
+                    </details>
+                </li>
+            }
+        })
+        .collect_view();
+    view! {
+        <ul class=if deep { "subs deep" } else { "subs" }>
+            {deep.then(|| view! { <li class="path">{path.join(" › ")}</li> })}
+            {rows}
+        </ul>
+    }
+    .into_any()
+}
+
 /// The score card and the tests.
 #[component]
 pub fn Results(view: StudentView, deadline: Option<String>) -> impl IntoView {
@@ -162,23 +238,16 @@ pub fn Test(
                     <div class="part">
                         <div class="part-h">"Feedback"</div>
                         <ul class="items">
-                            {feedback.into_iter().map(|item| view! {
-                                <li class="item">
-                                    <div class="item-h"><span>{item.name}</span><span class="pts">{if item.extra_credit { extra_points(item.score, item.max) } else { format!("{} / {}", points(item.score), points(item.max)) }}</span></div>
-                                    {(!item.text.is_empty()).then(|| view! { <p class="small">{item.text.clone()}</p> })}
-                                    {(!item.steps.is_empty()).then(|| view! { <ul class="isteps">
-                                        {item.steps.into_iter().map(|s| {
-                                            let (class, glyph, sr, pts) = step_parts(&s);
-                                            view! {
-                                                <li>
-                                                    <span class=format!("sg {class}") role="img" aria-label=sr>{glyph}</span>
-                                                    <span class="sp">{pts}</span>
-                                                    <span>{s.reason.unwrap_or_default()}{s.message.map(|m| view! { <span class="msg">{m}</span> })}</span>
-                                                </li>
-                                            }
-                                        }).collect_view()}
-                                    </ul> })}
-                                </li>
+                            {feedback.into_iter().map(|item| {
+                                let path = vec![item.name.clone()];
+                                view! {
+                                    <li class="item">
+                                        <div class="item-h"><span>{item.name.clone()}</span><span class="pts">{item_points(&item)}</span></div>
+                                        {(!item.text.is_empty()).then(|| view! { <p class="small">{item.text.clone()}</p> })}
+                                        {steps_view(item.steps)}
+                                        {(!item.parts.is_empty()).then(|| parts_view(item.parts, 2, path))}
+                                    </li>
+                                }
                             }).collect_view()}
                         </ul>
                     </div>
@@ -240,6 +309,33 @@ mod tests {
             reason: None,
             message: None,
         }
+    }
+
+    fn shown(name: &str, steps: Vec<Step>, parts: Vec<ShownItem>) -> ShownItem {
+        ShownItem {
+            name: name.into(),
+            score: 1.0,
+            max: 2.0,
+            extra_credit: false,
+            steps,
+            text: String::new(),
+            parts,
+        }
+    }
+
+    #[test]
+    fn a_failing_branch_opens_down_to_the_failure() {
+        let fail = step(Some(StepResult::Fail), 0.0, Some(1.0));
+        let pass = step(Some(StepResult::Pass), 1.0, Some(1.0));
+        let leaf = shown("Column 2", vec![pass.clone(), fail], vec![]);
+        let tree = shown(
+            "A4",
+            vec![pass.clone()],
+            vec![shown("Column space", vec![], vec![leaf])],
+        );
+        assert!(has_failure(&tree) && has_failure(&tree.parts[0]));
+        assert!(!has_failure(&shown("A2", vec![pass], vec![])));
+        assert_eq!(item_points(&tree), "1 / 2");
     }
 
     #[test]
