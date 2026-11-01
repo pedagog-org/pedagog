@@ -124,12 +124,6 @@ fn api(state: AppState) -> Router {
                 .delete(policy::clear_dates),
         )
         .route(
-            "/courses/{course}/assignments/{slug}/visibility",
-            get(policy::show_visibility)
-                .put(policy::set_visibility)
-                .delete(policy::clear_visibility),
-        )
-        .route(
             "/courses/{course}/assignments/{slug}/events",
             get(crate::events::stream),
         )

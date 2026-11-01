@@ -672,6 +672,19 @@ mod tests {
     }
 
     #[test]
+    fn a_results_block_is_refused() {
+        let yml = "id: x\nname: X\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: workspace\nassignment:\n  results:\n    visibility: { error: hidden }\n";
+        let err =
+            check_upload(&example(&[], Some(yml)), &LIMITS, &recipes(), REGISTRY).unwrap_err();
+        assert_eq!(err.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            err.error.contains("visibility lives in the tests"),
+            "{}",
+            err.error
+        );
+    }
+
+    #[test]
     fn host_rules_and_missing_solution_are_warnings() {
         let yml = "id: x\nname: X\nenvironment:\n  os: ubuntu-22\n  platform:\n    kind: workspace\n  network:\n    mode: deny\n    allow:\n      - host: pypi.org\n        ports: [443]\n";
         let bytes = tgz(&[Item::File("assignment.yml", yml.as_bytes(), 0o644)]);

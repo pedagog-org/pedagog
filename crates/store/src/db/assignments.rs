@@ -124,11 +124,10 @@ pub async fn builds_of(
 }
 
 /// The course's policy for an assignment, as stored: JSON text for the date
-/// edits and visibility overrides, and when results were released (RFC 3339).
+/// edits, and when results were released (RFC 3339).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoursePolicy {
     pub date_overrides: String,
-    pub visibility_overrides: String,
     pub released_at: Option<String>,
 }
 
@@ -136,7 +135,6 @@ pub async fn course_policy(pool: &PgPool, assignment_id: i64) -> sqlx::Result<Co
     sqlx::query_as!(
         CoursePolicy,
         r#"SELECT date_overrides::text AS "date_overrides!",
-                  visibility_overrides::text AS "visibility_overrides!",
                   to_char(released_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS released_at
              FROM assignments WHERE id = $1"#,
         assignment_id
@@ -145,61 +143,32 @@ pub async fn course_policy(pool: &PgPool, assignment_id: i64) -> sqlx::Result<Co
     .await
 }
 
-/// Which of the course's overrides to edit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Overrides {
-    Dates,
-    Visibility,
-}
-
-/// Read-modify-write one of the course's overrides, so concurrent edits don't
-/// lose each other: `edit` gets the stored JSON and returns the new JSON, or a
+/// Read-modify-write the course's date edits, so concurrent edits don't lose
+/// each other: `edit` gets the stored JSON and returns the new JSON, or a
 /// refusal (which changes nothing).
-pub async fn edit_overrides<E>(
+pub async fn edit_date_overrides<E>(
     pool: &PgPool,
     assignment_id: i64,
-    which: Overrides,
     edit: impl FnOnce(&str) -> Result<String, E>,
 ) -> sqlx::Result<Result<String, E>> {
     let mut tx = pool.begin().await?;
-    let current = match which {
-        Overrides::Dates => sqlx::query_scalar!(
-            r#"SELECT date_overrides::text AS "j!" FROM assignments WHERE id = $1 FOR UPDATE"#,
-            assignment_id
-        )
-        .fetch_one(&mut *tx)
-        .await?,
-        Overrides::Visibility => sqlx::query_scalar!(
-            r#"SELECT visibility_overrides::text AS "j!" FROM assignments WHERE id = $1 FOR UPDATE"#,
-            assignment_id
-        )
-        .fetch_one(&mut *tx)
-        .await?,
-    };
+    let current = sqlx::query_scalar!(
+        r#"SELECT date_overrides::text AS "j!" FROM assignments WHERE id = $1 FOR UPDATE"#,
+        assignment_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
     let next = match edit(&current) {
         Ok(next) => next,
         Err(e) => return Ok(Err(e)),
     };
-    match which {
-        Overrides::Dates => {
-            sqlx::query!(
-                "UPDATE assignments SET date_overrides = $2::text::jsonb WHERE id = $1",
-                assignment_id,
-                next
-            )
-            .execute(&mut *tx)
-            .await?
-        }
-        Overrides::Visibility => {
-            sqlx::query!(
-                "UPDATE assignments SET visibility_overrides = $2::text::jsonb WHERE id = $1",
-                assignment_id,
-                next
-            )
-            .execute(&mut *tx)
-            .await?
-        }
-    };
+    sqlx::query!(
+        "UPDATE assignments SET date_overrides = $2::text::jsonb WHERE id = $1",
+        assignment_id,
+        next
+    )
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(Ok(next))
 }
@@ -997,20 +966,16 @@ mod tests {
         let a = up.assignment_id;
         let fresh = course_policy(&pool, a).await?;
         assert_eq!(
-            (
-                fresh.date_overrides.as_str(),
-                fresh.visibility_overrides.as_str(),
-                fresh.released_at
-            ),
-            ("{}", "{}", None)
+            (fresh.date_overrides.as_str(), fresh.released_at),
+            ("{}", None)
         );
-        let set = edit_overrides(&pool, a, Overrides::Dates, |old| {
+        let set = edit_date_overrides(&pool, a, |old| {
             assert_eq!(old, "{}");
             Ok::<_, String>(r#"{"due": "2026-09-08T23:59:00-04:00"}"#.to_owned())
         })
         .await?;
         assert!(set.is_ok());
-        let refused = edit_overrides(&pool, a, Overrides::Dates, |_| Err("nope")).await?;
+        let refused = edit_date_overrides(&pool, a, |_| Err("nope")).await?;
         assert_eq!(refused, Err("nope"));
         assert!(
             course_policy(&pool, a)
