@@ -10,9 +10,19 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// `<file>::<collection>` (version 2 reports it in `run`).
 pub const COLLECTION_SUFFIX: &str = "::<collection>";
 
+/// The newest results format this platform reads (pedagog-pytest 3 writes 3,
+/// adding nested parts); older helpers write none.
+pub const FORMAT: u32 = 3;
+
+/// How deep parts may nest below a test.
+pub const MAX_DEPTH: usize = 8;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Results {
+    /// The format's version (absent before 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<u32>,
     #[serde(default)]
     pub submission_id: Option<String>,
     #[serde(default)]
@@ -129,6 +139,29 @@ pub struct RubricItem {
     /// Version 1 helpers' feedback text.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub feedback: String,
+    /// A part's own points (for checks on it); its `max` is these plus its
+    /// parts' counted max (format 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub points: Option<f64>,
+    /// A part's items and parts, the same shape (format 3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<RubricItem>,
+    /// A part's own visibility, tighter than its test's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<PartVisibility>,
+    /// The factor a `worth=` applied (points are already scaled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f64>,
+}
+
+/// When students see a part's score and feedback, on top of its test's (and
+/// its parents'): shown only when every level allows it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartVisibility {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<Visibility>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<Visibility>,
 }
 
 /// One check or award of a rubric item.
@@ -359,6 +392,15 @@ impl Results {
     /// Structural problems that make the file untrustworthy, regardless of outcome.
     pub fn problems(&self) -> Vec<String> {
         let mut problems = Vec::new();
+        if let Some(format) = self.format
+            && format > FORMAT
+        {
+            problems.push(format!(
+                "results format {format} was written by a newer pedagog-pytest than this pedagog \
+                 reads (up to {FORMAT}); update pedagog"
+            ));
+            return problems;
+        }
         let mut nodes = HashSet::new();
         let mut ids = HashSet::new();
         for t in &self.tests {
@@ -458,6 +500,54 @@ impl Results {
     }
 }
 
+/// Problems with `items` (siblings at `depth`, under `path`) and every part below.
+fn item_problems(key: &str, items: &[RubricItem], path: &[&str], depth: usize) -> Vec<String> {
+    let mut problems = Vec::new();
+    if depth > MAX_DEPTH {
+        problems.push(format!(
+            "test {key:?}: parts nest deeper than {MAX_DEPTH} levels (at {})",
+            path.join("/")
+        ));
+        return problems;
+    }
+    let mut ids = HashSet::new();
+    for i in items {
+        let at = [path, &[i.id.as_str()]].concat().join("/");
+        if !ids.insert(i.id.as_str()) {
+            problems.push(format!("test {key:?}: duplicate item id {at:?}"));
+        }
+        if i.max < 0.0 || !within(i.score, i.clamp) {
+            problems.push(format!(
+                "test {key:?}, item {at:?}: score {} outside {} (max {})",
+                i.score,
+                show(i.clamp),
+                i.max
+            ));
+        }
+        let mut steps = HashSet::new();
+        for id in i.steps.iter().filter_map(|s| s.id.as_deref()) {
+            if !steps.insert(id) {
+                problems.push(format!(
+                    "test {key:?}, item {at:?}: duplicate step id {id:?}"
+                ));
+            }
+        }
+        if !i.parts.is_empty() {
+            let own = i.points.unwrap_or(0.0);
+            let max = own + i.parts.iter().map(RubricItem::counted_max).sum::<f64>();
+            if !close(max, i.max) {
+                problems.push(format!(
+                    "test {key:?}, item {at:?}: max {} isn't its own {own} and its parts' {max}",
+                    i.max
+                ));
+            }
+            let below: Vec<&str> = [path, &[i.id.as_str()]].concat();
+            problems.extend(item_problems(key, &i.parts, &below, depth + 1));
+        }
+    }
+    problems
+}
+
 fn test_problems(t: &TestResult) -> Vec<String> {
     let mut problems = Vec::new();
     let key = t.key();
@@ -465,21 +555,7 @@ fn test_problems(t: &TestResult) -> Vec<String> {
         problems.push(format!("test {key:?}: negative max {}", t.max));
     }
     if !t.items.is_empty() {
-        let mut item_ids = HashSet::new();
-        for i in &t.items {
-            if !item_ids.insert(i.id.as_str()) {
-                problems.push(format!("test {key:?}: duplicate item id {:?}", i.id));
-            }
-            if i.max < 0.0 || !within(i.score, i.clamp) {
-                problems.push(format!(
-                    "test {key:?}, item {:?}: score {} outside {} (max {})",
-                    i.id,
-                    i.score,
-                    show(i.clamp),
-                    i.max
-                ));
-            }
-        }
+        problems.extend(item_problems(key, &t.items, &[], 1));
         let score: f64 = t.items.iter().map(|i| i.score).sum();
         let max: f64 = t.items.iter().map(RubricItem::counted_max).sum();
         if !close(score, t.score) || !close(max, t.max) {
@@ -881,6 +957,74 @@ visibility:
 
     /// Real output of the pedagog-pytest helper (examples/linked-list-python
     /// run against its solution), so the Python and Rust sides of the
+    /// pedagog-pytest 3's output (nested parts, worth=, per-part visibility).
+    fn format_3() -> Results {
+        serde_yaml::from_str(include_str!("../testdata/pedagog-pytest-3-results.json")).unwrap()
+    }
+
+    #[test]
+    fn parses_real_format_3_output() {
+        let r = format_3();
+        assert_eq!(r.format, Some(3));
+        assert!(r.problems().is_empty(), "{:?}", r.problems());
+        let a4 = &r.tests[0].items[1];
+        assert_eq!((a4.id.as_str(), a4.points, a4.max), ("a4", Some(0.5), 6.5));
+        let each = &a4.parts[0].parts[1].parts[1];
+        assert_eq!(each.id, "each");
+        assert_eq!(each.steps[1].result, Some(StepResult::Fail));
+        assert!((r.tests[0].items[0].scale.unwrap() - 1.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn nested_parts_are_validated() {
+        let mut r = format_3();
+        r.tests[0].items[1].parts[0].max += 1.0;
+        assert!(
+            r.problems()
+                .iter()
+                .any(|p| p.contains("a4/col") && p.contains("isn't its own")),
+            "{:?}",
+            r.problems()
+        );
+
+        let mut r = format_3();
+        let dup = r.tests[0].items[1].parts[0].parts[0].clone();
+        r.tests[0].items[1].parts[0].parts.push(dup);
+        assert!(
+            r.problems()
+                .iter()
+                .any(|p| p.contains("duplicate item id \"a4/col/pivots\""))
+        );
+
+        let mut r = format_3();
+        r.format = Some(4);
+        assert!(r.problems()[0].contains("newer pedagog-pytest"));
+    }
+
+    #[test]
+    fn parts_nest_at_most_eight_deep() {
+        let leaf = |id: &str, parts: Vec<RubricItem>| RubricItem {
+            id: id.into(),
+            name: id.into(),
+            score: 0.0,
+            max: 0.0,
+            clamp: (Some(0.0), None),
+            extra_credit: ExtraCredit::None,
+            attempted: false,
+            steps: vec![],
+            feedback: String::new(),
+            points: Some(0.0),
+            parts,
+            visibility: None,
+            scale: None,
+        };
+        let deep = |levels: usize| {
+            (0..levels).fold(Vec::new(), |below, i| vec![leaf(&format!("p{i}"), below)])
+        };
+        assert!(item_problems("t", &deep(8), &[], 1).is_empty());
+        assert!(item_problems("t", &deep(9), &[], 1)[0].contains("deeper than 8"));
+    }
+
     /// results format can't drift apart unnoticed.
     #[test]
     fn parses_real_pedagog_pytest_output() {

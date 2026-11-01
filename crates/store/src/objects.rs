@@ -104,6 +104,15 @@ impl Objects {
         Ok(Upload(WriteMultipart::new(parts)))
     }
 
+    /// The object's size in bytes, if it exists.
+    pub async fn size(&self, key: &str) -> Result<Option<u64>> {
+        match self.store.head(&Path::from(key)).await {
+            Ok(meta) => Ok(Some(meta.size)),
+            Err(Error::NotFound { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     pub async fn exists(&self, key: &str) -> Result<bool> {
         match self.store.head(&Path::from(key)).await {
             Ok(_) => Ok(true),
