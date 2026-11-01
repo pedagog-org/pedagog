@@ -127,7 +127,18 @@ def test_part_b(scores: PartB):
     points are recorded (checks, awards, `set`, clamps);
   - tests write `check(points=2 / n)` in the sub-rubric's terms;
   - the factor nests: a scaled part inside a scaled part multiplies;
-  - `worth` must be ≥ `points`, and the sub-rubric's total must be > 0 to scale;
+  - `worth` must be ≥ `points`;
+  - **extra credit:** `worth` aims at the sub-rubric's *counted* total (what every student
+    is graded out of). Extra-credit items inside scale by the same factor but aren't part of
+    the target, so adding a bonus never shrinks the regular parts (`Bases` 10 + a 1-point
+    bonus at `worth=2.17` → 2.17, +0.22 extra);
+  - on a part that is extra credit itself, `worth` is its bonus value: everything inside
+    counts as extra credit, scaled so the counted total becomes `worth` (an attempted-work
+    part joins the maximum at `worth` once anything inside is attempted);
+  - a sub-rubric whose counted total is 0 (only extra credit) can't be scaled on a regular
+    part: loading the tests fails with "mark the part extra credit and put worth= on it",
+    and the part then needs `extra_credit=BONUS` (or `ATTEMPTED_WORK`). There's no special
+    case where `worth` quietly aims at the extra credit;
   - students see scaled points, shown to two decimals, with totals summed before
     rounding; the trace shows the factor ("parts scaled ×0.2167 (Bases 10 → 2.17)").
 - A `Rubric` instance scores like a `Score` for its own points: `check`, `award`, `set`,
