@@ -597,9 +597,10 @@ For unsupported frameworks or custom pipelines, use `run:` with explicit command
 ### Results YAML Format
 
 The platform writes (and reads) a standard results file at `/pedagog/results/results.yaml`
-(format version 2, from pedagog-pytest 2):
+(format 3, from pedagog-pytest 3; 1 and 2 are still read):
 
 ```yaml
+format: 3                  # absent before 3; a newer format than the platform reads is refused
 submission-id: ~           # UUID, or null for test runs
 run-id: ~                  # UUID, or null for test runs
 sanitizes-errors: true     # the helper fills error-sanitized and output-sanitized
@@ -631,6 +632,20 @@ tests:
           - { id: large, result: fail, points: 0, worth: 3, reason: "1000 values",
               message: "sort() lost an element" }   # the check's assert message
           - { points: -1, reason: "one global" }    # an award: no result
+      - id: stable
+        name: keeps equal elements in order
+        points: 0.5        # a part: its own points, for checks on it
+        score: 1.5         # its own checks plus its parts', clamped
+        max: 2.5           # its own points plus its parts' counted max
+        clamp: [0, 2.5]
+        extra-credit: none
+        attempted: true
+        steps: [{ result: pass, points: 0.5, worth: 0.5, reason: "two equal keys" }]
+        visibility: { feedback: after_end }   # optional, score / feedback; only tightens the test's
+        scale: 0.5         # optional: the factor its worth= applied (points are already scaled)
+        parts:             # the same shape, recursively, up to 8 levels below the test
+          - { id: pairs, name: pairs, score: 1, max: 2, clamp: [0, 2], extra-credit: none,
+              attempted: true, steps: [...] }
     stdout: "after sort(): [1, 2]\n"   # what the test printed
     error: "..."           # what went wrong: the framework's raw report (optional)
     error-sanitized: |     # the same for students (optional): a summary, then the call chain
@@ -648,6 +663,8 @@ artifacts:
 
 Per-test visibility is defined in the test suite source code, and only there. The `visibility` field is required on every test entry in the results file.
 
+- **Parts** (format 3): an item may hold parts, to 8 levels below its test. A part's score is its own checks (its `points`) plus its parts', clamped; its `max` is its own points plus its parts' counted max. A student sees a part's score only where its own `visibility` and every level above allow it; a part whose score is hidden is left out of their totals (and "hidden until" says when). Its steps and parts show only where its `feedback` does too.
+- **Limits:** results.yaml over 4 MiB is refused unread (the run is `invalid`), and parts deeper than 8 levels make the results invalid.
 - **Version 1** (pedagog-pytest 1) is still read: `output` as `error`; text `feedback` (on the test or its items) as written; two-part visibility with `output` standing for feedback, stdout and error; `<file>::<collection>` entries as a run error.
 - **Rubric scoring:** each item's score lies within its `clamp`. A test's score is the sum of its item scores; its max sums the items that count: `none` items, plus `attempted-work` items once attempted. `bonus` items never count in the max. With unbounded clamps or extra credit, a score can fall below 0 or exceed its max; the summary is always the plain sum of the tests.
 - **Checks the platform runs:** unique `node`s, declared `id`s and item ids; scores within their bounds (tests with neither items nor a clamp must lie in 0..=max); tests and the summary that add up. A run whose tests couldn't all run is an error (`load`), and so is a validation whose reference solution couldn't run its tests.
