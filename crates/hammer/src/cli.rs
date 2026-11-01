@@ -48,9 +48,12 @@ pub enum Command {
     /// An assignment's dates in this course: the file's, with the course's edits.
     #[command(subcommand)]
     Dates(DatesCmd),
-    /// What students see of each test: show the rules, or override them.
-    #[command(subcommand)]
-    Visibility(VisibilityCmd),
+    /// (Retired: what students see is set in the tests.)
+    #[command(hide = true)]
+    Visibility {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Results: release them to students (or take a release back).
     #[command(subcommand)]
     Results(ResultsCmd),
@@ -465,57 +468,6 @@ pub enum DatesCmd {
         due: bool,
         #[arg(long)]
         late_due: bool,
-    },
-}
-
-#[derive(clap::Subcommand)]
-pub enum VisibilityCmd {
-    /// Each test's resolved visibility, where it comes from, and whether
-    /// students see it now (staff).
-    Show {
-        assignment: String,
-        #[arg(short = 'c', long)]
-        course: Option<String>,
-        /// Only this test (its id, node or name).
-        #[arg(long)]
-        test: Option<String>,
-        /// Every layer's setting, not just the one that decided.
-        #[arg(short = 'v', long)]
-        verbose: bool,
-    },
-    /// Override when students see each part of every test, or one: visible,
-    /// hidden, after_end (after the deadline, or release) or after_publish
-    /// (on release).
-    Set {
-        assignment: String,
-        #[arg(short = 'c', long)]
-        course: Option<String>,
-        /// One test, by id (else its node); every test if absent.
-        #[arg(long)]
-        test: Option<String>,
-        /// Points, and pass/fail.
-        #[arg(long, value_name = "VISIBILITY")]
-        score: Option<String>,
-        /// The checks (each item's steps).
-        #[arg(long, value_name = "VISIBILITY")]
-        feedback: Option<String>,
-        /// What the test printed.
-        #[arg(long, value_name = "VISIBILITY")]
-        stdout: Option<String>,
-        /// What went wrong (failures, exceptions, the values compared).
-        #[arg(long, value_name = "VISIBILITY")]
-        error: Option<String>,
-    },
-    /// Drop overrides for every test (the all-tests entry), one test, or all.
-    Clear {
-        assignment: String,
-        #[arg(short = 'c', long)]
-        course: Option<String>,
-        #[arg(long, conflicts_with = "all")]
-        test: Option<String>,
-        /// Every override, all tests and each test.
-        #[arg(long)]
-        all: bool,
     },
 }
 

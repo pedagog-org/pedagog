@@ -477,69 +477,6 @@ pub fn dates(v: &serde_json::Value) -> Vec<String> {
     ]
 }
 
-/// The parts of a test's result, each with its own visibility.
-const PARTS: [&str; 4] = ["score", "feedback", "stdout", "error"];
-
-/// `visibility show`: each test's parts, decided by which layer, and
-/// whether students see them now; `verbose` adds every layer's setting.
-pub fn visibility(v: &serde_json::Value, test: Option<&str>, verbose: bool) -> Vec<String> {
-    let mut lines = vec![format!(
-        "released: {}   end: {}",
-        v["released_at"]
-            .as_str()
-            .map(|r| format!("yes ({r})"))
-            .unwrap_or_else(|| "no".to_owned()),
-        v["end"].as_str().unwrap_or("none")
-    )];
-    if let Some(note) = v["note"].as_str() {
-        lines.push(note.to_owned());
-    }
-    let tests: Vec<&serde_json::Value> = v["tests"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|t| {
-            test.is_none_or(|q| {
-                [&t["id"], &t["node"], &t["name"]]
-                    .iter()
-                    .any(|f| f.as_str() == Some(q))
-            })
-        })
-        .collect();
-    if tests.is_empty() && test.is_some() {
-        lines.push(format!("no test {:?}", test.unwrap_or_default()));
-    }
-    let shown = |v: &serde_json::Value| -> String {
-        let value = str_of(v, "value");
-        format!("{value:<14}{}  [{}]", str_of(v, "why"), str_of(v, "from"))
-    };
-    for t in tests {
-        let id = t["id"].as_str().unwrap_or("");
-        lines.push(if id.is_empty() {
-            format!("{} ({})", str_of(t, "name"), str_of(t, "node"))
-        } else {
-            format!("{} ({id}, {})", str_of(t, "name"), str_of(t, "node"))
-        });
-        for part in PARTS {
-            lines.push(format!("  {:<9} {}", format!("{part}:"), shown(&t[part])));
-        }
-        if verbose {
-            for l in t["layers"].as_array().into_iter().flatten() {
-                let parts: Vec<String> = PARTS
-                    .iter()
-                    .map(|p| format!("{p} {:<14}", l[*p].as_str().unwrap_or("-")))
-                    .collect();
-                lines.push(format!(
-                    "    {:<20} {}",
-                    str_of(l, "layer"),
-                    parts.join(" ").trim_end()
-                ));
-            }
-        }
-    }
-    lines
-}
-
 /// A number as people write it: `2`, `2.5`.
 fn num(v: &serde_json::Value) -> String {
     match v.as_f64() {
@@ -1135,7 +1072,7 @@ mod tests {
     }
 
     #[test]
-    fn dates_and_visibility_read_well() {
+    fn dates_read_well() {
         let d = json!({"open": {"value": "always", "from": "course"},
                        "due": {"value": "2026-09-08T23:59:00-04:00", "from": "file"},
                        "late_due": null, "status": "open"});
@@ -1148,41 +1085,6 @@ mod tests {
                 "status:   open"
             ]
         );
-        let part =
-            |value: &str, from: &str, why: &str| json!({"value": value, "from": from, "why": why});
-        let v = json!({"released_at": null, "end": "2026-09-08T23:59:00-04:00", "tests": [
-            {"id": "push", "node": "t.py::test_push", "name": "push",
-             "score": part("visible", "the test's own", "always shown"),
-             "feedback": part("visible", "the test's own", "always shown"),
-             "stdout": part("visible", "the test's own", "always shown"),
-             "error": part("after_end", "file, all tests", "not yet: until the end"),
-             "layers": [{"layer": "course, this test", "score": null, "feedback": null, "stdout": null, "error": "hidden"}]},
-            {"id": null, "node": "t.py::test_stress", "name": "stress",
-             "score": part("hidden", "course, all tests", "never shown to students"),
-             "feedback": part("hidden", "course, all tests", "never shown to students"),
-             "stdout": part("hidden", "course, all tests", "never shown to students"),
-             "error": part("hidden", "course, all tests", "never shown to students"),
-             "layers": []}
-        ]});
-        let all = visibility(&v, None, false);
-        assert_eq!(all[0], "released: no   end: 2026-09-08T23:59:00-04:00");
-        assert_eq!(all[1], "push (push, t.py::test_push)");
-        assert_eq!(
-            all[2],
-            "  score:    visible       always shown  [the test's own]"
-        );
-        assert_eq!(
-            all[5],
-            "  error:    after_end     not yet: until the end  [file, all tests]"
-        );
-        assert_eq!(all[6], "stress (t.py::test_stress)");
-        let one = visibility(&v, Some("push"), true);
-        assert_eq!(one.len(), 7);
-        assert_eq!(
-            one[6],
-            "    course, this test    score -              feedback -              stdout -              error hidden"
-        );
-        assert_eq!(visibility(&v, Some("nope"), false)[1], "no test \"nope\"");
     }
 
     #[test]

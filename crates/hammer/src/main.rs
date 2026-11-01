@@ -15,7 +15,6 @@ use miette::{GraphicalReportHandler, MietteDiagnostic, Report, Result, Severity,
 use cli::{
     AssignmentsCmd, Cli, Command, CoursesCmd, DatesCmd, Format, LoginArgs, MembersCmd, PlanArgs,
     ResultsCmd, SubmissionsArgs, SubmitArgs, UploadArgs, UseArgs, UsersCmd, VendArgs,
-    VisibilityCmd,
 };
 use pedagog_core::recipe::assignment::{AssignmentYaml, FileSources};
 use pedagog_core::recipe::primitives::Id;
@@ -46,7 +45,10 @@ fn main() -> Result<()> {
         Command::Use(args) => run_use(args),
         Command::Submissions(args) => run_submissions(args),
         Command::Dates(cmd) => run_dates(cmd),
-        Command::Visibility(cmd) => run_visibility(cmd),
+        Command::Visibility { .. } => Err(miette!(
+            "course visibility overrides are gone: what students see is set in the tests \
+             (@visibility on each test); change it there and upload a new version"
+        )),
         Command::Results(cmd) => run_results(cmd),
     }
 }
@@ -358,71 +360,6 @@ fn run_dates(cmd: DatesCmd) -> Result<()> {
                 &api.delete(&format!("{a}/dates{q}"))
                     .map_err(|e| miette!("{e}"))?,
             )
-        }
-    };
-    print_lines(lines)
-}
-
-fn run_visibility(cmd: VisibilityCmd) -> Result<()> {
-    let lines = match cmd {
-        VisibilityCmd::Show {
-            assignment,
-            course,
-            test,
-            verbose,
-        } => {
-            let (api, a) = assignment_path(course, &assignment)?;
-            manage::visibility(
-                &api.get(&format!("{a}/visibility"))
-                    .map_err(|e| miette!("{e}"))?,
-                test.as_deref(),
-                verbose,
-            )
-        }
-        VisibilityCmd::Set {
-            assignment,
-            course,
-            test,
-            score,
-            feedback,
-            stdout,
-            error,
-        } => {
-            let (api, a) = assignment_path(course, &assignment)?;
-            let reply = api
-                .put(
-                    &format!("{a}/visibility"),
-                    &serde_json::json!({
-                        "test": test, "score": score, "feedback": feedback,
-                        "stdout": stdout, "error": error,
-                    }),
-                )
-                .map_err(|e| miette!("{e}"))?;
-            let mut lines = vec![format!(
-                "saved for {}",
-                test.as_deref().unwrap_or("every test")
-            )];
-            lines.extend(reply["warning"].as_str().map(|w| format!("warning: {w}")));
-            lines
-        }
-        VisibilityCmd::Clear {
-            assignment,
-            course,
-            test,
-            all,
-        } => {
-            let (api, a) = assignment_path(course, &assignment)?;
-            let q = manage::query(&[
-                ("test", test.clone()),
-                ("all", all.then(|| "true".to_owned())),
-            ]);
-            api.delete(&format!("{a}/visibility{q}"))
-                .map_err(|e| miette!("{e}"))?;
-            vec![match (test, all) {
-                (_, true) => "cleared every override".to_owned(),
-                (Some(t), _) => format!("cleared the overrides for {t}"),
-                (None, _) => "cleared the overrides for every test".to_owned(),
-            }]
         }
     };
     print_lines(lines)
