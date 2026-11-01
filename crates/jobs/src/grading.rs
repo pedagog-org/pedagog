@@ -102,8 +102,16 @@ pub async fn settle(
     let ctx = db::run_context(&state.pool, run)
         .await?
         .ok_or_else(|| anyhow::anyhow!("grading run {run} is missing"))?;
-    let uploaded = state.objects.get(&grading_results_key(run)).await.ok();
-    let mut verdict = judge(uploaded.as_deref());
+    let mut verdict = match fetch_results(state, &grading_results_key(run)).await {
+        Ok(bytes) => judge(bytes.as_deref()),
+        Err(size) => Verdict {
+            results: None,
+            score: None,
+            problems: vec![too_large(size)],
+            error: None,
+            kind: Some(ErrorKind::Invalid),
+        },
+    };
     let mut log_tail = None;
     if verdict.results.is_none() && !succeeded {
         let logs = state
@@ -194,6 +202,29 @@ pub struct Verdict {
 /// Results that parse and pass the format checks are graded (failing tests
 /// included); anything else is an error, and nothing from it is kept but the
 /// results of a run that couldn't load the code.
+/// The most a run's results.yaml may be: bigger is refused unread (honest
+/// results stay far below; the helper caps each text at 20 000 characters).
+pub const MAX_RESULTS_BYTES: u64 = 4 << 20;
+
+/// What a run uploaded: its results.yaml (`None` when there's none), or its
+/// size when it's over [`MAX_RESULTS_BYTES`].
+pub(crate) async fn fetch_results(state: &AppState, key: &str) -> Result<Option<Vec<u8>>, u64> {
+    match state.objects.size(key).await {
+        Ok(Some(size)) if size > MAX_RESULTS_BYTES => Err(size),
+        Ok(Some(_)) => Ok(state.objects.get(key).await.ok()),
+        _ => Ok(None),
+    }
+}
+
+/// Why oversized results aren't read.
+pub(crate) fn too_large(size: u64) -> String {
+    format!(
+        "results.yaml is {:.1} MiB, over the {} MiB limit; it wasn't read",
+        size as f64 / (1024.0 * 1024.0),
+        MAX_RESULTS_BYTES >> 20
+    )
+}
+
 pub fn judge(uploaded: Option<&[u8]>) -> Verdict {
     let error = |kind: ErrorKind, problems: Vec<String>| Verdict {
         results: None,
@@ -254,6 +285,14 @@ fn tail_lines(text: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_results_are_said_plainly() {
+        assert_eq!(
+            too_large(5 << 20),
+            "results.yaml is 5.0 MiB, over the 4 MiB limit; it wasn't read"
+        );
+    }
 
     const FIXTURE: &[u8] = include_bytes!("../../core/testdata/pedagog-pytest-results.json");
 

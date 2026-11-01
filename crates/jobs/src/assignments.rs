@@ -334,8 +334,21 @@ pub async fn settle_validation(
     if build.finished || build.validation_status != ValidationStatus::Running {
         return Ok(());
     }
-    let uploaded = state.objects.get(&results_key(build_id)).await.ok();
-    let mut verdict = judge(uploaded.as_deref());
+    let (uploaded, mut verdict) =
+        match crate::grading::fetch_results(state, &results_key(build_id)).await {
+            Ok(bytes) => {
+                let verdict = judge(bytes.as_deref());
+                (bytes, verdict)
+            }
+            Err(size) => (
+                None,
+                Verdict {
+                    status: ValidationStatus::Invalid,
+                    results: None,
+                    problems: vec![crate::grading::too_large(size)],
+                },
+            ),
+        };
     let log = state
         .builder
         .logs(&JobKey::validation(
