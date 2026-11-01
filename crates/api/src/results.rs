@@ -10,8 +10,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use pedagog_core::api::{MyResults, RunState, Shown};
-use pedagog_core::recipe::policy::ResultsPolicy;
-use pedagog_core::results::{Results, TestVisibility};
+use pedagog_core::results::Results;
 use pedagog_core::view::{Stage, student_view, tallies};
 use pedagog_store::db::{accounts, assignments as builds_db, submissions as db};
 use pedagog_store::{CourseRole, ErrorKind, GradingRun, Membership, RunStatus, Submission};
@@ -43,15 +42,6 @@ pub fn sentence(kind: Option<ErrorKind>) -> &'static str {
 pub const NEXT_STEP: &str =
     "check your files and submit again; if problems persist, contact course staff";
 
-/// Each test's resolved visibility, in order.
-fn visibilities(p: &Policy, results: &Results) -> Vec<TestVisibility> {
-    results
-        .tests
-        .iter()
-        .map(|t| ResultsPolicy::resolve(&p.course_visibility, &p.file.results, t))
-        .collect()
-}
-
 fn parsed(run: &GradingRun) -> Option<Results> {
     run.results
         .as_deref()
@@ -75,7 +65,7 @@ pub(crate) fn shown(p: &Policy, run: &GradingRun) -> Option<Shown> {
     let results = parsed(run)?;
     let view = student_view(
         &results,
-        &visibilities(p, &results),
+        &results.visibilities(),
         p.dates().ended(OffsetDateTime::now_utc()),
         p.released_at.is_some(),
     );
@@ -96,7 +86,7 @@ fn stage_now(p: &Policy) -> Stage {
 fn stages_json(p: &Policy, results: &Results) -> serde_json::Value {
     let now = stage_now(p);
     serde_json::json!(
-        tallies(results, &visibilities(p, results))
+        tallies(results, &results.visibilities())
             .into_iter()
             .map(|(stage, t)| serde_json::json!({
                 "stage": stage, "score": t.score, "total": t.total,
@@ -295,17 +285,17 @@ pub async fn show(
         r.tests
             .iter()
             .map(|t| {
-                let e = ResultsPolicy::explain(&p.course_visibility, &p.file.results, t);
-                let part = |r: pedagog_core::recipe::policy::Resolved| {
-                    let shown = r.value.shown_now(end, now, released);
-                    serde_json::json!({ "value": r.value, "shown": shown.shown, "why": shown.why })
+                let v = t.visibility;
+                let part = |value: pedagog_core::results::Visibility| {
+                    let shown = value.shown_now(end, now, released);
+                    serde_json::json!({ "value": value, "shown": shown.shown, "why": shown.why })
                 };
                 serde_json::json!({
                     "name": t.name, "node": t.node, "id": t.id, "status": t.status,
                     "score": t.score, "max": t.max,
                     "visibility": {
-                        "score": part(e.score), "feedback": part(e.feedback),
-                        "stdout": part(e.stdout), "error": part(e.error),
+                        "score": part(v.score), "feedback": part(v.feedback),
+                        "stdout": part(v.stdout), "error": part(v.error),
                     },
                     "items": t.items, "feedback": t.feedback,
                     "stdout": t.stdout, "error": t.error, "trace": t.trace,
@@ -323,9 +313,9 @@ pub async fn show(
             })
             .collect::<Vec<_>>()
     });
-    let told = results.as_ref().map(|r| {
-        student_view(r, &visibilities(&p, r), p.dates().ended(now), released).hidden_until
-    });
+    let told = results
+        .as_ref()
+        .map(|r| student_view(r, &r.visibilities(), p.dates().ended(now), released).hidden_until);
     Ok(Json(serde_json::json!({
         "email": member.user.email,
         "name": member.user.name,
@@ -371,7 +361,7 @@ pub async fn mine(
             let results = parsed(r);
             let view = results
                 .as_ref()
-                .map(|res| student_view(res, &visibilities(&p, res), ended, released));
+                .map(|res| student_view(res, &res.visibilities(), ended, released));
             (RunState::Graded, view, None)
         }
         Some(r) => (

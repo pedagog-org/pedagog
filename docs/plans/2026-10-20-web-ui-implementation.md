@@ -86,7 +86,7 @@ which design-only features come with it, and the order of the work.
   theme), `components/` (one per pedagog.css component), `pages/` (one per route).
 - **Routes** mirror the api without `/api`: `/login`, `/`, `/courses/{c}`,
   `/courses/{c}/assignments/{a}` with `results`, `results/{email}`, `dates`,
-  `visibility`, `builds/{id}`, `submissions/{id}`, `upload`; `/courses/{c}/members`,
+  `builds/{id}`, `submissions/{id}`, `upload`; `/courses/{c}/members`,
   `/courses/{c}/settings`, `/courses/new`; `/admin/users`, `/admin/users/{email}`,
   `/admin/courses`. Filters, search and the selected submission in the query string.
   No course-level "Results" nav item for now (a gradebook comes later with export).
@@ -204,7 +204,7 @@ until the next release).
    import preview counts.
 7. **Dates:** no-deadline overrides, per-student dates (form and CSV), effective dates
    everywhere.
-8. **Visibility, release and notices:** with `released_by`.
+8. **Release and notices:** with `released_by`. (No Visibility page: visibility comes only from the tests, per `2026-10-31-nested-feedback.md`.)
 9. **Settings, archive and create course:** rename, archive, course time zone.
 10. **Admin:** users, a user, courses, with the new columns.
 11. **HTML emails:** askama templates for the five emails.

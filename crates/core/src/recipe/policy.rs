@@ -1,22 +1,49 @@
-//! The `assignment:` block: when submissions are accepted (`dates`) and what
-//! students see of their results (`results`). Everything is optional; the
-//! file's values are defaults that a course can edit field by field.
-
-use std::collections::BTreeMap;
+//! The `assignment:` block: when submissions are accepted (`dates`).
+//! Everything is optional; the file's values are defaults that a course can
+//! edit field by field. What students see of their results is the tests'
+//! own (`@visibility`); `results:` here is retired.
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::results::{TestResult, TestVisibility, Visibility};
+use crate::results::Visibility;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssignmentPolicy {
     #[serde(default)]
     pub dates: Dates,
-    #[serde(default)]
-    pub results: ResultsPolicy,
+    /// Retired (visibility lives in the tests): read, and ignored, in builds
+    /// stored before; refused in uploads (see [`AssignmentPolicy::problems`]).
+    #[serde(default, skip_serializing)]
+    pub results: Option<Retired>,
+}
+
+impl AssignmentPolicy {
+    /// What an upload's `assignment:` block may no longer say.
+    pub fn problems(&self) -> Vec<String> {
+        if self.results.is_some() {
+            vec![
+                "assignment.results: visibility lives in the tests now (@visibility on each \
+                 test); remove assignment.results and upload again"
+                    .to_owned(),
+            ]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+/// A retired block, whatever it held.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Retired;
+
+impl<'de> Deserialize<'de> for Retired {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        serde::de::IgnoredAny::deserialize(d)?;
+        Ok(Retired)
+    }
 }
 
 /// When submissions are accepted. Each field is optional; with none set
@@ -240,152 +267,6 @@ pub fn spoken(d: time::Duration) -> String {
         .join(" ")
 }
 
-/// Visibility overrides: for every test, and for specific tests (by id, else
-/// node), each field separately.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ResultsPolicy {
-    #[serde(default, skip_serializing_if = "FieldOverrides::is_empty")]
-    pub visibility: FieldOverrides,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tests: BTreeMap<String, FieldOverrides>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct FieldOverrides {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub score: Option<Visibility>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub feedback: Option<Visibility>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stdout: Option<Visibility>,
-    /// (Stored as `output` before the four parts.)
-    #[serde(default, alias = "output", skip_serializing_if = "Option::is_none")]
-    pub error: Option<Visibility>,
-}
-
-impl FieldOverrides {
-    pub fn is_empty(&self) -> bool {
-        self.score.is_none()
-            && self.feedback.is_none()
-            && self.stdout.is_none()
-            && self.error.is_none()
-    }
-}
-
-impl ResultsPolicy {
-    /// The override for one test: its own entry (by id, else node).
-    fn for_test(&self, test: &TestResult) -> FieldOverrides {
-        test.id
-            .as_deref()
-            .and_then(|id| self.tests.get(id))
-            .or_else(|| self.tests.get(&test.node))
-            .copied()
-            .unwrap_or_default()
-    }
-
-    /// A test's effective visibility: course for that test, course for all
-    /// tests, file for that test, file for all tests, then the test's own;
-    /// first match wins, per field.
-    pub fn resolve(
-        course: &ResultsPolicy,
-        file: &ResultsPolicy,
-        test: &TestResult,
-    ) -> TestVisibility {
-        let e = Self::explain(course, file, test);
-        TestVisibility {
-            score: e.score.value,
-            feedback: e.feedback.value,
-            stdout: e.stdout.value,
-            error: e.error.value,
-        }
-    }
-
-    /// [`resolve`](Self::resolve), with the reasoning: which layer decided
-    /// each field, and what every layer says for this test.
-    pub fn explain(course: &ResultsPolicy, file: &ResultsPolicy, test: &TestResult) -> Explained {
-        let layers = [
-            (Layer::CourseTest, course.for_test(test)),
-            (Layer::CourseAll, course.visibility),
-            (Layer::FileTest, file.for_test(test)),
-            (Layer::FileAll, file.visibility),
-            (
-                Layer::Test,
-                FieldOverrides {
-                    score: Some(test.visibility.score),
-                    feedback: Some(test.visibility.feedback),
-                    stdout: Some(test.visibility.stdout),
-                    error: Some(test.visibility.error),
-                },
-            ),
-        ];
-        let pick = |field: fn(&FieldOverrides) -> Option<Visibility>| {
-            layers
-                .iter()
-                .find_map(|(layer, o)| {
-                    field(o).map(|value| Resolved {
-                        value,
-                        from: *layer,
-                    })
-                })
-                .unwrap_or(Resolved {
-                    value: Visibility::Hidden,
-                    from: Layer::Test,
-                })
-        };
-        Explained {
-            score: pick(|o| o.score),
-            feedback: pick(|o| o.feedback),
-            stdout: pick(|o| o.stdout),
-            error: pick(|o| o.error),
-            layers: layers.to_vec(),
-        }
-    }
-}
-
-/// Where a test's visibility came from, in the order they're consulted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Layer {
-    CourseTest,
-    CourseAll,
-    FileTest,
-    FileAll,
-    /// The test's own (from its code, via the results).
-    Test,
-}
-
-impl Layer {
-    pub fn describe(self) -> &'static str {
-        match self {
-            Layer::CourseTest => "course, this test",
-            Layer::CourseAll => "course, all tests",
-            Layer::FileTest => "file, this test",
-            Layer::FileAll => "file, all tests",
-            Layer::Test => "the test's own",
-        }
-    }
-}
-
-/// One field's effective visibility and the layer that decided it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub struct Resolved {
-    pub value: Visibility,
-    pub from: Layer,
-}
-
-/// A test's resolved visibility with the reasoning behind it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Explained {
-    pub score: Resolved,
-    pub feedback: Resolved,
-    pub stdout: Resolved,
-    pub error: Resolved,
-    /// Every layer's setting for this test, first to last.
-    pub layers: Vec<(Layer, FieldOverrides)>,
-}
-
 /// Whether students see something now, and why.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Shown {
@@ -564,106 +445,23 @@ mod tests {
         assert_eq!(serde_json::from_str::<AssignmentPolicy>(&json).unwrap(), p);
     }
 
-    fn test(id: Option<&str>, node: &str) -> TestResult {
-        serde_json::from_value(serde_json::json!({
-            "id": id, "node": node, "name": "t", "status": "pass", "score": 1.0, "max": 1.0,
-            "visibility": {"score": "visible", "output": "after_end"}
-        }))
-        .unwrap()
-    }
-
-    fn vis(
-        score: Visibility,
-        feedback: Visibility,
-        stdout: Visibility,
-        error: Visibility,
-    ) -> TestVisibility {
-        TestVisibility {
-            score,
-            feedback,
-            stdout,
-            error,
-        }
-    }
-
     #[test]
-    fn visibility_resolves_course_then_file_then_the_test() {
-        use Visibility::{AfterEnd, AfterPublish, Hidden, Visible};
-        let file = policy("results:\n  visibility: { output: hidden }\n  tests:\n    pop-front: { score: after_publish }\n").unwrap().results;
-        let course: ResultsPolicy =
-            serde_yaml::from_str("tests:\n    t.py::test_len: { output: visible }\n").unwrap();
-        let pop = test(Some("pop-front"), "t.py::test_pop");
-        let len = test(None, "t.py::test_len");
-        let other = test(None, "t.py::test_other");
-        // (The tests' own visibility is version 1's: output stands for every other part;
-        // overrides stored as `output` mean the error.)
+    fn a_results_block_is_read_but_refused() {
+        let old = policy("results:\n  visibility: { error: hidden }\n").unwrap();
         assert_eq!(
-            ResultsPolicy::resolve(&course, &file, &pop),
-            vis(AfterPublish, AfterEnd, AfterEnd, Hidden)
+            old.results,
+            Some(Retired),
+            "builds stored before still read"
         );
-        assert_eq!(
-            ResultsPolicy::resolve(&course, &file, &len),
-            vis(Visible, AfterEnd, AfterEnd, Visible),
-            "a course override for one test beats the file's for all"
+        assert!(old.problems()[0].contains("visibility lives in the tests"));
+        assert!(
+            policy("dates: { open: always }\n")
+                .unwrap()
+                .problems()
+                .is_empty()
         );
-        assert_eq!(
-            ResultsPolicy::resolve(&ResultsPolicy::default(), &ResultsPolicy::default(), &other),
-            vis(Visible, AfterEnd, AfterEnd, AfterEnd),
-            "no overrides: the test's own"
-        );
-        let feedback: ResultsPolicy =
-            serde_yaml::from_str("visibility: { feedback: hidden, stdout: after_publish }\n")
-                .unwrap();
-        assert_eq!(
-            ResultsPolicy::resolve(&feedback, &file, &other),
-            vis(Visible, Hidden, AfterPublish, Hidden)
-        );
-    }
-
-    #[test]
-    fn explain_names_the_deciding_layer_and_every_setting() {
-        let file = policy("results:\n  tests:\n    reverse: { score: after_publish }\n")
-            .unwrap()
-            .results;
-        let course: ResultsPolicy = serde_yaml::from_str("visibility: { score: after_publish, output: after_publish }\ntests:\n  append: { score: visible }\n").unwrap();
-        let append = test(Some("append"), "t.py::test_append");
-        let reverse = test(Some("reverse"), "t.py::test_reverse");
-        let a = ResultsPolicy::explain(&course, &file, &append);
-        assert_eq!(
-            a.score,
-            Resolved {
-                value: Visibility::Visible,
-                from: Layer::CourseTest
-            }
-        );
-        assert_eq!(
-            a.error,
-            Resolved {
-                value: Visibility::AfterPublish,
-                from: Layer::CourseAll
-            }
-        );
-        let r = ResultsPolicy::explain(&course, &file, &reverse);
-        assert_eq!(
-            r.score.from,
-            Layer::CourseAll,
-            "course for all beats file for this test"
-        );
-        assert_eq!(
-            r.layers[2].1.score,
-            Some(Visibility::AfterPublish),
-            "the file's setting is still listed"
-        );
-        assert_eq!(r.layers.len(), 5);
-        assert_eq!(
-            ResultsPolicy::resolve(&course, &file, &append),
-            vis(
-                Visibility::Visible,
-                Visibility::AfterEnd,
-                Visibility::AfterEnd,
-                Visibility::AfterPublish
-            )
-        );
+        let stored = serde_json::to_string(&old).unwrap();
+        assert!(!stored.contains("results"), "{stored}");
     }
 
     #[test]

@@ -351,6 +351,11 @@ fn show(clamp: Clamp) -> String {
 }
 
 impl Results {
+    /// Each test's visibility, in order: the test's own, set in its code.
+    pub fn visibilities(&self) -> Vec<TestVisibility> {
+        self.tests.iter().map(|t| t.visibility).collect()
+    }
+
     /// Structural problems that make the file untrustworthy, regardless of outcome.
     pub fn problems(&self) -> Vec<String> {
         let mut problems = Vec::new();

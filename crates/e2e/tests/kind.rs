@@ -864,19 +864,27 @@ def test_pop_shrinks(score: Score):
     ))
 }
 
+/// What students see is the tests' own: a new version whose `many` test
+/// waits for release hides it (and its points) until then.
 fn visibility_and_release(e: &Env) -> Result<String> {
     let good = student("good");
-    e.prof.says(&[
-        "visibility",
-        "set",
-        UPLOAD_ID,
-        "--test",
-        "many",
-        "--score",
-        "after_publish",
-        "-c",
-        &e.course,
-    ])?;
+    let v3 = e.file("v3");
+    copy_dir(&e.file("v2"), &v3)?;
+    let tests = v3.join("tests/test_linked_list.py");
+    replace_in(&tests, "    HIDDEN,", "    AFTER_PUBLISH, HIDDEN,")?;
+    replace_in(
+        &tests,
+        "@rubric_item(\"handles a thousand elements\"",
+        "@visibility(score=AFTER_PUBLISH)\n@rubric_item(\"handles a thousand elements\"",
+    )?;
+    let (_, out) = e.upload(&v3.display().to_string(), &["--regrade", "--wait"])?;
+    let build = first_number_after(&out, "build ")
+        .ok_or_else(|| out.clone())?
+        .to_owned();
+    wait_for(Duration::from_secs(180), || {
+        sql(&format!("SELECT count(*) FROM grading_runs WHERE build_id = {build} AND status IN ('queued', 'grading')"))
+            .is_ok_and(|n| n == "0")
+    });
     let (_, before) = good.says(&["results", "show", UPLOAD_ID, "-c", &e.course])?;
     let released = latest_mail(&good.email, "results released")?;
     let (_, out) = e
@@ -897,7 +905,7 @@ fn visibility_and_release(e: &Env) -> Result<String> {
     )?;
     require(out.contains("emailing"), || out.clone())?;
     Ok(format!(
-        "hidden before release (9/9), shown after (11/11); {}",
+        "a test marked after_publish hides until release (9/9), then shows (11/11); {}",
         mail.subject
     ))
 }

@@ -1,17 +1,16 @@
 //! The course's policy for an assignment, over the file's: dates (edited field
-//! by field), visibility overrides (for all tests or one), and releasing
-//! results. Edits are database writes and apply at once; they never build.
+//! by field), and releasing results. Edits are database writes and apply at
+//! once; they never build. What students see of each test is the test's own
+//! (`@visibility`): there's nothing to edit here.
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use pedagog_core::recipe::policy::{
-    Acceptance, AssignmentPolicy, DateEdits, Dates, FieldOverrides, Instant, Open, ResultsPolicy,
-};
-use pedagog_core::results::{Results, Visibility};
+use pedagog_core::recipe::policy::{Acceptance, AssignmentPolicy, DateEdits, Dates, Instant, Open};
+use pedagog_core::results::Results;
 use pedagog_store::Assignment;
-use pedagog_store::db::assignments::{self as db, Overrides};
+use pedagog_store::db::assignments as db;
 use serde::Deserialize;
 use time::OffsetDateTime;
 
@@ -25,7 +24,6 @@ use crate::state::AppState;
 pub struct Policy {
     pub file: AssignmentPolicy,
     pub course_dates: DateEdits,
-    pub course_visibility: ResultsPolicy,
     /// When results were released (RFC 3339).
     pub released_at: Option<String>,
     /// The current build's validation results, to list tests from.
@@ -68,8 +66,6 @@ pub async fn policy_of(state: &AppState, a: &Assignment) -> Result<Policy, ApiEr
         file,
         course_dates: serde_json::from_str(&course.date_overrides)
             .map_err(bad_json("reading the course's dates"))?,
-        course_visibility: serde_json::from_str(&course.visibility_overrides)
-            .map_err(bad_json("reading the course's visibility"))?,
         released_at: course.released_at,
         tests,
     })
@@ -150,7 +146,7 @@ pub async fn set_dates(
         return Err(bad("give --open, --due or --late-due".to_owned()));
     }
     let file = policy_of(&state, &a).await?.file.dates;
-    db::edit_overrides(&state.pool, a.id, Overrides::Dates, |old| {
+    db::edit_date_overrides(&state.pool, a.id, |old| {
         let mut dates: DateEdits = serde_json::from_str(old).map_err(|e| e.to_string())?;
         dates.open = open.or(dates.open);
         dates.due = due.or(dates.due);
@@ -196,7 +192,7 @@ pub async fn clear_dates(
         ));
     }
     let file = policy_of(&state, &a).await?.file.dates;
-    db::edit_overrides(&state.pool, a.id, Overrides::Dates, |old| {
+    db::edit_date_overrides(&state.pool, a.id, |old| {
         let mut dates: DateEdits = serde_json::from_str(old).map_err(|e| e.to_string())?;
         for f in &fields {
             match f.as_str() {
@@ -215,150 +211,6 @@ pub async fn clear_dates(
     .map_err(|e| refused(StatusCode::BAD_REQUEST, e))?;
     tracing::info!(by = current.user.id, %course, assignment = %slug, ?fields, "dates cleared");
     Ok(Json(dates_view(&policy_of(&state, &a).await?)).into_response())
-}
-
-/// Every test of the current build with its resolved visibility, the layer
-/// that decided each field, whether students see it now and why, and every
-/// layer's setting (staff).
-pub async fn show_visibility(
-    State(state): State<AppState>,
-    current: CurrentUser,
-    Path((course, slug)): Path<(String, String)>,
-) -> Result<Response, ApiError> {
-    let access = require(&state, &course, &current, Need::See).await?;
-    let a = find(&state, &access.course.id, &slug).await?;
-    let p = policy_of(&state, &a).await?;
-    let end = p.dates().end();
-    let now = OffsetDateTime::now_utc();
-    let released = p.released_at.is_some();
-    let tests: Vec<serde_json::Value> = p
-        .tests
-        .iter()
-        .flat_map(|r| &r.tests)
-        .map(|t| {
-            let e = ResultsPolicy::explain(&p.course_visibility, &p.file.results, t);
-            let field = |r: pedagog_core::recipe::policy::Resolved| {
-                let shown = r.value.shown_now(end, now, released);
-                serde_json::json!({
-                    "value": r.value, "from": r.from.describe(),
-                    "shown": shown.shown, "why": shown.why,
-                })
-            };
-            serde_json::json!({
-                "id": t.id, "node": t.node, "name": t.name,
-                "score": field(e.score), "feedback": field(e.feedback),
-                "stdout": field(e.stdout), "error": field(e.error),
-                "layers": e.layers.iter().map(|(layer, o)| serde_json::json!({
-                    "layer": layer.describe(), "score": o.score, "feedback": o.feedback,
-                    "stdout": o.stdout, "error": o.error,
-                })).collect::<Vec<_>>(),
-            })
-        })
-        .collect();
-    Ok(Json(serde_json::json!({
-        "released_at": p.released_at,
-        "end": end.map(|e| String::from(Instant(e))),
-        "course": p.course_visibility,
-        "file": p.file.results,
-        "tests": tests,
-        "note": p.tests.is_none().then_some("no validation results to list tests from (no reference solution, or not built yet)"),
-    }))
-    .into_response())
-}
-
-#[derive(Deserialize)]
-pub struct VisibilityBody {
-    /// One test (its id, else its node); every test if absent.
-    test: Option<String>,
-    score: Option<Visibility>,
-    feedback: Option<Visibility>,
-    stdout: Option<Visibility>,
-    error: Option<Visibility>,
-}
-
-/// Override visibility for every test or one, per field.
-pub async fn set_visibility(
-    State(state): State<AppState>,
-    current: CurrentUser,
-    Path((course, slug)): Path<(String, String)>,
-    Json(body): Json<VisibilityBody>,
-) -> Result<Response, ApiError> {
-    let access = require(&state, &course, &current, Need::Manage).await?;
-    let a = find(&state, &access.course.id, &slug).await?;
-    let given = FieldOverrides {
-        score: body.score,
-        feedback: body.feedback,
-        stdout: body.stdout,
-        error: body.error,
-    };
-    if given.is_empty() {
-        return Err(refused(
-            StatusCode::BAD_REQUEST,
-            "give --score, --feedback, --stdout or --error",
-        ));
-    }
-    let p = policy_of(&state, &a).await?;
-    let warning = body.test.as_ref().and_then(|t| {
-        let known = p
-            .tests
-            .iter()
-            .flat_map(|r| &r.tests)
-            .any(|x| x.id.as_deref() == Some(t) || &x.node == t);
-        (!known).then(|| format!("no test {t:?} in the current build's results; saved anyway"))
-    });
-    db::edit_overrides(&state.pool, a.id, Overrides::Visibility, |old| {
-        let mut v: ResultsPolicy = serde_json::from_str(old)?;
-        let entry: &mut FieldOverrides = match &body.test {
-            Some(t) => v.tests.entry(t.clone()).or_default(),
-            None => &mut v.visibility,
-        };
-        entry.score = given.score.or(entry.score);
-        entry.feedback = given.feedback.or(entry.feedback);
-        entry.stdout = given.stdout.or(entry.stdout);
-        entry.error = given.error.or(entry.error);
-        serde_json::to_string(&v)
-    })
-    .await
-    .map_err(|e| internal("saving the visibility", e))?
-    .map_err(|e| internal("saving the visibility", e))?;
-    tracing::info!(by = current.user.id, %course, assignment = %slug, test = ?body.test, "visibility set");
-    Ok(Json(serde_json::json!({ "warning": warning })).into_response())
-}
-
-#[derive(Deserialize)]
-pub struct ClearVisibilityQuery {
-    test: Option<String>,
-    /// Every override, all tests and each test.
-    #[serde(default)]
-    all: bool,
-}
-
-/// Drop overrides: for one test, for all tests (the all-tests entry), or
-/// everything (`all`).
-pub async fn clear_visibility(
-    State(state): State<AppState>,
-    current: CurrentUser,
-    Path((course, slug)): Path<(String, String)>,
-    Query(q): Query<ClearVisibilityQuery>,
-) -> Result<Response, ApiError> {
-    let access = require(&state, &course, &current, Need::Manage).await?;
-    let a = find(&state, &access.course.id, &slug).await?;
-    db::edit_overrides(&state.pool, a.id, Overrides::Visibility, |old| {
-        let mut v: ResultsPolicy = serde_json::from_str(old)?;
-        match (&q.test, q.all) {
-            (_, true) => v = ResultsPolicy::default(),
-            (Some(t), false) => {
-                v.tests.remove(t);
-            }
-            (None, false) => v.visibility = FieldOverrides::default(),
-        }
-        serde_json::to_string(&v)
-    })
-    .await
-    .map_err(|e| internal("saving the visibility", e))?
-    .map_err(|e| internal("saving the visibility", e))?;
-    tracing::info!(by = current.user.id, %course, assignment = %slug, "visibility cleared");
-    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 /// Release results: `after_end` and `after_publish` fields show.
@@ -472,6 +324,7 @@ mod tests {
             egress: r#"{"mode":"deny"}"#.into(),
             submission: "{}".into(),
         };
+        // Stored by an older build: its `results` block is still read (and ignored).
         let policy = r#"{"dates": {"open": "2026-09-01T00:00:00-04:00", "due": "2026-09-08T23:59:00-04:00"},
                          "results": {"visibility": {"error": "after_end"}}}"#;
         let b = start_build(
@@ -560,86 +413,6 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../store/migrations")]
-    async fn visibility_overrides_explain_themselves(pool: PgPool) -> sqlx::Result<()> {
-        course(&pool).await?;
-        let (url, outbox) = serve(pool.clone()).await;
-        let prof = login(&url, &outbox, "prof@ufl.edu").await;
-        let alice = login(&url, &outbox, "alice@ufl.edu").await;
-        assert_eq!(
-            get(&format!("{url}{BASE}/visibility"), &alice)
-                .await
-                .status(),
-            403
-        );
-
-        let v = json(get(&format!("{url}{BASE}/visibility"), &prof).await).await;
-        let push = &v["tests"][0];
-        assert_eq!(
-            (
-                push["error"]["value"].as_str(),
-                push["error"]["from"].as_str()
-            ),
-            (Some("after_end"), Some("file, all tests"))
-        );
-        assert_eq!(push["error"]["shown"], true, "the assignment has ended");
-        let stress = &v["tests"][1];
-        assert_eq!(
-            stress["score"]["why"],
-            "not yet: until results are released"
-        );
-
-        let r = json(
-            put_json(
-                &format!("{url}{BASE}/visibility"),
-                serde_json::json!({"test": "t.py::test_stress", "score": "visible"}),
-                &prof,
-            )
-            .await,
-        )
-        .await;
-        assert_eq!(r["warning"], serde_json::Value::Null, "a known test");
-        let r = json(
-            put_json(
-                &format!("{url}{BASE}/visibility"),
-                serde_json::json!({"test": "typo", "error": "hidden"}),
-                &prof,
-            )
-            .await,
-        )
-        .await;
-        assert!(r["warning"].as_str().unwrap().contains("typo"));
-        let v = json(get(&format!("{url}{BASE}/visibility"), &prof).await).await;
-        assert_eq!(
-            (
-                v["tests"][1]["score"]["value"].as_str(),
-                v["tests"][1]["score"]["from"].as_str()
-            ),
-            (Some("visible"), Some("course, this test"))
-        );
-        assert_eq!(
-            put_json(
-                &format!("{url}{BASE}/visibility"),
-                serde_json::json!({"score": "sometimes"}),
-                &prof
-            )
-            .await
-            .status(),
-            422,
-            "not a visibility"
-        );
-
-        assert_eq!(
-            delete(&format!("{url}{BASE}/visibility?all=true"), &prof)
-                .await
-                .status(),
-            204
-        );
-        let v = json(get(&format!("{url}{BASE}/visibility"), &prof).await).await;
-        assert_eq!(v["course"], serde_json::json!({}));
-        Ok(())
-    }
-
-    #[sqlx::test(migrations = "../store/migrations")]
     async fn releasing_shows_after_publish_and_undo_warns(pool: PgPool) -> sqlx::Result<()> {
         course(&pool).await?;
         let (url, outbox) = serve(pool.clone()).await;
@@ -651,9 +424,8 @@ mod tests {
         )
         .await;
         assert_eq!(json(r).await["already"], false);
-        let v = json(get(&format!("{url}{BASE}/visibility"), &prof).await).await;
-        assert_eq!(v["tests"][1]["score"]["shown"], true);
-        assert!(v["released_at"].is_string());
+        let page = json(get(&format!("{url}{BASE}"), &prof).await).await;
+        assert!(page["released_at"].is_string());
         let undo = json(delete(&format!("{url}{BASE}/release"), &prof).await).await;
         assert!(
             undo["warning"]

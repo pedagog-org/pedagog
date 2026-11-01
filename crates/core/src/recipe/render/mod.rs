@@ -141,7 +141,7 @@ impl AssignmentFiles {
     /// is set. Starter and solution are optional (no solution ⇒ validation is
     /// skipped, not failed).
     pub fn problems(&self, assignment: &AssignmentYaml) -> Vec<String> {
-        let mut problems = Vec::new();
+        let mut problems = assignment.assignment.problems();
         if let Some(testing) = &assignment.testing
             && self.tests.is_none()
         {

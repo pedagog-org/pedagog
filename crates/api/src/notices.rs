@@ -9,8 +9,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use pedagog_core::changes::Changes;
-use pedagog_core::recipe::policy::ResultsPolicy;
-use pedagog_core::results::{Part, Results, TestVisibility};
+use pedagog_core::results::{Part, Results};
 use pedagog_core::view::student_view;
 use pedagog_store::db::notices::{self as db, NewNotice, UnnotifiedRun};
 use pedagog_store::db::{accounts, assignments as builds_db, submissions};
@@ -74,13 +73,6 @@ async fn student(state: &AppState, a: &Assignment, user_id: i64) -> anyhow::Resu
     }))
 }
 
-fn visibilities(p: &Policy, r: &Results) -> Vec<TestVisibility> {
-    r.tests
-        .iter()
-        .map(|t| ResultsPolicy::resolve(&p.course_visibility, &p.file.results, t))
-        .collect()
-}
-
 fn parsed(run: &GradingRun) -> Option<Results> {
     run.results
         .as_deref()
@@ -88,8 +80,8 @@ fn parsed(run: &GradingRun) -> Option<Results> {
 }
 
 /// The score a student sees of a run now, as `(score, total)`.
-fn shown_score(p: &Policy, r: &Results, ended: bool, released: bool) -> (f64, f64) {
-    let v = student_view(r, &visibilities(p, r), ended, released);
+fn shown_score(r: &Results, ended: bool, released: bool) -> (f64, f64) {
+    let v = student_view(r, &r.visibilities(), ended, released);
     (v.score, v.total)
 }
 
@@ -123,16 +115,16 @@ fn regrade_body(
             sentence(after.error_kind)
         ));
     } else if let Some(results) = parsed(after) {
-        let now_score = shown_score(p, &results, ended, released);
+        let now_score = shown_score(&results, ended, released);
         let was = before
             .and_then(parsed)
-            .map(|r| shown_score(p, &r, ended, released));
+            .map(|r| shown_score(&r, ended, released));
         let changes: Changes = after
             .changes
             .as_deref()
             .and_then(|c| serde_json::from_str(c).ok())
             .unwrap_or_default();
-        let vis = visibilities(p, &results);
+        let vis = results.visibilities();
         let mut counts = [(Part::Feedback, 0), (Part::Stdout, 0), (Part::Error, 0)];
         for change in &changes.changed {
             let Some((_, v)) = results
@@ -329,7 +321,7 @@ pub async fn notify(
             format!("Your results for {} were updated.", to.about()),
         ];
         if let Some(r) = run.as_ref().and_then(parsed) {
-            let (s, t) = shown_score(&p, &r, ended, released);
+            let (s, t) = shown_score(&r, ended, released);
             lines.push(String::new());
             lines.push(format!("Score on the tests shown: {s}/{t}"));
         }

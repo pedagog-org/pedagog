@@ -152,7 +152,7 @@ pub fn MakeCurrent(
                     {move || match made.get() {
                         Some(said) => view! { <p role="status">{said}</p> }.into_any(),
                         None => view! {
-                            <p>"Students’ new submissions are graded with it. Dates and visibility don’t change."</p>
+                            <p>"Students’ new submissions are graded with it, and see what its tests show. The course’s dates don’t change."</p>
                             {warnings.iter().map(|w| view! {
                                 <div class="alert alert-warn"><span class="ic" aria-hidden="true">"!"</span><div class="body"><span>{w.clone()}</span></div></div>
                             }).collect_view()}
