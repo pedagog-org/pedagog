@@ -23,6 +23,10 @@ Decided with the user on 2026-10-22 and 2026-10-23, from the Gilbert Assignment 
   - any part may clamp; a part with no own points just sums its children.
 - **Declared up front:** nested `Rubric` classes, through `part(...)`, so every maximum is
   known even when a test crashes at its first line. Parts aren't built as the test runs.
+- **Reuse at another weight (`worth=`):** a sub-rubric declared at one total (say `Bases`,
+  10 points) can be placed where it's worth less or more. `part("A2", worth=2.17)` rescales
+  everything inside proportionally: items, checks, awards and clamps. Tests keep scoring in
+  the sub-rubric's own terms, so one helper function serves every weighting.
 - **Display:**
   - parts collapse; branches with a failure open on load, down to the failing check;
   - levels 1–4 indent with a guide line; level 5 and deeper stop indenting and show
@@ -78,7 +82,8 @@ tests:
 ```
 
 - A part is the same shape as a rubric item, plus `points` (its own), `parts`, and an
-  optional `visibility`. A v2 item is a part with no `parts`. A missing `points` means its
+  optional `visibility`. A rescaled part also records `scale` (the factor); its points are
+  written already scaled, so consumers never apply it. A v2 item is a part with no `parts`. A missing `points` means its
   `max` is its own.
 - **Ids:** unique among siblings. A part is addressed by its path of ids (`3b/a4/column-space`),
   for the trace and for later use.
@@ -104,6 +109,7 @@ class Square(Rubric):
 class PartB(Rubric):
     tall: Square = part("(i) m > n", points=1.3)
     square: Square = part("(iii) m = n", points=1.3, feedback=AFTER_END)
+    given: Square = part("A4 (given)", points=0.5, worth=1.2)   # Square (1.4) scaled to 0.7
 
 @rubric(PartB, id="2b", name="Part B: random systems")
 def test_part_b(scores: PartB):
@@ -113,9 +119,17 @@ def test_part_b(scores: PartB):
         ...
 ```
 
-- `part(name, *, points=0, id=None, clamp=…, extra_credit=NONE, score=…, feedback=…)`
+- `part(name, *, points=0, worth=None, id=None, clamp=…, extra_credit=NONE, score=…, feedback=…)`
   declares a nested `Rubric` attribute. Its type annotation names the sub-rubric (or
   `rubric=` does).
+- **`worth=`** is the part's total, including its own `points`:
+  - the sub-rubric's declared total is scaled to `worth - points`, a factor applied when
+    points are recorded (checks, awards, `set`, clamps);
+  - tests write `check(points=2 / n)` in the sub-rubric's terms;
+  - the factor nests: a scaled part inside a scaled part multiplies;
+  - `worth` must be ≥ `points`, and the sub-rubric's total must be > 0 to scale;
+  - students see scaled points, shown to two decimals, with totals summed before
+    rounding; the trace shows the factor ("parts scaled ×0.2167 (Bases 10 → 2.17)").
 - A `Rubric` instance scores like a `Score` for its own points: `check`, `award`, `set`,
   `nil`, `attempt`. Leaves stay `Score`s. `@rubric_item` is unchanged.
 - Clamps apply once per part, to own + children, so awards and deductions still commute
@@ -190,6 +204,9 @@ def test_part_b(scores: PartB):
 - **Parts built as the test runs** (`with score.group(...)`): easiest to write, but unreached
   parts vanish from the maximum.
 - **Points on leaves only:** simpler totals, but every direct check would need a tiny leaf.
+- **`scale=` (a factor) instead of `worth=`:** says the same thing less directly, and goes
+  stale when the sub-rubric's total changes. A sub-rubric per weighting means duplicated
+  classes.
 - **Per-test visibility only:** fewer rules, but a part that should wait for release would
   have to be split into its own test.
 - **Keeping course overrides,** or the assignment.yml layer: a quick change without
@@ -227,10 +244,10 @@ def test_part_b(scores: PartB):
    - hammer commands removed;
    - recipes PR: the example's `@visibility`;
    - e2e and docs; the web UI plan's step 8 revised.
-2. **pedagog-pytest 3** (its repo): `part(...)`, own points, per-part visibility,
+2. **pedagog-pytest 3** (its repo): `part(...)` with `worth=`, own points, per-part visibility,
    `format: 3`, the nested trace, README; tag v3.0.0; recipes `pedagog-pytest/3.yaml`.
 3. **Core and jobs** (`feat/nested-results`):
-   - format 3 parsing and validation (depth 8, ids, sums, clamps);
+   - format 3 parsing and validation (depth 8, ids, sums within tolerance for scaled parts, clamps);
    - the size check;
    - views and change comparison;
    - fixtures from the real helper output.
