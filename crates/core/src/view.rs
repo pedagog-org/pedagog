@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::results::{Results, Status, Step, TestResult, TestVisibility, Visibility};
+use crate::results::{Results, RubricItem, Status, Step, TestResult, TestVisibility, Visibility};
 
 /// The stages results show in, each including the ones before it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -115,6 +115,9 @@ pub struct ShownItem {
     /// Version 1 helpers' text feedback.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
+    /// Its parts, as far as the student may see them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<ShownItem>,
 }
 
 /// What a student sees of a run.
@@ -130,31 +133,76 @@ pub struct StudentView {
     pub hidden_never: bool,
 }
 
-fn feedback_of(t: &TestResult) -> Vec<ShownItem> {
-    let mut items: Vec<ShownItem> = t
-        .items
-        .iter()
-        .map(|i| ShownItem {
+/// What one level of items comes to for a student: what they may see, and
+/// the points of parts whose score they may not (left out of their totals),
+/// with when those will show.
+#[derive(Default)]
+struct Shown {
+    items: Vec<ShownItem>,
+    hidden_score: f64,
+    hidden_max: f64,
+    hidden: Vec<Visibility>,
+}
+
+/// `items` as a student sees them: a part's score shows only where its own
+/// visibility (and every level above) allows; its steps and parts only where
+/// its feedback does too. `shown` decides one visibility now.
+fn shown_items(items: &[RubricItem], feedback: bool, shown: &dyn Fn(Visibility) -> bool) -> Shown {
+    let mut out = Shown::default();
+    for i in items {
+        if let Some(v) = i.visibility.and_then(|v| v.score)
+            && !shown(v)
+        {
+            out.hidden_score += i.score;
+            out.hidden_max += i.counted_max();
+            out.hidden.push(v);
+            continue;
+        }
+        let own_feedback = feedback && i.visibility.and_then(|v| v.feedback).is_none_or(shown);
+        let below = shown_items(&i.parts, own_feedback, shown);
+        out.hidden.extend(below.hidden.iter().copied());
+        out.items.push(ShownItem {
             name: i.name.clone(),
-            score: i.score,
-            max: i.max,
+            score: i.score - below.hidden_score,
+            max: i.max - below.hidden_max,
             extra_credit: i.extra_credit != crate::results::ExtraCredit::None,
-            steps: i.steps.clone(),
-            text: i.feedback.clone(),
-        })
-        .collect();
-    if items.is_empty() && !t.feedback.is_empty() {
+            steps: if own_feedback {
+                i.steps.clone()
+            } else {
+                Vec::new()
+            },
+            text: if own_feedback {
+                i.feedback.clone()
+            } else {
+                String::new()
+            },
+            parts: if own_feedback {
+                below.items
+            } else {
+                Vec::new()
+            },
+        });
+        out.hidden_score += below.hidden_score;
+        out.hidden_max += below.hidden_max;
+    }
+    out
+}
+
+fn feedback_of(t: &TestResult, shown: &dyn Fn(Visibility) -> bool) -> Shown {
+    let mut out = shown_items(&t.items, true, shown);
+    if t.items.is_empty() && !t.feedback.is_empty() {
         // A version 1 single-item test: its feedback text at the test level.
-        items.push(ShownItem {
+        out.items.push(ShownItem {
             name: t.name.clone(),
             score: t.score,
             max: t.max,
             extra_credit: t.extra_credit_worth().is_some(),
             steps: Vec::new(),
             text: t.feedback.clone(),
+            parts: Vec::new(),
         });
     }
-    items
+    out
 }
 
 /// A student's view: tests whose score they see now, each with the parts
@@ -184,16 +232,25 @@ pub fn student_view(
             }
             continue;
         }
-        view.score += t.score;
-        view.total += t.max;
+        let parts = feedback_of(t, &shown);
+        for hidden in &parts.hidden {
+            match hidden {
+                Visibility::AfterEnd => until_deadline = true,
+                Visibility::AfterPublish => until_release = true,
+                _ => view.hidden_never = true,
+            }
+        }
+        let (score, max) = (t.score - parts.hidden_score, t.max - parts.hidden_max);
+        view.score += score;
+        view.total += max;
         view.tests.push(ShownTest {
             name: t.name.clone(),
             number: t.number.clone(),
             status: t.status,
-            score: t.score,
-            max: t.max,
+            score,
+            max,
             extra_credit: t.extra_credit_worth(),
-            feedback: shown(v.feedback).then(|| feedback_of(t)),
+            feedback: shown(v.feedback).then_some(parts.items),
             stdout: (shown(v.stdout) && !t.stdout.is_empty()).then(|| t.stdout.clone()),
             error: (shown(v.error) && !t.error_for_students().is_empty())
                 .then(|| t.error_for_students().to_owned()),
@@ -219,7 +276,7 @@ pub fn full_test(t: &TestResult) -> ShownTest {
         score: t.score,
         max: t.max,
         extra_credit: t.extra_credit_worth(),
-        feedback: Some(feedback_of(t)),
+        feedback: Some(feedback_of(t, &|_| true).items),
         stdout: (!t.stdout.is_empty()).then(|| t.stdout.clone()),
         error: (!t.error.is_empty()).then(|| t.error.clone()),
         error_sanitized: false,
@@ -248,6 +305,47 @@ pub fn reference_tests(results: &Results) -> Vec<crate::api::ReferenceTest> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn format_3() -> Results {
+        serde_yaml::from_str(include_str!("../testdata/pedagog-pytest-3-results.json")).unwrap()
+    }
+
+    #[test]
+    fn hidden_parts_leave_the_totals_and_hidden_feedback_its_details() {
+        let r = format_3();
+        // Before the deadline, before release: each Bases' row space (score
+        // after_publish) is hidden; column space shows its score, not its details.
+        let early = student_view(&r, &r.visibilities(), false, false);
+        let a2 = &early.tests[0].feedback.as_ref().unwrap()[0];
+        assert_eq!(
+            a2.parts.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            ["Column space", "Bonus: rank theorem"],
+            "row space hidden until release"
+        );
+        let col = &a2.parts[0];
+        assert!(
+            col.steps.is_empty() && col.parts.is_empty(),
+            "details after the deadline"
+        );
+        assert!(
+            (col.score - 4.0 / 3.0).abs() < 1e-9,
+            "its score still shows"
+        );
+        // Totals cover only what's shown: 8.5 minus both row spaces (2/3 and 2).
+        assert!(
+            (early.total - (8.5 - 2.0 / 3.0 - 2.0)).abs() < 1e-9,
+            "{}",
+            early.total
+        );
+        assert_eq!(early.hidden_until, ["release"]);
+
+        let after = student_view(&r, &r.visibilities(), true, true);
+        assert!((after.total - 8.5).abs() < 1e-9);
+        let a4 = &after.tests[0].feedback.as_ref().unwrap()[1];
+        let each = &a4.parts[0].parts[1].parts[1];
+        assert_eq!(each.steps.len(), 3, "the details once the deadline passed");
+        assert!(after.hidden_until.is_empty());
+    }
 
     #[test]
     fn reference_tests_say_which_went_as_declared() {

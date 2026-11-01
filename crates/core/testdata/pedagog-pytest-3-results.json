@@ -1,0 +1,371 @@
+{
+  "format": 3,
+  "submission-id": null,
+  "run-id": null,
+  "sanitizes-errors": true,
+  "run": {
+    "status": "complete",
+    "output": "",
+    "output-sanitized": ""
+  },
+  "summary": {
+    "score": 8.166666666666666,
+    "total": 8.5
+  },
+  "tests": [
+    {
+      "id": "3b",
+      "node": "test_bases.py::test_part_b",
+      "name": "Part B: bases for A2 and A4",
+      "status": "fail",
+      "score": 8.166666666666666,
+      "max": 8.5,
+      "items": [
+        {
+          "id": "a2",
+          "name": "A2",
+          "score": 2.333333333333333,
+          "max": 2.0,
+          "clamp": [
+            0.0,
+            2.333333333333333
+          ],
+          "extra-credit": "none",
+          "attempted": true,
+          "steps": [],
+          "points": 0.0,
+          "parts": [
+            {
+              "id": "col",
+              "name": "Column space",
+              "score": 1.3333333333333333,
+              "max": 1.3333333333333333,
+              "clamp": [
+                0.0,
+                1.3333333333333333
+              ],
+              "extra-credit": "none",
+              "attempted": true,
+              "steps": [],
+              "points": 0.0,
+              "parts": [
+                {
+                  "id": "pivots",
+                  "name": "pivcols = the pivot columns of A",
+                  "score": 0.3333333333333333,
+                  "max": 0.3333333333333333,
+                  "clamp": [
+                    0.0,
+                    0.3333333333333333
+                  ],
+                  "extra-credit": "none",
+                  "attempted": true,
+                  "steps": [
+                    {
+                      "result": "pass",
+                      "points": 0.3333333333333333,
+                      "worth": 0.3333333333333333,
+                      "reason": "pivcols = [1, 3, 6]"
+                    }
+                  ]
+                },
+                {
+                  "id": "spans",
+                  "name": "C spans col(A)",
+                  "score": 1.0,
+                  "max": 1.0,
+                  "clamp": [
+                    0.0,
+                    1.0
+                  ],
+                  "extra-credit": "none",
+                  "attempted": true,
+                  "steps": [],
+                  "points": 0.0,
+                  "parts": [
+                    {
+                      "id": "count",
+                      "name": "has rank(A) vectors",
+                      "score": 0.3333333333333333,
+                      "max": 0.3333333333333333,
+                      "clamp": [
+                        0.0,
+                        0.3333333333333333
+                      ],
+                      "extra-credit": "none",
+                      "attempted": true,
+                      "steps": [
+                        {
+                          "result": "pass",
+                          "points": 0.3333333333333333,
+                          "worth": 0.3333333333333333,
+                          "reason": "C has 3 columns"
+                        }
+                      ]
+                    },
+                    {
+                      "id": "each",
+                      "name": "each vector belongs",
+                      "score": 0.6666666666666666,
+                      "max": 0.6666666666666666,
+                      "clamp": [
+                        0.0,
+                        0.6666666666666666
+                      ],
+                      "extra-credit": "none",
+                      "attempted": true,
+                      "steps": [
+                        {
+                          "result": "pass",
+                          "points": 0.2222222222222222,
+                          "worth": 0.2222222222222222,
+                          "reason": "column 1"
+                        },
+                        {
+                          "result": "pass",
+                          "points": 0.2222222222222222,
+                          "worth": 0.2222222222222222,
+                          "reason": "column 2"
+                        },
+                        {
+                          "result": "pass",
+                          "points": 0.2222222222222222,
+                          "worth": 0.2222222222222222,
+                          "reason": "column 3"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "visibility": {
+                "feedback": "after_end"
+              }
+            },
+            {
+              "id": "row",
+              "name": "Row space",
+              "score": 0.6666666666666666,
+              "max": 0.6666666666666666,
+              "clamp": [
+                0.0,
+                0.6666666666666666
+              ],
+              "extra-credit": "none",
+              "attempted": true,
+              "steps": [
+                {
+                  "result": "pass",
+                  "points": 0.6666666666666666,
+                  "worth": 0.6666666666666666,
+                  "reason": "R spans row(A)"
+                }
+              ],
+              "visibility": {
+                "score": "after_publish"
+              }
+            },
+            {
+              "id": "bonus",
+              "name": "Bonus: rank theorem",
+              "score": 0.3333333333333333,
+              "max": 0.3333333333333333,
+              "clamp": [
+                0.0,
+                0.3333333333333333
+              ],
+              "extra-credit": "bonus",
+              "attempted": true,
+              "steps": [
+                {
+                  "points": 0.3333333333333333,
+                  "reason": "rank + nullity = n"
+                }
+              ]
+            }
+          ],
+          "scale": 0.3333333333333333
+        },
+        {
+          "id": "a4",
+          "name": "A4 (given)",
+          "score": 5.833333333333333,
+          "max": 6.5,
+          "clamp": [
+            0.0,
+            7.5
+          ],
+          "extra-credit": "none",
+          "attempted": true,
+          "steps": [
+            {
+              "result": "pass",
+              "points": 0.5,
+              "worth": 0.5,
+              "reason": "A4 is the given matrix"
+            }
+          ],
+          "points": 0.5,
+          "parts": [
+            {
+              "id": "col",
+              "name": "Column space",
+              "score": 3.333333333333333,
+              "max": 4.0,
+              "clamp": [
+                0.0,
+                4.0
+              ],
+              "extra-credit": "none",
+              "attempted": true,
+              "steps": [],
+              "points": 0.0,
+              "parts": [
+                {
+                  "id": "pivots",
+                  "name": "pivcols = the pivot columns of A",
+                  "score": 1.0,
+                  "max": 1.0,
+                  "clamp": [
+                    0.0,
+                    1.0
+                  ],
+                  "extra-credit": "none",
+                  "attempted": true,
+                  "steps": [
+                    {
+                      "result": "pass",
+                      "points": 1.0,
+                      "worth": 1.0,
+                      "reason": "pivcols = [1, 3, 6]"
+                    }
+                  ]
+                },
+                {
+                  "id": "spans",
+                  "name": "C spans col(A)",
+                  "score": 2.333333333333333,
+                  "max": 3.0,
+                  "clamp": [
+                    0.0,
+                    3.0
+                  ],
+                  "extra-credit": "none",
+                  "attempted": true,
+                  "steps": [],
+                  "points": 0.0,
+                  "parts": [
+                    {
+                      "id": "count",
+                      "name": "has rank(A) vectors",
+                      "score": 1.0,
+                      "max": 1.0,
+                      "clamp": [
+                        0.0,
+                        1.0
+                      ],
+                      "extra-credit": "none",
+                      "attempted": true,
+                      "steps": [
+                        {
+                          "result": "pass",
+                          "points": 1.0,
+                          "worth": 1.0,
+                          "reason": "C has 3 columns"
+                        }
+                      ]
+                    },
+                    {
+                      "id": "each",
+                      "name": "each vector belongs",
+                      "score": 1.3333333333333333,
+                      "max": 2.0,
+                      "clamp": [
+                        0.0,
+                        2.0
+                      ],
+                      "extra-credit": "none",
+                      "attempted": true,
+                      "steps": [
+                        {
+                          "result": "pass",
+                          "points": 0.6666666666666666,
+                          "worth": 0.6666666666666666,
+                          "reason": "column 1"
+                        },
+                        {
+                          "result": "fail",
+                          "points": 0.0,
+                          "worth": 0.6666666666666666,
+                          "reason": "column 2",
+                          "message": "column 2 of C isn't a pivot column of A"
+                        },
+                        {
+                          "result": "pass",
+                          "points": 0.6666666666666666,
+                          "worth": 0.6666666666666666,
+                          "reason": "column 3"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "visibility": {
+                "feedback": "after_end"
+              }
+            },
+            {
+              "id": "row",
+              "name": "Row space",
+              "score": 2.0,
+              "max": 2.0,
+              "clamp": [
+                0.0,
+                2.0
+              ],
+              "extra-credit": "none",
+              "attempted": true,
+              "steps": [
+                {
+                  "result": "pass",
+                  "points": 2.0,
+                  "worth": 2.0,
+                  "reason": "R spans row(A)"
+                }
+              ],
+              "visibility": {
+                "score": "after_publish"
+              }
+            },
+            {
+              "id": "bonus",
+              "name": "Bonus: rank theorem",
+              "score": 0.0,
+              "max": 1.0,
+              "clamp": [
+                0.0,
+                1.0
+              ],
+              "extra-credit": "bonus",
+              "attempted": false,
+              "steps": []
+            }
+          ]
+        }
+      ],
+      "stdout": "",
+      "error": "test_bases.py:32: AssertionError: column 2 of C isn't a pivot column of A\nassert False\n\nrubric checks failed: a4/col/spans/each",
+      "error-sanitized": "test_bases.py:32: column 2 of C isn't a pivot column of A\nassert False",
+      "trace": "3b \u2014 Part B: bases for A2 and A4 (rubric PartB)\n  a2  points 0, clamp [0, 2.33333], none, parts scaled \u00d70.3333\n    col  points 0, clamp [0, 1.33333], none\n      pivots  points 0.333333, clamp [0, 0.33",
+      "visibility": {
+        "score": "visible",
+        "feedback": "visible",
+        "stdout": "visible",
+        "error": "after_end"
+      },
+      "number": "3.2"
+    }
+  ],
+  "artifacts": []
+}

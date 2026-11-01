@@ -109,10 +109,17 @@ pub fn compare(before: Option<&Results>, after: Option<&Results>) -> Changes {
 
 /// The parts of a test that differ between two runs.
 fn differing(was: &TestResult, now: &TestResult) -> Vec<Part> {
-    let feedback = |t: &TestResult| {
-        let steps: Vec<_> = t.items.iter().map(|i| (&i.steps, &i.feedback)).collect();
-        serde_json::to_string(&(steps, &t.feedback)).unwrap_or_default()
-    };
+    // Every level's steps and text: a change in a nested part's feedback counts.
+    fn shape(items: &[crate::results::RubricItem]) -> serde_json::Value {
+        serde_json::Value::Array(
+            items
+                .iter()
+                .map(|i| serde_json::json!([&i.steps, &i.feedback, shape(&i.parts)]))
+                .collect(),
+        )
+    }
+    let feedback =
+        |t: &TestResult| serde_json::to_string(&(shape(&t.items), &t.feedback)).unwrap_or_default();
     let mut parts = Vec::new();
     if outcome(was) != outcome(now) {
         parts.push(Part::Score);
@@ -148,6 +155,17 @@ fn outcome(t: &TestResult) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_nested_parts_feedback_change_is_a_feedback_change() {
+        let was: crate::results::Results =
+            serde_yaml::from_str(include_str!("../testdata/pedagog-pytest-3-results.json"))
+                .unwrap();
+        let mut now = was.clone();
+        now.tests[0].items[1].parts[0].parts[1].parts[1].steps[1].message = Some("other".into());
+        let changes = compare(Some(&was), Some(&now));
+        assert_eq!(changes.changed[0].parts, [Part::Feedback]);
+    }
 
     const FIXTURE: &str = include_str!("../testdata/pedagog-pytest-results.json");
 
