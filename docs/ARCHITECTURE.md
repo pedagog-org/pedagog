@@ -23,7 +23,7 @@ Everyone has one **global role**, and one **course role** in each course they're
 
 | Course role | Can |
 | --- | --- |
-| **Instructor** | Everything in the course: assignments, dates, visibility, release, results, and its members |
+| **Instructor** | Everything in the course: assignments, dates, release, results, and its members |
 | **Grader** | Sees the members and every result, and submits; changes nothing (may leave the course) |
 | **Student** | Submits and sees their own work |
 
@@ -148,10 +148,6 @@ assignment:
     late_due: "2026-09-02T16:00:00-04:00"   # absent = late submissions not accepted
   duration: 120m           # workspace platform: max session length
   attempts: 1
-  results:
-    visibility: { error: after_end }   # score | feedback | stdout | error, for every test
-    tests:
-      pop-front: { feedback: hidden }  # one test, by id (else node)
   late_policy:
     grace: 15m
     penalty:
@@ -198,10 +194,12 @@ Each test's result has four parts, each with its own visibility: `visible`, `hid
 | `stdout` | what the test printed (the instructor's channel for e.g. intermediate values) |
 | `error` | what went wrong: failures, exceptions, and the values the framework compared |
 
-- **Layers:** the test's own (from its code; `visible` by default, but `error` waits for the deadline, `after_end`, since it can show what a test expects), then the
-  file's `assignment.results.visibility` (all tests) and `tests` (one test), then the
-  course's overrides, which apply at once (`hammer visibility set|clear`; `hammer
-  visibility show [--verbose]` explains each test).
+- **Set in the tests only** (`@visibility` in pedagog-pytest): `visible` by default, but
+  `error` waits for the deadline (`after_end`), since it can show what a test expects. To
+  change what students see, change the tests and upload a new version; nothing is edited
+  online, and assignment.yml has no say (an `assignment: results:` block is refused).
+  `hammer results show <assignment> <student>` says, for each test and part, whether that
+  student sees it now and why.
 - **Release:** `hammer results release` shows `after_publish` (and `after_end` early).
 - **Students** see only tests whose score is shown, each part as its visibility allows;
   one line says other tests are hidden until the deadline or release, with no points.
@@ -267,12 +265,11 @@ Assignments belong to a course: a numeric id keys them, and the `id` in `assignm
   - Deadline `PEDAGOG_VALIDATION_DEADLINE` (10 min), resources `PEDAGOG_VALIDATION_CPU`/`PEDAGOG_VALIDATION_MEMORY` (1 CPU, 1 GiB).
 - **Policy:** the file's `assignment:` policy (dates, visibility defaults) is saved on each build, so the current build's policy is the file's. The course's policy sits over it on the assignment and applies at once, without building:
   - **Dates:** `hammer dates show|set|clear` edits `open`, `due` and `late_due` field by field; the merged dates must be in order. Every member sees them (and whether the assignment is open, late or closed).
-  - **Visibility:** `hammer visibility set|clear` overrides `score`, `feedback`, `stdout` and `error` for every test or one; `hammer visibility show [--verbose]` lists each test of the current build's validation with its resolved values, the layer that decided them, and whether students see them now and why.
   - **Release:** `hammer results release [--undo]` shows what's `after_publish` (and `after_end` early); taking it back warns that students may have seen them.
   - **Re-uploads** keep the course's date edits and say at once where they differ from the file's; `hammer upload --take-dates` drops the edits when that build becomes current.
 - **Status:** `GET /courses/<course>/assignments/<slug>/builds/<build>` on the api (instructors and graders; `core::api::BuildPage`): its statuses, who started it and when, how long the build and validation took, a failure's reason in a line, validation's problems and warnings, each phase's log length, and the reference solution's tests, each with what it declared and whether it went as expected. `…/builds?before=&limit=` pages through every build, newest first. `hammer upload --wait` follows a build and fails on a failed build or validation. `hammer assignments list|show` lists a course's assignments and their recent builds; students see only the list.
 - **Logs:** each phase's whole pod log, passed or failed, goes to Garage (`logs/builds/<id>/{build,validation}.log.gz`) with its line count on the build; the row keeps only a failure's reason. Staff read a log through the api (`…/builds/<id>/log?phase=build|validation[&tail=n]`, served by `jobs`' `/internal/builds/<id>/log/<phase>`). The nightly cleanup deletes logs 180 days after their build ended.
-- **Making a build current:** instructors make any build that built and passed (or skipped) validation current again (`POST …/builds/<id>/current`, `{"regrade": null|"never"|"changed"|"always"}`). Whatever is going on, it cancels the build in flight (superseded, its Jobs stopped), then switches, queuing a regrade if asked; dates and visibility don't change. A build whose image the cleanup deleted is built again from the same stored upload as a new build (`rebuild_of`), which becomes current once it validates. Regrades already queued against the build being replaced still run.
+- **Making a build current:** instructors make any build that built and passed (or skipped) validation current again (`POST …/builds/<id>/current`, `{"regrade": null|"never"|"changed"|"always"}`). Whatever is going on, it cancels the build in flight (superseded, its Jobs stopped), then switches, queuing a regrade if asked; the course's dates don't change. A build whose image the cleanup deleted is built again from the same stored upload as a new build (`rebuild_of`), which becomes current once it validates. Regrades already queued against the build being replaced still run.
 - **Restarts:** at startup `jobs` resumes attempts in flight from what the cluster shows (a vanished build Job fails as "interrupted"; a validation is judged from whatever results were uploaded) and dispatches uploads that never got an attempt.
 
 ### `hammer` — Build Tool
@@ -649,7 +646,7 @@ artifacts:
     path: valgrind.log
 ```
 
-Default per-test visibility is defined in the test suite source code. The `visibility` field is required on every test entry in the results file.
+Per-test visibility is defined in the test suite source code, and only there. The `visibility` field is required on every test entry in the results file.
 
 - **Version 1** (pedagog-pytest 1) is still read: `output` as `error`; text `feedback` (on the test or its items) as written; two-part visibility with `output` standing for feedback, stdout and error; `<file>::<collection>` entries as a run error.
 - **Rubric scoring:** each item's score lies within its `clamp`. A test's score is the sum of its item scores; its max sums the items that count: `none` items, plus `attempted-work` items once attempted. `bonus` items never count in the max. With unbounded clamps or extra credit, a score can fall below 0 or exceed its max; the summary is always the plain sum of the tests.
